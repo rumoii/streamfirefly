@@ -15,6 +15,24 @@
       <div id="tasks-list" class="list" hidden></div>
     </section>
   </main>
+  <div id="download-dialog" class="dialog-backdrop" hidden>
+    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="download-dialog-title">
+      <div class="dialog-head"><div><h2 id="download-dialog-title">开始下载</h2><p id="download-dialog-source">设置文件名称和保存位置</p></div><button id="download-cancel" class="icon-button" type="button" aria-label="取消">×</button></div>
+      <label class="dialog-label" for="download-name">文件名称</label>
+      <div class="filename-input"><input id="download-name" type="text" maxlength="100" autocomplete="off"><span id="download-extension">.mp4</span></div>
+      <div id="download-name-error" class="dialog-error" role="alert"></div>
+      <div class="dialog-path"><span>保存目录</span><strong id="download-save-dir">系统默认目录</strong></div>
+      <div class="dialog-actions"><button id="download-confirm" class="primary-button" type="button">开始下载</button><button id="download-cancel-secondary" type="button">取消</button></div>
+    </section>
+  </div>
+  <div id="delete-dialog" class="dialog-backdrop" hidden>
+    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="delete-dialog-title">
+      <div class="dialog-head"><div><h2 id="delete-dialog-title">删除下载任务</h2><p id="delete-dialog-message">请选择要删除的内容</p></div><button id="delete-cancel" class="icon-button" type="button" aria-label="取消">×</button></div>
+      <div class="delete-choice"><button id="delete-record" type="button"><strong>仅删除记录</strong><span>保留本地文件，不再显示此任务</span></button><button id="delete-record-file" class="danger-button" type="button"><strong>删除记录和本地文件</strong><span>同时删除已下载的文件或临时文件</span></button></div>
+      <div id="delete-error" class="dialog-error" role="alert"></div>
+      <div class="dialog-actions"><button id="delete-cancel-secondary" type="button">取消</button></div>
+    </section>
+  </div>
   <script src="popup.js"></script>
 </body>
 </html>

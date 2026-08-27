@@ -11,6 +11,10 @@ p { margin: 4px 0 0; color: #7b8da3; font-size: 12px; }
 button { border: 1px solid #c9d6e6; background: #fff; color: #39516f; border-radius: 8px; padding: 7px 10px; cursor: pointer; font-weight: 600; }
 button:hover { border-color: #4dbea6; color: #248f7a; }
 button:disabled { cursor: wait; opacity: .6; }
+.primary-button { border-color: #4dbea6; background: #36a990; color: #fff; }
+.primary-button:hover { border-color: #248f7a; background: #248f7a; color: #fff; }
+.icon-button { width: 28px; height: 28px; padding: 0; border: 0; background: transparent; color: #8a9bb0; font-size: 22px; line-height: 1; }
+.icon-button:hover { background: #edf5f3; color: #397563; }
 .status { margin: 16px 0 9px; color: #536b87; font-size: 13px; background: #eaf7f4; border: 1px solid #c7e9e1; border-radius: 8px; padding: 9px 11px; }
 .item { border: 1px solid #dce5ef; background: #fff; border-radius: 11px; padding: 11px; margin: 8px 0; box-shadow: 0 2px 8px #253a5510; }
 .row strong { color: #2b8f7e; font-size: 11px; letter-spacing: .08em; background: #e8f7f3; padding: 3px 7px; border-radius: 10px; }
@@ -49,4 +53,31 @@ button:disabled { cursor: wait; opacity: .6; }
 .progress span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #36a990, #62cbb4); transition: width .25s ease; }
 .progress.indeterminate span { width: 38% !important; animation: indeterminate 1.2s ease-in-out infinite; }
 .task-output { color: #657b92; font-size: 10px; }
+.task-actions { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
+.task-delete { padding: 4px 8px; border-color: #f0caca; background: #fff; color: #a54848; font-size: 11px; }
+.task-delete:hover { border-color: #d98e8e; background: #fff5f5; color: #8d3434; }
+.task-state.cancelling { color: #93651d; background: #fff6df; }
+.dialog-backdrop { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 16px; background: #1f304766; }
+.dialog-backdrop[hidden] { display: none; }
+.dialog { width: min(100%, 390px); padding: 16px; border: 1px solid #dce5ef; border-radius: 14px; background: #fff; box-shadow: 0 14px 40px #253a5533; }
+.dialog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.dialog h2 { margin: 0; color: #26364a; font-size: 17px; }
+.dialog p { margin-top: 4px; }
+.dialog-label { display: block; margin-top: 16px; color: #536b87; font-size: 12px; font-weight: 600; }
+.filename-input { display: flex; align-items: center; margin-top: 7px; border: 1px solid #c9d6e6; border-radius: 8px; background: #fff; }
+.filename-input:focus-within { border-color: #4dbea6; box-shadow: 0 0 0 2px #4dbea633; }
+.filename-input input { min-width: 0; flex: 1; padding: 9px 10px; border: 0; outline: 0; background: transparent; color: #26364a; font: inherit; }
+.filename-input span { padding-right: 10px; color: #8a9bb0; font-size: 12px; }
+.dialog-error { min-height: 16px; margin-top: 6px; color: #a54848; font-size: 11px; }
+.dialog-path { display: flex; justify-content: space-between; gap: 10px; margin-top: 8px; padding: 9px 10px; border-radius: 8px; background: #f5f7fb; color: #8a9bb0; font-size: 11px; }
+.dialog-path strong { max-width: 240px; overflow: hidden; color: #405976; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.delete-choice { display: grid; gap: 8px; margin-top: 16px; }
+.delete-choice button { display: grid; gap: 4px; padding: 11px; text-align: left; }
+.delete-choice strong { color: #405976; font-size: 12px; }
+.delete-choice span { color: #8a9bb0; font-size: 11px; font-weight: 400; }
+.delete-choice .danger-button { border-color: #f0caca; background: #fff8f8; }
+.delete-choice .danger-button strong { color: #a54848; }
+.delete-choice button:hover { border-color: #b9ddd5; background: #fbfefd; }
+.delete-choice .danger-button:hover { border-color: #d98e8e; background: #fff0f0; }
 @keyframes indeterminate { from { transform: translateX(-110%); } to { transform: translateX(290%); } }

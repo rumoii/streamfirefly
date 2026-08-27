@@ -1,10 +1,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
+    collections::HashMap,
     fs::{self, OpenOptions},
     io::{self, Read, Write},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant},
@@ -46,6 +47,8 @@ struct Task {
 struct Store {
     path: PathBuf,
     tasks: Arc<Mutex<Vec<Task>>>,
+    processes: Arc<Mutex<HashMap<String, Arc<Mutex<Child>>>>>,
+    cancellations: Arc<Mutex<HashMap<String, bool>>>,
 }
 type Writer = Arc<Mutex<io::BufWriter<io::Stdout>>>;
 
@@ -76,12 +79,14 @@ fn load_store(path: &Path) -> Store {
     let store = Store {
         path: path.to_path_buf(),
         tasks: Arc::new(Mutex::new(tasks)),
+        processes: Arc::new(Mutex::new(HashMap::new())),
+        cancellations: Arc::new(Mutex::new(HashMap::new())),
     };
     if let Ok(mut tasks) = store.tasks.lock() {
         for task in tasks.iter_mut() {
             if matches!(
                 task.state.as_str(),
-                "running" | "queued" | "starting" | "downloading"
+                "running" | "queued" | "starting" | "downloading" | "cancelling"
             ) {
                 task.state = "interrupted".into();
                 task.phase = "interrupted".into();
@@ -133,6 +138,10 @@ fn emit(writer: &Writer, value: Value) {
     }
 }
 fn safe_title(value: &str) -> String {
+    safe_file_stem(value).unwrap_or_else(|| "streamfirefly-download".into())
+}
+
+fn safe_file_stem(value: &str) -> Option<String> {
     let value: String = value
         .chars()
         .map(|c| {
@@ -144,11 +153,18 @@ fn safe_title(value: &str) -> String {
         })
         .take(100)
         .collect();
-    if value.trim().is_empty() {
-        "streamfirefly-download".into()
-    } else {
-        value
+    let value = value.trim().trim_end_matches([' ', '.']).to_string();
+    if value.is_empty() {
+        return None;
     }
+    let upper = value.to_ascii_uppercase();
+    let device = upper.split('.').next().unwrap_or(&upper);
+    let reserved = matches!(device, "CON" | "PRN" | "AUX" | "NUL")
+        || (device.len() == 4
+            && (device.starts_with("COM") || device.starts_with("LPT"))
+            && device.as_bytes()[3].is_ascii_digit()
+            && device.as_bytes()[3] != b'0');
+    Some(if reserved { format!("_{value}") } else { value })
 }
 
 fn extension_from_mime(mime: &str) -> Option<&'static str> {
@@ -177,14 +193,89 @@ fn extension_from_url(url: &str) -> Option<String> {
     ((1..=8).contains(&ext.len()) && ext.chars().all(|c| c.is_ascii_alphanumeric())).then_some(ext)
 }
 
-fn extension_from_content_disposition(value: &str) -> Option<String> {
-    let filename = value.split(';').find_map(|part| {
+fn filename_from_content_disposition(value: &str) -> Option<String> {
+    value.split(';').find_map(|part| {
         let (key, value) = part.trim().split_once('=')?;
         key.trim()
             .eq_ignore_ascii_case("filename")
-            .then(|| value.trim().trim_matches('"'))
-    })?;
-    extension_from_url(filename)
+            .then(|| value.trim().trim_matches('"').to_string())
+    })
+}
+
+fn extension_from_content_disposition(value: &str) -> Option<String> {
+    extension_from_url(&filename_from_content_disposition(value)?)
+}
+
+fn extension_for(payload: &Value) -> String {
+    let url = payload["url"].as_str().unwrap_or("");
+    let mime = payload["mime"].as_str().unwrap_or("");
+    if mime.contains("mpegurl")
+        || mime.contains("dash+xml")
+        || url.contains(".m3u8")
+        || url.contains(".mpd")
+    {
+        "mp4".into()
+    } else if let Some(ext) = payload["contentDisposition"]
+        .as_str()
+        .and_then(extension_from_content_disposition)
+    {
+        ext
+    } else if let Some(ext) = extension_from_mime(mime) {
+        ext.into()
+    } else {
+        extension_from_url(url).unwrap_or_else(|| "download".into())
+    }
+}
+
+fn recommended_file_stem(payload: &Value) -> String {
+    let disposition = payload["contentDisposition"]
+        .as_str()
+        .and_then(filename_from_content_disposition)
+        .and_then(|name| {
+            Path::new(&name)
+                .file_stem()
+                .map(|value| value.to_string_lossy().into())
+        });
+    let url_name = payload["url"]
+        .as_str()
+        .and_then(|url| url.split(['?', '#']).next())
+        .and_then(|url| url.rsplit('/').next())
+        .and_then(|name| {
+            Path::new(name)
+                .file_stem()
+                .map(|value| value.to_string_lossy().into())
+        });
+    disposition
+        .or(url_name)
+        .or_else(|| payload["title"].as_str().map(str::to_string))
+        .and_then(|name| safe_file_stem(&name))
+        .unwrap_or_else(|| "streamfirefly-download".into())
+}
+
+fn prepare_task(payload: &Value) -> Result<Value, &'static str> {
+    payload["url"]
+        .as_str()
+        .filter(|url| url.starts_with("http://") || url.starts_with("https://"))
+        .ok_or("invalid_url")?;
+    Ok(json!({"fileName": recommended_file_stem(payload), "extension": extension_for(payload)}))
+}
+
+fn unique_output_path(dir: &Path, stem: &str, ext: &str, tasks: &[Task]) -> PathBuf {
+    for index in 0..10_000 {
+        let suffix = if index == 0 {
+            String::new()
+        } else {
+            format!(" ({index})")
+        };
+        let candidate = dir.join(format!("{stem}{suffix}.{ext}"));
+        let occupied = tasks
+            .iter()
+            .any(|task| task.output.as_deref().map(Path::new) == Some(candidate.as_path()));
+        if !candidate.exists() && !occupied {
+            return candidate;
+        }
+    }
+    dir.join(format!("{}-{}.{}", stem, Uuid::new_v4(), ext))
 }
 
 fn validate_dir(value: &str) -> Result<PathBuf, &'static str> {
@@ -235,30 +326,26 @@ fn create_task(store: &Store, payload: &Value) -> Result<Task, &'static str> {
         }
     };
     let id = Uuid::new_v4().to_string();
-    let mime = payload["mime"].as_str().unwrap_or("");
-    let ext = if mime.contains("mpegurl")
-        || mime.contains("dash+xml")
-        || url.contains(".m3u8")
-        || url.contains(".mpd")
-    {
-        "mp4".to_string()
-    } else if let Some(ext) = payload["contentDisposition"]
-        .as_str()
-        .and_then(extension_from_content_disposition)
-    {
-        ext
-    } else if let Some(ext) = extension_from_mime(mime) {
-        ext.to_string()
-    } else if let Some(ext) = extension_from_url(url) {
-        ext
-    } else {
-        "download".to_string()
+    let ext = extension_for(payload);
+    let custom_name = match payload["fileName"].as_str() {
+        Some(raw) => safe_file_stem(raw).ok_or("invalid_file_name")?,
+        None => String::new(),
     };
-    let output = dir.join(format!("{}-{}.{}", title, &id[..8], ext));
+    let mut tasks = store.tasks.lock().unwrap();
+    let output = if payload["fileName"].is_string() {
+        unique_output_path(&dir, &custom_name, &ext, &tasks)
+    } else {
+        dir.join(format!("{}-{}.{}", title, &id[..8], ext))
+    };
+    let display_title = if custom_name.is_empty() {
+        title
+    } else {
+        custom_name
+    };
     let task = Task {
         id,
         url: url.into(),
-        title,
+        title: display_title,
         state: "queued".into(),
         phase: "queued".into(),
         progress: 0,
@@ -273,7 +360,8 @@ fn create_task(store: &Store, payload: &Value) -> Result<Task, &'static str> {
         mime: payload["mime"].as_str().map(str::to_string),
         referer: payload["referer"].as_str().map(str::to_string),
     };
-    store.tasks.lock().unwrap().push(task.clone());
+    tasks.push(task.clone());
+    drop(tasks);
     save_store(store);
     Ok(task)
 }
@@ -297,8 +385,163 @@ fn update(store: &Store, writer: &Writer, id: &str, f: impl FnOnce(&mut Task)) {
         );
     }
 }
-fn probe_size(url: &str) -> Option<u64> {
-    let output = Command::new("curl")
+
+fn register_process(store: &Store, id: &str, child: Child) -> Arc<Mutex<Child>> {
+    let child = Arc::new(Mutex::new(child));
+    store
+        .processes
+        .lock()
+        .unwrap()
+        .insert(id.into(), child.clone());
+    child
+}
+
+fn unregister_process(store: &Store, id: &str) {
+    store.processes.lock().unwrap().remove(id);
+}
+
+fn clear_cancellation(store: &Store, id: &str) {
+    store.cancellations.lock().unwrap().remove(id);
+}
+
+fn cancel_requested(store: &Store, id: &str) -> bool {
+    store.cancellations.lock().unwrap().contains_key(id)
+}
+
+fn mark_cancelled(store: &Store, writer: &Writer, id: &str) {
+    unregister_process(store, id);
+    update(store, writer, id, |task| {
+        task.state = "cancelled".into();
+        task.phase = "cancelled".into();
+        task.speed_bytes_per_second = 0;
+        task.eta_seconds = None;
+        task.error = None;
+        task.message = Some("下载已取消".into());
+    });
+    clear_cancellation(store, id);
+}
+
+fn stop_process(store: &Store, id: &str) {
+    let process = store.processes.lock().unwrap().get(id).cloned();
+    if let Some(process) = process {
+        if let Ok(mut child) = process.lock() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+fn delete_output(path: &str) -> Result<bool, &'static str> {
+    let path = Path::new(path);
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(_) => return Err("file_delete_failed"),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("file_delete_unsafe");
+    }
+    fs::remove_file(path).map_err(|_| "file_delete_failed")?;
+    Ok(true)
+}
+
+fn delete_task(store: &Store, writer: &Writer, payload: &Value) -> Result<Value, &'static str> {
+    let id = payload["id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .ok_or("task_id_empty")?;
+    let delete_file = payload["deleteFile"].as_bool().unwrap_or(false);
+    let task = store
+        .tasks
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|task| task.id == id)
+        .cloned()
+        .ok_or("task_not_found")?;
+    if matches!(
+        task.state.as_str(),
+        "queued" | "starting" | "running" | "cancelling"
+    ) {
+        update(store, writer, id, |task| {
+            task.state = "cancelling".into();
+            task.phase = "cancelling".into();
+            task.message = Some("正在取消下载".into());
+        });
+        store.cancellations.lock().unwrap().insert(id.into(), true);
+        stop_process(store, id);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let terminal = store
+                .tasks
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|item| item.id == id)
+                .map(|item| {
+                    matches!(
+                        item.state.as_str(),
+                        "cancelled" | "succeeded" | "failed" | "interrupted"
+                    )
+                })
+                .unwrap_or(true);
+            if terminal || Instant::now() >= deadline {
+                break;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        let cancelled = store
+            .tasks
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|item| item.id == id)
+            .map(|item| {
+                matches!(
+                    item.state.as_str(),
+                    "cancelled" | "succeeded" | "failed" | "interrupted"
+                )
+            })
+            .unwrap_or(false);
+        if !cancelled {
+            clear_cancellation(store, id);
+            update(store, writer, id, |task| {
+                task.state = "failed".into();
+                task.phase = "failed".into();
+                task.error = Some("cancel_failed".into());
+                task.message = Some("取消下载失败，任务和文件均已保留".into());
+            });
+            return Err("cancel_failed");
+        }
+    }
+    let file_deleted = if delete_file {
+        match task.output.as_deref() {
+            Some(path) => delete_output(path)?,
+            None => false,
+        }
+    } else {
+        false
+    };
+    let removed = {
+        let mut tasks = store.tasks.lock().unwrap();
+        let before = tasks.len();
+        tasks.retain(|item| item.id != id);
+        tasks.len() != before
+    };
+    if !removed {
+        return Err("task_not_found");
+    }
+    clear_cancellation(store, id);
+    save_store(store);
+    emit(writer, json!({"version":1,"type":"task.deleted","id":id}));
+    Ok(
+        json!({"id": id, "fileDeleted": file_deleted, "fileKept": !delete_file && task.output.is_some()}),
+    )
+}
+
+fn probe_size(store: &Store, writer: &Writer, task: &Task) -> Option<u64> {
+    let mut command = Command::new("curl");
+    command
         .args([
             "--silent",
             "--show-error",
@@ -309,26 +552,50 @@ fn probe_size(url: &str) -> Option<u64> {
             "--max-time",
             "20",
             "--head",
-            url,
+            &task.url,
         ])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let child = register_process(store, &task.id, command.spawn().ok()?);
+    loop {
+        if cancel_requested(store, &task.id) {
+            if let Ok(mut child) = child.lock() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            mark_cancelled(store, writer, &task.id);
+            return None;
+        }
+        let finished = child.lock().ok()?.try_wait().ok()?;
+        if let Some(status) = finished {
+            let mut bytes = Vec::new();
+            if let Ok(mut child) = child.lock() {
+                if let Some(mut stdout) = child.stdout.take() {
+                    let _ = stdout.read_to_end(&mut bytes);
+                }
+            }
+            unregister_process(store, &task.id);
+            if !status.success() {
+                return None;
+            }
+            let output = String::from_utf8_lossy(&bytes);
+            return output.lines().rev().find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                (name.trim().eq_ignore_ascii_case("content-length"))
+                    .then(|| value.trim().parse().ok())
+                    .flatten()
+            });
+        }
+        thread::sleep(Duration::from_millis(50));
     }
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .rev()
-        .find_map(|line| {
-            let (name, value) = line.split_once(':')?;
-            (name.trim().eq_ignore_ascii_case("content-length"))
-                .then(|| value.trim().parse().ok())
-                .flatten()
-        })
 }
 
 fn start_http_download(store: Store, writer: Writer, task: Task, output: String) {
-    let total = probe_size(&task.url);
+    let total = probe_size(&store, &writer, &task);
+    if cancel_requested(&store, &task.id) {
+        mark_cancelled(&store, &writer, &task.id);
+        return;
+    }
     update(&store, &writer, &task.id, |t| {
         t.state = "starting".into();
         t.phase = "starting".into();
@@ -352,7 +619,7 @@ fn start_http_download(store: Store, writer: Writer, task: Task, output: String)
         args.extend(["--referer", referer]);
     }
     args.push(&task.url);
-    let mut child = match Command::new("curl")
+    let child = match Command::new("curl")
         .args(args)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -369,6 +636,7 @@ fn start_http_download(store: Store, writer: Writer, task: Task, output: String)
             return;
         }
     };
+    let child = register_process(&store, &task.id, child);
     let mut sampled_at = Instant::now();
     let mut smoothed_speed = 0u64;
     let mut last_bytes = fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
@@ -380,6 +648,14 @@ fn start_http_download(store: Store, writer: Writer, task: Task, output: String)
     });
     loop {
         thread::sleep(Duration::from_millis(500));
+        if cancel_requested(&store, &task.id) {
+            if let Ok(mut child) = child.lock() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            mark_cancelled(&store, &writer, &task.id);
+            return;
+        }
         let bytes = fs::metadata(&output).map(|m| m.len()).unwrap_or(last_bytes);
         let sample_seconds = sampled_at.elapsed().as_secs_f64().max(0.001);
         let sampled_speed = (bytes.saturating_sub(last_bytes)) as f64 / sample_seconds;
@@ -418,8 +694,17 @@ fn start_http_download(store: Store, writer: Writer, task: Task, output: String)
                 t.eta_seconds = eta;
             }
         });
-        match child.try_wait() {
+        let process_status = child
+            .lock()
+            .map_err(|_| io::Error::other("process_lock_poisoned"))
+            .and_then(|mut child| child.try_wait());
+        match process_status {
             Ok(Some(status)) => {
+                unregister_process(&store, &task.id);
+                if cancel_requested(&store, &task.id) {
+                    mark_cancelled(&store, &writer, &task.id);
+                    return;
+                }
                 if status.success() {
                     update(&store, &writer, &task.id, |t| {
                         t.state = "succeeded".into();
@@ -442,6 +727,7 @@ fn start_http_download(store: Store, writer: Writer, task: Task, output: String)
                 break;
             }
             Err(error) => {
+                unregister_process(&store, &task.id);
                 update(&store, &writer, &task.id, |t| {
                     t.state = "failed".into();
                     t.phase = "failed".into();
@@ -456,6 +742,10 @@ fn start_http_download(store: Store, writer: Writer, task: Task, output: String)
 
 fn start_download(store: Store, writer: Writer, task: Task) {
     thread::spawn(move || {
+        if cancel_requested(&store, &task.id) {
+            mark_cancelled(&store, &writer, &task.id);
+            return;
+        }
         let Some(output) = task.output.clone() else {
             update(&store, &writer, &task.id, |t| {
                 t.state = "failed".into();
@@ -480,7 +770,7 @@ fn start_download(store: Store, writer: Writer, task: Task) {
             t.phase = "fetching".into();
             t.message = Some("正在读取流媒体清单，需要 FFmpeg".into());
         });
-        let mut child = match Command::new("ffmpeg")
+        let child = match Command::new("ffmpeg")
             .args([
                 "-nostdin",
                 "-y",
@@ -511,10 +801,19 @@ fn start_download(store: Store, writer: Writer, task: Task) {
                 return;
             }
         };
+        let child = register_process(&store, &task.id, child);
         let mut last_bytes = 0u64;
         let mut sampled_at = Instant::now();
         loop {
             thread::sleep(Duration::from_millis(500));
+            if cancel_requested(&store, &task.id) {
+                if let Ok(mut child) = child.lock() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+                mark_cancelled(&store, &writer, &task.id);
+                return;
+            }
             let bytes = fs::metadata(&output).map(|m| m.len()).unwrap_or(last_bytes);
             let speed = (bytes.saturating_sub(last_bytes) as f64
                 / sampled_at.elapsed().as_secs_f64().max(0.001)) as u64;
@@ -527,8 +826,17 @@ fn start_download(store: Store, writer: Writer, task: Task) {
                 t.speed_bytes_per_second = speed;
                 t.message = Some("正在下载流媒体分片并合并".into());
             });
-            match child.try_wait() {
+            let process_status = child
+                .lock()
+                .map_err(|_| io::Error::other("process_lock_poisoned"))
+                .and_then(|mut child| child.try_wait());
+            match process_status {
                 Ok(Some(status)) if status.success() => {
+                    unregister_process(&store, &task.id);
+                    if cancel_requested(&store, &task.id) {
+                        mark_cancelled(&store, &writer, &task.id);
+                        return;
+                    }
                     update(&store, &writer, &task.id, |t| {
                         t.state = "succeeded".into();
                         t.phase = "completed".into();
@@ -541,6 +849,11 @@ fn start_download(store: Store, writer: Writer, task: Task) {
                     break;
                 }
                 Ok(Some(_)) => {
+                    unregister_process(&store, &task.id);
+                    if cancel_requested(&store, &task.id) {
+                        mark_cancelled(&store, &writer, &task.id);
+                        return;
+                    }
                     update(&store, &writer, &task.id, |t| {
                         t.state = "failed".into();
                         t.phase = "failed".into();
@@ -550,6 +863,7 @@ fn start_download(store: Store, writer: Writer, task: Task) {
                     break;
                 }
                 Err(error) => {
+                    unregister_process(&store, &task.id);
                     update(&store, &writer, &task.id, |t| {
                         t.state = "failed".into();
                         t.phase = "failed".into();
@@ -579,6 +893,14 @@ fn main() -> io::Result<()> {
                     start_download(store.clone(), writer.clone(), task.clone());
                     json!({"version":1,"id":id,"ok":true,"task":task})
                 }
+                Err(error) => json!({"version":1,"id":id,"ok":false,"error":error}),
+            },
+            "task.prepare" => match prepare_task(&message["payload"]) {
+                Ok(value) => json!({"version":1,"id":id,"ok":true,"payload":value}),
+                Err(error) => json!({"version":1,"id":id,"ok":false,"error":error}),
+            },
+            "task.delete" => match delete_task(&store, &writer, &message["payload"]) {
+                Ok(value) => json!({"version":1,"id":id,"ok":true,"payload":value}),
                 Err(error) => json!({"version":1,"id":id,"ok":false,"error":error}),
             },
             "task.list" => {
@@ -612,6 +934,10 @@ mod tests {
     #[test]
     fn title_is_safe() {
         assert_eq!(safe_title("a:b"), "a_b");
+        assert_eq!(safe_file_stem("  测试视频. "), Some("测试视频".into()));
+        assert_eq!(safe_file_stem("CON"), Some("_CON".into()));
+        assert_eq!(safe_file_stem("con.txt"), Some("_con.txt".into()));
+        assert_eq!(safe_file_stem("..."), None);
     }
     #[test]
     fn relative_path_is_rejected() {
@@ -649,5 +975,60 @@ mod tests {
             extension_from_url("https://example.test/video/sample.m4a?token=1"),
             Some("m4a".into())
         );
+    }
+    #[test]
+    fn task_prepare_uses_disposition_name_and_detected_extension() {
+        let prepared = prepare_task(&json!({
+            "url":"https://example.test/fallback.bin",
+            "title":"页面标题",
+            "mime":"video/mp4",
+            "contentDisposition":"attachment; filename=movie.webm"
+        }))
+        .unwrap();
+        assert_eq!(prepared["fileName"], "movie");
+        assert_eq!(prepared["extension"], "webm");
+    }
+    #[test]
+    fn unique_output_adds_sequence_for_existing_and_reserved_names() {
+        let dir = std::env::temp_dir().join(format!("streamfirefly-name-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("视频.mp4"), b"existing").unwrap();
+        let tasks = vec![Task {
+            id: "reserved".into(),
+            url: "https://example.test/a.mp4".into(),
+            title: "reserved".into(),
+            state: "queued".into(),
+            phase: "queued".into(),
+            progress: 0,
+            downloaded_bytes: 0,
+            total_bytes: None,
+            speed_bytes_per_second: 0,
+            eta_seconds: None,
+            attempt: 1,
+            message: None,
+            output: Some(dir.join("视频 (1).mp4").to_string_lossy().into()),
+            error: None,
+            mime: Some("video/mp4".into()),
+            referer: None,
+        }];
+        assert_eq!(
+            unique_output_path(&dir, "视频", "mp4", &tasks),
+            dir.join("视频 (2).mp4")
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn delete_output_rejects_directories_and_accepts_missing_files() {
+        let dir = std::env::temp_dir().join(format!("streamfirefly-delete-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        assert_eq!(
+            delete_output(dir.to_string_lossy().as_ref()),
+            Err("file_delete_unsafe")
+        );
+        assert_eq!(
+            delete_output(dir.join("missing.mp4").to_string_lossy().as_ref()),
+            Ok(false)
+        );
+        fs::remove_dir_all(dir).unwrap();
     }
 }
