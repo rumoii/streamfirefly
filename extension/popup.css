@@ -25,7 +25,20 @@ button:disabled { cursor: wait; opacity: .6; }
 .detail-row span:first-child { color: #8a9bb0; }
 .detail-row span:last-child { color: #405976; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stream-tip { margin-top: 8px; padding: 7px 9px; color: #93651d; background: #fff6df; border-radius: 7px; font-size: 11px; }
-.section-title { margin-top: 20px; font-weight: 700; color: #405976; font-size: 13px; }
+.tasks-panel { margin-top: 16px; }
+.tasks-panel[hidden] { display: none; }
+.tasks-toggle { display: flex; width: 100%; align-items: center; gap: 10px; min-height: 42px; padding: 10px 12px; border: 1px solid #dce5ef; border-radius: 11px; background: #fff; color: #405976; text-align: left; font-size: 13px; box-shadow: 0 2px 8px #253a5508; transition: border-color .2s ease, box-shadow .2s ease, background .2s ease; }
+.tasks-toggle:hover { border-color: #b9ddd5; background: #fbfefd; color: #397563; box-shadow: 0 4px 12px #253a5510; }
+.tasks-toggle:focus-visible { outline: 2px solid #4dbea6; outline-offset: 2px; }
+.tasks-heading { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; }
+.tasks-icon { position: relative; width: 17px; height: 14px; border: 1.5px solid #4dbea6; border-radius: 3px; background: #e8f7f3; }
+.tasks-icon::before, .tasks-icon::after { content: ""; position: absolute; left: 3px; right: 3px; height: 1.5px; border-radius: 2px; background: #4dbea6; }
+.tasks-icon::before { top: 4px; }
+.tasks-icon::after { top: 8px; }
+.tasks-summary { margin-left: auto; color: #8a9bb0; font-size: 11px; }
+.tasks-toggle .chevron { width: 8px; height: 8px; margin-left: 2px; border-right: 1.5px solid #6d8398; border-bottom: 1.5px solid #6d8398; transform: rotate(45deg) translateY(-2px); transition: transform .2s ease; }
+.tasks-toggle[aria-expanded="true"] .chevron { transform: rotate(225deg) translate(-1px, -1px); }
+.tasks-panel > .list { margin-top: 8px; }
 .empty { color: #8a9bb0; padding: 12px 0; font-size: 13px; text-align: center; }
 .task-head strong { max-width: 270px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .task-state { color: #60758d; background: #edf2f7; border-radius: 10px; padding: 3px 7px; font-size: 10px; }

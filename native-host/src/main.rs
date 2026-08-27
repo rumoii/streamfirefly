@@ -38,6 +38,8 @@ struct Task {
     output: Option<String>,
     error: Option<String>,
     mime: Option<String>,
+    #[serde(default)]
+    referer: Option<String>,
 }
 
 #[derive(Clone)]
@@ -149,6 +151,42 @@ fn safe_title(value: &str) -> String {
     }
 }
 
+fn extension_from_mime(mime: &str) -> Option<&'static str> {
+    match mime.to_ascii_lowercase().as_str() {
+        "video/mp4" => Some("mp4"),
+        "video/webm" => Some("webm"),
+        "video/quicktime" => Some("mov"),
+        "video/mpeg" => Some("mpeg"),
+        "audio/mpeg" | "audio/mp3" => Some("mp3"),
+        "audio/mp4" | "audio/x-m4a" => Some("m4a"),
+        "audio/wav" | "audio/x-wav" => Some("wav"),
+        "audio/aac" => Some("aac"),
+        "audio/ogg" => Some("ogg"),
+        "image/jpeg" => Some("jpg"),
+        "image/png" => Some("png"),
+        "image/gif" => Some("gif"),
+        "image/webp" => Some("webp"),
+        _ => None,
+    }
+}
+
+fn extension_from_url(url: &str) -> Option<String> {
+    let path = url.split(['?', '#']).next()?.rsplit('/').next()?;
+    let (_, ext) = path.rsplit_once('.')?;
+    let ext = ext.trim().to_ascii_lowercase();
+    ((1..=8).contains(&ext.len()) && ext.chars().all(|c| c.is_ascii_alphanumeric())).then_some(ext)
+}
+
+fn extension_from_content_disposition(value: &str) -> Option<String> {
+    let filename = value.split(';').find_map(|part| {
+        let (key, value) = part.trim().split_once('=')?;
+        key.trim()
+            .eq_ignore_ascii_case("filename")
+            .then(|| value.trim().trim_matches('"'))
+    })?;
+    extension_from_url(filename)
+}
+
 fn validate_dir(value: &str) -> Result<PathBuf, &'static str> {
     let raw = value.trim();
     if raw.is_empty() {
@@ -197,11 +235,24 @@ fn create_task(store: &Store, payload: &Value) -> Result<Task, &'static str> {
         }
     };
     let id = Uuid::new_v4().to_string();
-    let ext = if payload["mime"].as_str().unwrap_or("").contains("mpegurl") || url.contains(".m3u8")
+    let mime = payload["mime"].as_str().unwrap_or("");
+    let ext = if mime.contains("mpegurl")
+        || mime.contains("dash+xml")
+        || url.contains(".m3u8")
+        || url.contains(".mpd")
     {
-        "mp4"
+        "mp4".to_string()
+    } else if let Some(ext) = payload["contentDisposition"]
+        .as_str()
+        .and_then(extension_from_content_disposition)
+    {
+        ext
+    } else if let Some(ext) = extension_from_mime(mime) {
+        ext.to_string()
+    } else if let Some(ext) = extension_from_url(url) {
+        ext
     } else {
-        "download"
+        "download".to_string()
     };
     let output = dir.join(format!("{}-{}.{}", title, &id[..8], ext));
     let task = Task {
@@ -220,6 +271,7 @@ fn create_task(store: &Store, payload: &Value) -> Result<Task, &'static str> {
         output: Some(output.to_string_lossy().into()),
         error: None,
         mime: payload["mime"].as_str().map(str::to_string),
+        referer: payload["referer"].as_str().map(str::to_string),
     };
     store.tasks.lock().unwrap().push(task.clone());
     save_store(store);
@@ -283,21 +335,25 @@ fn start_http_download(store: Store, writer: Writer, task: Task, output: String)
         t.total_bytes = total;
         t.message = Some("正在连接资源".into());
     });
+    let mut args = vec![
+        "--silent",
+        "--show-error",
+        "--fail",
+        "--location",
+        "--retry",
+        "3",
+        "--retry-all-errors",
+        "--continue-at",
+        "-",
+        "--output",
+        &output,
+    ];
+    if let Some(referer) = task.referer.as_deref() {
+        args.extend(["--referer", referer]);
+    }
+    args.push(&task.url);
     let mut child = match Command::new("curl")
-        .args([
-            "--silent",
-            "--show-error",
-            "--fail",
-            "--location",
-            "--retry",
-            "3",
-            "--retry-all-errors",
-            "--continue-at",
-            "-",
-            "--output",
-            &output,
-            &task.url,
-        ])
+        .args(args)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -581,5 +637,17 @@ mod tests {
             Err("path_is_not_directory")
         );
         fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn file_extension_prefers_disposition_then_mime_then_url() {
+        assert_eq!(
+            extension_from_content_disposition("attachment; filename=movie.webm"),
+            Some("webm".into())
+        );
+        assert_eq!(extension_from_mime("video/mp4"), Some("mp4"));
+        assert_eq!(
+            extension_from_url("https://example.test/video/sample.m4a?token=1"),
+            Some("m4a".into())
+        );
     }
 }

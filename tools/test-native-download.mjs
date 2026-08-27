@@ -71,6 +71,7 @@ server.close();
 if (task?.state !== 'succeeded') throw new Error(`Download did not succeed: ${JSON.stringify(task)}`);
 if (!fs.existsSync(task.output) || !fs.readFileSync(task.output).equals(payload)) throw new Error('Downloaded output mismatch');
 if (!path.dirname(task.output).endsWith('custom-downloads')) throw new Error(`Unexpected output path: ${task.output}`);
+if (!task.output.endsWith('.mp4')) throw new Error(`MP4 download used wrong extension: ${task.output}`);
 if (!progressEvents.some(item => item.id === task.id && item.state === 'running')) throw new Error('No running progress event received');
 if (!progressEvents.some(item => item.id === task.id && item.state === 'succeeded' && item.progress === 100)) throw new Error('No completed progress event received');
 if (duplicate.task.id === created.task.id || duplicateTask?.state !== 'succeeded' || duplicateTask.output === task.output) throw new Error('Explicit duplicate download was not created independently');

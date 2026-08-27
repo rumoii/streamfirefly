@@ -29,6 +29,11 @@
       media.addEventListener("loadedmetadata", () => report(media, true), { once: true });
     }
   });
+  window.addEventListener("message", event => {
+    if (event.source !== window || event.data?.source !== "streamfirefly" || event.data.type !== "media") return;
+    api.runtime.sendMessage({ type: "media.add", candidate: event.data.candidate }).catch?.(() => {});
+  });
+  api.runtime.sendMessage({ type: "probe.install" }).catch?.(() => {});
   new MutationObserver(scan).observe(document.documentElement, { childList: true, subtree: true });
   scan();
 })();
