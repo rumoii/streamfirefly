@@ -1,0 +1,10 @@
+{
+  "name": "com.streamfirefly.native",
+  "description": "StreamFirefly native download helper",
+  "path": "C:\\Program Files\\StreamFirefly\\streamfirefly-native.exe",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://REPLACE_WITH_EXTENSION_ID/"
+  ],
+  "allowed_extensions": ["REPLACE_WITH_FIREFOX_EXTENSION_ID"]
+}

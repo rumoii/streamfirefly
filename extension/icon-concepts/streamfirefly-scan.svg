@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="流萤扫描徽标候选图标">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="44%" r="72%">
+      <stop offset="0" stop-color="#172b3a"/>
+      <stop offset="0.55" stop-color="#101a27"/>
+      <stop offset="1" stop-color="#090d14"/>
+    </radialGradient>
+    <linearGradient id="wing" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#bdf7ec" stop-opacity="0.78"/>
+      <stop offset="1" stop-color="#3cd9c0" stop-opacity="0.16"/>
+    </linearGradient>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#dff9ef"/>
+      <stop offset="0.5" stop-color="#68d8c0"/>
+      <stop offset="1" stop-color="#1e927f"/>
+    </linearGradient>
+    <radialGradient id="light" cx="50%" cy="42%" r="64%">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.22" stop-color="#f2ff8c"/>
+      <stop offset="0.62" stop-color="#b9f63c"/>
+      <stop offset="1" stop-color="#6fcf2e"/>
+    </radialGradient>
+    <filter id="glow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="28" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="soft" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="10"/>
+    </filter>
+  </defs>
+
+  <rect x="24" y="24" width="976" height="976" rx="224" fill="url(#bg)"/>
+  <circle cx="512" cy="522" r="334" fill="none" stroke="#45e6cb" stroke-width="18" stroke-opacity="0.1"/>
+  <circle cx="512" cy="522" r="252" fill="none" stroke="#45e6cb" stroke-width="16" stroke-opacity="0.2" stroke-dasharray="48 34"/>
+  <path d="M512 220a302 302 0 0 1 292 226" fill="none" stroke="#70f2d5" stroke-width="24" stroke-linecap="round"/>
+  <circle cx="804" cy="446" r="18" fill="#dfff7c" filter="url(#glow)"/>
+
+  <ellipse cx="512" cy="610" rx="182" ry="204" fill="#b5ff49" opacity="0.1" filter="url(#soft)"/>
+  <path d="M467 471C365 361 284 365 306 466c14 64 82 116 178 132z" fill="url(#wing)" stroke="#8ff2df" stroke-width="12"/>
+  <path d="M557 471c102-110 183-106 161-5-14 64-82 116-178 132z" fill="url(#wing)" stroke="#8ff2df" stroke-width="12"/>
+  <path d="M472 421c-54-58-90-102-99-153" fill="none" stroke="#75dcca" stroke-width="14" stroke-linecap="round"/>
+  <path d="M552 421c54-58 90-102 99-153" fill="none" stroke="#75dcca" stroke-width="14" stroke-linecap="round"/>
+  <circle cx="370" cy="255" r="14" fill="#9bf2df"/>
+  <circle cx="654" cy="255" r="14" fill="#9bf2df"/>
+  <circle cx="512" cy="423" r="54" fill="#214b48" stroke="#8cebd8" stroke-width="12"/>
+  <rect x="476" y="462" width="72" height="116" rx="36" fill="url(#body)"/>
+  <ellipse cx="512" cy="640" rx="98" ry="130" fill="#b8f63f" opacity="0.34" filter="url(#glow)"/>
+  <path d="M512 537c72 0 126 56 118 128-9 84-62 145-118 176-56-31-109-92-118-176-8-72 46-128 118-128z" fill="url(#light)" stroke="#dcff70" stroke-width="14"/>
+  <path d="M482 612v118l100-59z" fill="#102018" stroke="#102018" stroke-linejoin="round"/>
+  <circle cx="512" cy="522" r="408" fill="none" stroke="#c6ff61" stroke-width="8" stroke-opacity="0.1"/>
+</svg>

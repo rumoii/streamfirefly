@@ -1,0 +1,18 @@
+:root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+body { width: 420px; margin: 0; background: #f5f7fb; color: #26364a; }
+main { padding: 16px; }
+.brand { display:flex; align-items:center; gap:10px; } .brand img { width:38px; height:38px; border-radius:11px; box-shadow:0 4px 12px #9fcebd66; }
+header { display:flex; justify-content:space-between; align-items:center; gap:16px; }
+h1 { margin:0; font-size: 23px; letter-spacing:.02em; } p { margin:4px 0 0; color:#7b8da3; font-size:12px; }
+button { border: 1px solid #c9d6e6; background:#fff; color:#39516f; border-radius:8px; padding:7px 10px; cursor:pointer; font-weight:600; }
+.ghost-button:hover { border-color:#4dbea6; color:#248f7a; }
+.status { margin:16px 0 9px; color:#536b87; font-size:13px; background:#eaf7f4; border:1px solid #c7e9e1; border-radius:8px; padding:9px 11px; }
+.item { border:1px solid #dce5ef; background:#fff; border-radius:11px; padding:11px; margin:8px 0; box-shadow:0 2px 8px #253a5510; }
+.row { display:flex; gap:8px; align-items:center; justify-content:space-between; }
+.row strong { color:#2b8f7e; font-size:11px; letter-spacing:.08em; background:#e8f7f3; padding:3px 7px; border-radius:10px; }
+.row button { padding:5px 11px; border-color:#4dbea6; background:#36a990; color:#fff; font-size:12px; }
+.row button:hover { background:#248f7a; }
+.url { color:#3d5878; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:285px; margin-top:8px; }
+.meta { color:#8a9bb0; font-size:11px; margin-top:6px; }
+.section-title { margin-top:20px; font-weight:700; color:#405976; font-size:13px; }
+.empty { color:#8a9bb0; padding:12px 0; font-size:13px; text-align:center; }

@@ -1,0 +1,28 @@
+# Rust build output
+native-host/target/
+
+# Local runtime state and downloads
+downloads/
+*.download
+*.part
+*.tmp
+tasks.json
+
+# Local native host binaries and installer output
+*.exe
+*.pdb
+*.crx
+*.zip
+
+# Node and browser tooling
+node_modules/
+.playwright-mcp/
+playwright-report/
+test-results/
+
+# Local editor and OS files
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+.DS_Store
