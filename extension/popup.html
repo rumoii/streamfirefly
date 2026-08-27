@@ -28,11 +28,16 @@
   <div id="delete-dialog" class="dialog-backdrop" hidden>
     <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="delete-dialog-title">
       <div class="dialog-head"><div><h2 id="delete-dialog-title">删除下载任务</h2><p id="delete-dialog-message">请选择要删除的内容</p></div><button id="delete-cancel" class="icon-button" type="button" aria-label="取消">×</button></div>
-      <div class="delete-choice"><button id="delete-record" type="button"><strong>仅删除记录</strong><span>保留本地文件，不再显示此任务</span></button><button id="delete-record-file" class="danger-button" type="button"><strong>删除记录和本地文件</strong><span>同时删除已下载的文件或临时文件</span></button></div>
+      <div id="delete-choice" class="delete-choice"><button id="delete-record" type="button"><strong>仅删除记录</strong><span>保留本地文件，不再显示此任务</span></button><button id="delete-record-file" class="danger-button" type="button"><strong>删除记录和本地文件</strong><span>同时删除已下载的文件或临时文件</span></button></div>
+      <div id="delete-confirmation" class="delete-confirmation" hidden>
+        <div class="confirm-warning"><span class="warning-icon" aria-hidden="true">!</span><div><strong id="delete-confirm-title">确认删除</strong><p id="delete-confirm-message"></p></div></div>
+        <div class="confirm-path" id="delete-confirm-path"></div>
+        <div class="dialog-actions"><button id="delete-confirm-back" type="button">返回</button><button id="delete-confirm-submit" class="danger-button" type="button">确认删除</button></div>
+      </div>
       <div id="delete-error" class="dialog-error" role="alert"></div>
-      <div class="dialog-actions"><button id="delete-cancel-secondary" type="button">取消</button></div>
+      <div id="delete-choice-actions" class="dialog-actions"><button id="delete-cancel-secondary" type="button">取消</button></div>
     </section>
   </div>
-  <script src="popup.js"></script>
+  <script src="lib/hls.min.js"></script><script src="popup.js"></script>
 </body>
 </html>

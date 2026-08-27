@@ -2,6 +2,7 @@
   const api = globalThis.browser ?? globalThis.chrome;
   const seen = new Set();
   const bound = new WeakSet();
+  const pagePoster = () => { const value = document.querySelector('meta[property="og:image"], meta[name="twitter:image"]')?.content; if (!value) return null; try { return new URL(value, location.href).href; } catch (_) { return value; } };
   const report = (element, force = false) => {
     const url = element.currentSrc || element.src;
     if (!url || (!force && seen.has(url))) return;
@@ -14,7 +15,7 @@
       pageTitle: document.title,
       pageUrl: location.href,
       faviconUrl: document.querySelector('link[rel~="icon"]')?.href || `${location.origin}/favicon.ico`,
-      poster: isVideo ? element.poster || null : null,
+      poster: isVideo ? element.poster || pagePoster() : null,
       width: isVideo ? element.videoWidth || null : null,
       height: isVideo ? element.videoHeight || null : null,
       duration: Number.isFinite(element.duration) ? element.duration : null,
