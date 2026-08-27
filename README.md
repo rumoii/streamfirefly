@@ -4,13 +4,17 @@
 
 ## 当前状态
 
-这是首个可运行骨架，已实现：
+当前版本已实现：
 
 - Chrome/Edge Manifest V3 扩展；
 - 页面资源候选发现（请求 URL、响应 MIME、媒体元素）；
 - 普通 HTTP 下载任务创建；
 - Native Messaging 协议与 Rust 助手任务状态机；
 - Rust 助手通过系统 `curl` 执行下载，并持久化任务清单；
+- 设置页配置并验证默认保存目录；
+- 真实下载字节、总大小、速度、预计剩余时间和阶段进度；
+- 资源卡片展开查看分辨率、时长、封面、来源页面等信息；
+- 资源 URL 去重及下载按钮防双击，同时保留用户主动重复下载能力；
 - HLS/DASH 资源可被识别；若系统安装 FFmpeg，助手会使用无转码合并链路处理清单，否则任务会保留明确的进程启动失败原因。
 
 ## 目录
@@ -43,6 +47,8 @@ cargo build --release --manifest-path native-host/Cargo.toml
 ```powershell
 .\tools\install-native-host.ps1 -ChromeExtensionId '<扩展ID>'
 ```
+
+每次重新编译 Native Host 后，需要再次运行安装脚本，覆盖浏览器实际调用的本地助手程序。扩展更新后在 `chrome://extensions` 中点击“重新加载”。
 
 ## 合规边界
 
