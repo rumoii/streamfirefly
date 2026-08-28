@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=1280, initial-scale=1">
+  <title>流萤界面截图</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { width: 1280px; height: 800px; margin: 0; overflow: hidden; }
+    body { font-family: "Microsoft YaHei", system-ui, sans-serif; color: #17364b; background: radial-gradient(circle at 78% 18%, rgba(126, 236, 206, .32), transparent 25%), linear-gradient(145deg, #f6fffc, #eaf3ff); }
+    main { height: 100%; padding: 46px 74px; display: grid; grid-template-columns: 520px 1fr; align-items: center; gap: 78px; }
+    .browser { width: 476px; padding: 18px; border: 1px solid rgba(87, 130, 151, .22); border-radius: 28px; background: rgba(255,255,255,.86); box-shadow: 0 28px 70px rgba(42, 91, 112, .18); }
+    .bar { height: 24px; display: flex; align-items: flex-start; gap: 7px; padding-left: 4px; }
+    .bar span { width: 9px; height: 9px; border-radius: 50%; background: #dce7ed; }
+    iframe { display: block; width: 440px; height: 664px; border: 0; border-radius: 16px; background: white; }
+    .mark { display: inline-flex; align-items: center; gap: 10px; color: #238a76; font-size: 15px; font-weight: 700; letter-spacing: 2px; }
+    .mark img { width: 52px; height: 52px; border-radius: 13px; }
+    h1 { margin: 24px 0 16px; font-size: 52px; line-height: 1.14; letter-spacing: 2px; }
+    .lead { margin: 0 0 30px; color: #647f91; font-size: 19px; line-height: 1.8; }
+    ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 17px; }
+    li { display: flex; gap: 12px; align-items: center; color: #36566b; font-size: 17px; }
+    li::before { content: "✓"; display: grid; place-items: center; width: 25px; height: 25px; border-radius: 50%; color: white; background: #35a78f; font-weight: 800; }
+    .beta { margin-top: 34px; color: #7590a1; font-size: 13px; letter-spacing: 1px; }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="browser">
+      <div class="bar"><span></span><span></span><span></span></div>
+      <iframe src="../extension/popup.html" title="流萤扩展界面"></iframe>
+    </section>
+    <section>
+      <div class="mark"><img src="../extension/icon128.png" alt="">流萤 STREAMFIREFLY</div>
+      <h1>网页媒体<br>一眼发现，安心下载</h1>
+      <p class="lead">本地优先的媒体识别、预览与下载体验。<br>信息清晰，任务进度真实可见。</p>
+      <ul>
+        <li>识别视频、音频、图片与流媒体</li>
+        <li>查看封面、大小、分辨率与时长</li>
+        <li>自定义文件名、保存路径与下载并发</li>
+        <li>任务记录与本地文件分别管理</li>
+      </ul>
+      <div class="beta">PRIVATE BETA · WINDOWS + CHROME</div>
+    </section>
+  </main>
+</body>
+</html>

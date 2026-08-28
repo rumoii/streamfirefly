@@ -55,6 +55,14 @@ cargo build --release --manifest-path native-host/Cargo.toml
 
 每次重新编译 Native Host 后，需要再次运行安装脚本，覆盖浏览器实际调用的本地助手程序。扩展更新后在 `chrome://extensions` 中点击“重新加载”。
 
+生成 Chrome Web Store 上传包：
+
+```powershell
+.\tools\package-extension.ps1
+```
+
+上传包只包含 Chrome 扩展运行所需的白名单文件，不包含 Firefox Manifest、图标设计稿或本地状态。
+
 ## Windows 安装包
 
 正式交付由浏览器商店扩展和 Windows Native Host 安装包组成。安装包包含 Native Host 与固定版本的 GPL FFmpeg，并分别生成 x64、ARM64 版本：
@@ -64,8 +72,18 @@ cargo build --release --manifest-path native-host/Cargo.toml
 .\tools\build-installer.ps1 -Architecture arm64
 ```
 
-构建机需要 Rust 对应目标工具链和 Inno Setup 6。FFmpeg 二进制在构建阶段按固定 URL 与 SHA-256 下载，不提交到 Git；安装过程本身不访问网络。Chrome 当前扩展 ID 为 `gimoeapmpoeogpabfdplccplmmohklff`，Edge 商店 ID 发布后通过 `-EdgeExtensionId` 传入。
+构建机需要 Rust 对应目标工具链和 Inno Setup 6。FFmpeg 二进制在构建阶段按固定 URL 与 SHA-256 下载，不提交到 Git；安装过程本身不访问网络。本地开发扩展 ID 为 `gimoeapmpoeogpabfdplccplmmohklff`，Chrome Web Store 正式 ID 取得后通过 `-ChromeExtensionId` 传入；Edge 商店 ID 通过 `-EdgeExtensionId` 传入。
+
+Chrome Web Store 创建条目并取得正式扩展 ID 后，使用该 ID 一次性生成扩展 ZIP、两个架构的安装包和校验文件：
+
+```powershell
+.\tools\prepare-release.ps1 -ChromeExtensionId '<商店分配的正式扩展ID>'
+```
+
+不得把使用本地开发 ID 构建的安装包作为商店内测交付物。内测资料与商店提交清单位于 `store-assets/`，隐私政策见 `PRIVACY.md`。
 
 ## 合规边界
 
 仅下载用户拥有版权或已获授权的资源。检测到 DRM 时只提示，不绕过 DRM。
+
+Cookie 与 Authorization 仅在当前下载进程的内存中临时使用，不写入任务历史；Native Host 启动时也会清理旧版本任务文件中遗留的敏感请求头。

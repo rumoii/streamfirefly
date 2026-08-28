@@ -17,6 +17,7 @@ installer/build/
 installer/output/
 installer/*.generated.iss
 tools/ffmpeg-cache/
+release/
 
 # Node and browser tooling
 node_modules/

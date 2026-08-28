@@ -16,6 +16,7 @@ const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 const STORE_VERSION: u8 = 1;
 const DEFAULT_DOWNLOAD_THREADS: u8 = 6;
 const MAX_DOWNLOAD_THREADS: u8 = 16;
+const SENSITIVE_REQUEST_HEADERS: [&str; 2] = ["cookie", "authorization"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Task {
@@ -90,7 +91,7 @@ fn default_download_dir() -> PathBuf {
 }
 
 fn load_store(path: &Path) -> Store {
-    let tasks = fs::read_to_string(path)
+    let mut tasks: Vec<Task> = fs::read_to_string(path)
         .ok()
         .and_then(|s| serde_json::from_str::<Value>(&s).ok())
         .and_then(|v| {
@@ -99,25 +100,34 @@ fn load_store(path: &Path) -> Store {
                 .flatten()
         })
         .unwrap_or_default();
+    // Credentials are intentionally valid only for the process that captured them.
+    // This also scrubs task files written by versions that persisted sensitive headers.
+    for task in &mut tasks {
+        let had_credentials = task
+            .request_headers
+            .keys()
+            .any(|name| is_sensitive_request_header(name));
+        strip_sensitive_headers(task);
+        if matches!(
+            task.state.as_str(),
+            "running" | "queued" | "starting" | "downloading" | "cancelling"
+        ) {
+            task.state = "interrupted".into();
+            task.phase = "interrupted".into();
+            task.error = Some("native_host_restarted".into());
+            task.message = Some(if had_credentials {
+                "登录凭据未持久化，请从页面重新发起下载".into()
+            } else {
+                "本地助手重新启动，任务已中断".into()
+            });
+        }
+    }
     let store = Store {
         path: path.to_path_buf(),
         tasks: Arc::new(Mutex::new(tasks)),
         processes: Arc::new(Mutex::new(HashMap::new())),
         cancellations: Arc::new(Mutex::new(HashMap::new())),
     };
-    if let Ok(mut tasks) = store.tasks.lock() {
-        for task in tasks.iter_mut() {
-            if matches!(
-                task.state.as_str(),
-                "running" | "queued" | "starting" | "downloading" | "cancelling"
-            ) {
-                task.state = "interrupted".into();
-                task.phase = "interrupted".into();
-                task.error = Some("native_host_restarted".into());
-                task.message = Some("本地助手重新启动，任务已中断".into());
-            }
-        }
-    }
     save_store(&store);
     store
 }
@@ -127,13 +137,35 @@ fn save_store(store: &Store) {
         let _ = fs::create_dir_all(parent);
     }
     if let Ok(tasks) = store.tasks.lock() {
-        let data = json!({"version": STORE_VERSION, "tasks": &*tasks});
+        let persisted_tasks: Vec<Task> = tasks.iter().map(sanitized_task).collect();
+        let data = json!({"version": STORE_VERSION, "tasks": persisted_tasks});
         let tmp = store.path.with_extension("tmp");
         if fs::write(&tmp, serde_json::to_vec_pretty(&data).unwrap_or_default()).is_ok() {
             let _ = fs::remove_file(&store.path);
             let _ = fs::rename(tmp, &store.path);
         }
     }
+}
+
+fn is_sensitive_request_header(name: &str) -> bool {
+    SENSITIVE_REQUEST_HEADERS
+        .iter()
+        .any(|sensitive| name.eq_ignore_ascii_case(sensitive))
+}
+
+fn strip_sensitive_headers(task: &mut Task) {
+    task.request_headers
+        .retain(|name, _| !is_sensitive_request_header(name));
+}
+
+fn sanitized_task(task: &Task) -> Task {
+    let mut copy = task.clone();
+    strip_sensitive_headers(&mut copy);
+    copy
+}
+
+fn sanitized_tasks(tasks: &[Task]) -> Vec<Task> {
+    tasks.iter().map(sanitized_task).collect()
 }
 fn read_message(reader: &mut impl Read) -> io::Result<Value> {
     let mut length = [0u8; 4];
@@ -431,9 +463,10 @@ fn update(store: &Store, writer: &Writer, id: &str, f: impl FnOnce(&mut Task)) {
     };
     if let Some(task) = changed {
         save_store(store);
+        let public_task = sanitized_task(&task);
         emit(
             writer,
-            json!({"version":1,"type":"task.progress","task":task}),
+            json!({"version":1,"type":"task.progress","task":public_task}),
         );
     }
 }
@@ -1251,7 +1284,7 @@ fn main() -> io::Result<()> {
             "task.create" => match create_task(&store, &message["payload"]) {
                 Ok(task) => {
                     start_download(store.clone(), writer.clone(), task.clone());
-                    json!({"version":1,"id":id,"ok":true,"task":task})
+                    json!({"version":1,"id":id,"ok":true,"task":sanitized_task(&task)})
                 }
                 Err(error) => json!({"version":1,"id":id,"ok":false,"error":error}),
             },
@@ -1264,7 +1297,8 @@ fn main() -> io::Result<()> {
                 Err(error) => json!({"version":1,"id":id,"ok":false,"error":error}),
             },
             "task.list" => {
-                json!({"version":1,"id":id,"ok":true,"tasks":store.tasks.lock().unwrap().clone()})
+                let tasks = store.tasks.lock().unwrap();
+                json!({"version":1,"id":id,"ok":true,"tasks":sanitized_tasks(&tasks)})
             }
             "path.validate" => match message["payload"]["path"]
                 .as_str()
@@ -1313,6 +1347,66 @@ mod tests {
         assert_eq!(task.phase, "");
         assert_eq!(task.downloaded_bytes, 0);
         assert_eq!(task.total_bytes, None);
+    }
+    #[test]
+    fn persisted_tasks_strip_credentials_but_keep_download_headers_in_memory() {
+        let task: Task = serde_json::from_value(json!({
+            "id":"credential-test","url":"https://example.test/a.mp4","title":"test",
+            "state":"running","progress":10,"output":null,"error":null,"mime":"video/mp4",
+            "request_headers":{
+                "cookie":"session=secret-cookie",
+                "authorization":"Bearer secret-token",
+                "referer":"https://example.test/page",
+                "origin":"https://example.test"
+            }
+        }))
+        .unwrap();
+        assert_eq!(task.request_headers["cookie"], "session=secret-cookie");
+        let public_task = sanitized_task(&task);
+        assert!(!public_task.request_headers.contains_key("cookie"));
+        assert!(!public_task.request_headers.contains_key("authorization"));
+        assert_eq!(
+            public_task.request_headers["referer"],
+            "https://example.test/page"
+        );
+        let serialized = serde_json::to_string(&public_task).unwrap();
+        assert!(!serialized.contains("secret-cookie"));
+        assert!(!serialized.contains("secret-token"));
+    }
+    #[test]
+    fn loading_old_store_scrubs_credentials_from_memory_and_disk() {
+        let dir = std::env::temp_dir().join(format!("streamfirefly-store-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("tasks.json");
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&json!({
+                "version":STORE_VERSION,
+                "tasks":[{
+                    "id":"old-secret","url":"https://example.test/a.mp4","title":"old",
+                    "state":"running","progress":10,"output":null,"error":null,"mime":"video/mp4",
+                    "request_headers":{"cookie":"session=legacy-cookie-secret","referer":"https://example.test/page"}
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let store = load_store(&path);
+        let tasks = store.tasks.lock().unwrap();
+        assert_eq!(tasks[0].state, "interrupted");
+        assert!(!tasks[0].request_headers.contains_key("cookie"));
+        assert_eq!(
+            tasks[0].request_headers["referer"],
+            "https://example.test/page"
+        );
+        assert_eq!(
+            tasks[0].message.as_deref(),
+            Some("登录凭据未持久化，请从页面重新发起下载")
+        );
+        drop(tasks);
+        let persisted = fs::read_to_string(&path).unwrap();
+        assert!(!persisted.contains("legacy-cookie-secret"));
+        fs::remove_dir_all(dir).unwrap();
     }
     #[test]
     fn file_path_is_rejected() {

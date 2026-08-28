@@ -34,8 +34,11 @@ Copy-Item -LiteralPath (Join-Path $cache "ffmpeg-license-$Architecture.txt") -De
 $iss = Join-Path $root 'installer\StreamFirefly.iss'
 $tempIss = Join-Path $root "installer\streamfirefly-$Architecture.generated.iss"
 $archAllowed = if ($Architecture -eq 'x64') { 'x64compatible' } else { 'arm64' }
-$content = (Get-Content -Raw -LiteralPath $iss).Replace('#define EdgeExtensionId ""', "#define EdgeExtensionId `"$EdgeExtensionId`"").Replace('#define ARCH "x64"', "#define ARCH `"$Architecture`"").Replace('#define ARCH_ALLOWED "x64compatible"', "#define ARCH_ALLOWED `"$archAllowed`"").Replace('#define ChromeExtensionId "gimoeapmpoeogpabfdplccplmmohklff"', "#define ChromeExtensionId `"$ChromeExtensionId`"")
-Set-Content -LiteralPath $tempIss -Value $content -Encoding UTF8
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$content = [System.IO.File]::ReadAllText($iss, $utf8NoBom)
+$content = $content.Replace('#define EdgeExtensionId ""', "#define EdgeExtensionId `"$EdgeExtensionId`"").Replace('#define ARCH "x64"', "#define ARCH `"$Architecture`"").Replace('#define ARCH_ALLOWED "x64compatible"', "#define ARCH_ALLOWED `"$archAllowed`"").Replace('#define ChromeExtensionId "gimoeapmpoeogpabfdplccplmmohklff"', "#define ChromeExtensionId `"$ChromeExtensionId`"")
+$utf8WithBom = New-Object System.Text.UTF8Encoding($true)
+[System.IO.File]::WriteAllText($tempIss, $content, $utf8WithBom)
 Push-Location (Join-Path $root 'installer'); try { & $isccCommand.FullName $tempIss } finally { Pop-Location; Remove-Item -LiteralPath $tempIss -Force -ErrorAction SilentlyContinue }
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host "Built StreamFirefly-Setup-$Architecture.exe"
