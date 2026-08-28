@@ -18,7 +18,9 @@
 - 资源 URL 去重及下载按钮防双击，同时保留用户主动重复下载能力；
 - 下载前可自定义文件主名称，扩展名自动识别，同名文件自动添加序号；
 - 下载任务支持仅删除记录或同时删除本地文件，两种方式都需要最终确认，进行中任务会先安全取消下载；
-- HLS/DASH 资源可被识别；若系统安装 FFmpeg，助手会使用无转码合并链路处理清单，否则任务会保留明确的进程启动失败原因。
+- 普通 HTTP 资源支持 1–16 路 Range 并发下载，默认 6 路；服务端不支持分段时自动回退单连接；
+- HLS/DASH 通过内置 FFmpeg 的持久连接和多连接模式下载并无转码合并，支持标准 AES-128 HLS，拒绝绕过 DRM；
+- HLS/DASH 资源可被识别；安装包提供 FFmpeg，助手使用无转码合并链路处理清单；便携测试模式未安装 FFmpeg 时会保留明确的进程启动失败原因。
 
 ## 目录
 
@@ -52,6 +54,17 @@ cargo build --release --manifest-path native-host/Cargo.toml
 ```
 
 每次重新编译 Native Host 后，需要再次运行安装脚本，覆盖浏览器实际调用的本地助手程序。扩展更新后在 `chrome://extensions` 中点击“重新加载”。
+
+## Windows 安装包
+
+正式交付由浏览器商店扩展和 Windows Native Host 安装包组成。安装包包含 Native Host 与固定版本的 GPL FFmpeg，并分别生成 x64、ARM64 版本：
+
+```powershell
+.\tools\build-installer.ps1 -Architecture x64
+.\tools\build-installer.ps1 -Architecture arm64
+```
+
+构建机需要 Rust 对应目标工具链和 Inno Setup 6。FFmpeg 二进制在构建阶段按固定 URL 与 SHA-256 下载，不提交到 Git；安装过程本身不访问网络。Chrome 当前扩展 ID 为 `gimoeapmpoeogpabfdplccplmmohklff`，Edge 商店 ID 发布后通过 `-EdgeExtensionId` 传入。
 
 ## 合规边界
 

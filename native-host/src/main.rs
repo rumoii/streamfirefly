@@ -14,6 +14,8 @@ use uuid::Uuid;
 
 const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 const STORE_VERSION: u8 = 1;
+const DEFAULT_DOWNLOAD_THREADS: u8 = 6;
+const MAX_DOWNLOAD_THREADS: u8 = 16;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Task {
@@ -41,16 +43,37 @@ struct Task {
     mime: Option<String>,
     #[serde(default)]
     referer: Option<String>,
+    #[serde(default = "default_download_threads")]
+    download_threads: u8,
+    #[serde(default)]
+    request_headers: HashMap<String, String>,
+    #[serde(default)]
+    active_connections: u8,
+    #[serde(default)]
+    segments_completed: u32,
+    #[serde(default)]
+    segments_total: u32,
 }
 
 #[derive(Clone)]
 struct Store {
     path: PathBuf,
     tasks: Arc<Mutex<Vec<Task>>>,
-    processes: Arc<Mutex<HashMap<String, Arc<Mutex<Child>>>>>,
+    processes: Arc<Mutex<HashMap<String, Vec<Arc<Mutex<Child>>>>>>,
     cancellations: Arc<Mutex<HashMap<String, bool>>>,
 }
 type Writer = Arc<Mutex<io::BufWriter<io::Stdout>>>;
+
+fn default_download_threads() -> u8 {
+    DEFAULT_DOWNLOAD_THREADS
+}
+
+fn download_threads(value: &Value) -> u8 {
+    value["downloadThreads"]
+        .as_u64()
+        .map(|value| value.clamp(1, MAX_DOWNLOAD_THREADS as u64) as u8)
+        .unwrap_or(DEFAULT_DOWNLOAD_THREADS)
+}
 
 fn state_path() -> PathBuf {
     std::env::var_os("LOCALAPPDATA")
@@ -307,6 +330,30 @@ fn validate_dir(value: &str) -> Result<PathBuf, &'static str> {
     Ok(path)
 }
 
+fn allowed_request_headers(payload: &Value) -> HashMap<String, String> {
+    let allowed = ["referer", "origin", "authorization", "cookie", "user-agent"];
+    let mut headers = HashMap::new();
+    if let Some(values) = payload["requestHeaders"].as_object() {
+        for (name, value) in values {
+            let key = name.to_ascii_lowercase();
+            if allowed.contains(&key.as_str()) {
+                if let Some(value) = value.as_str().filter(|value| !value.is_empty()) {
+                    headers.insert(key, value.to_string());
+                }
+            }
+        }
+    }
+    if !headers.contains_key("referer") {
+        if let Some(referer) = payload["referer"]
+            .as_str()
+            .filter(|value| !value.is_empty())
+        {
+            headers.insert("referer".into(), referer.into());
+        }
+    }
+    headers
+}
+
 fn create_task(store: &Store, payload: &Value) -> Result<Task, &'static str> {
     let url = payload["url"]
         .as_str()
@@ -359,6 +406,11 @@ fn create_task(store: &Store, payload: &Value) -> Result<Task, &'static str> {
         error: None,
         mime: payload["mime"].as_str().map(str::to_string),
         referer: payload["referer"].as_str().map(str::to_string),
+        download_threads: download_threads(payload),
+        request_headers: allowed_request_headers(payload),
+        active_connections: 0,
+        segments_completed: 0,
+        segments_total: 0,
     };
     tasks.push(task.clone());
     drop(tasks);
@@ -392,11 +444,23 @@ fn register_process(store: &Store, id: &str, child: Child) -> Arc<Mutex<Child>> 
         .processes
         .lock()
         .unwrap()
-        .insert(id.into(), child.clone());
+        .entry(id.into())
+        .or_default()
+        .push(child.clone());
     child
 }
 
-fn unregister_process(store: &Store, id: &str) {
+fn unregister_process(store: &Store, id: &str, process: &Arc<Mutex<Child>>) {
+    let mut processes = store.processes.lock().unwrap();
+    if let Some(items) = processes.get_mut(id) {
+        items.retain(|item| !Arc::ptr_eq(item, process));
+        if items.is_empty() {
+            processes.remove(id);
+        }
+    }
+}
+
+fn unregister_all_processes(store: &Store, id: &str) {
     store.processes.lock().unwrap().remove(id);
 }
 
@@ -409,12 +473,13 @@ fn cancel_requested(store: &Store, id: &str) -> bool {
 }
 
 fn mark_cancelled(store: &Store, writer: &Writer, id: &str) {
-    unregister_process(store, id);
+    unregister_all_processes(store, id);
     update(store, writer, id, |task| {
         task.state = "cancelled".into();
         task.phase = "cancelled".into();
         task.speed_bytes_per_second = 0;
         task.eta_seconds = None;
+        task.active_connections = 0;
         task.error = None;
         task.message = Some("下载已取消".into());
     });
@@ -422,8 +487,14 @@ fn mark_cancelled(store: &Store, writer: &Writer, id: &str) {
 }
 
 fn stop_process(store: &Store, id: &str) {
-    let process = store.processes.lock().unwrap().get(id).cloned();
-    if let Some(process) = process {
+    let processes = store
+        .processes
+        .lock()
+        .unwrap()
+        .get(id)
+        .cloned()
+        .unwrap_or_default();
+    for process in processes {
         if let Ok(mut child) = process.lock() {
             let _ = child.kill();
             let _ = child.wait();
@@ -539,34 +610,65 @@ fn delete_task(store: &Store, writer: &Writer, payload: &Value) -> Result<Value,
     )
 }
 
-fn probe_size(store: &Store, writer: &Writer, task: &Task) -> Option<u64> {
+#[derive(Default, Clone, Copy)]
+struct ProbeInfo {
+    total: Option<u64>,
+    accept_ranges: bool,
+    cancelled: bool,
+}
+
+fn add_header_args(args: &mut Vec<String>, task: &Task) {
+    for (name, value) in &task.request_headers {
+        args.push("--header".into());
+        args.push(format!("{name}: {value}"));
+    }
+}
+
+fn probe_size(store: &Store, task: &Task) -> ProbeInfo {
     let mut command = Command::new("curl");
+    let mut args: Vec<String> = [
+        "--silent",
+        "--show-error",
+        "--fail",
+        "--location",
+        "--connect-timeout",
+        "10",
+        "--max-time",
+        "20",
+        "--head",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect();
+    add_header_args(&mut args, task);
+    args.push(task.url.clone());
     command
-        .args([
-            "--silent",
-            "--show-error",
-            "--fail",
-            "--location",
-            "--connect-timeout",
-            "10",
-            "--max-time",
-            "20",
-            "--head",
-            &task.url,
-        ])
+        .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    let child = register_process(store, &task.id, command.spawn().ok()?);
+    let child = match command.spawn() {
+        Ok(child) => register_process(store, &task.id, child),
+        Err(_) => return ProbeInfo::default(),
+    };
     loop {
         if cancel_requested(store, &task.id) {
             if let Ok(mut child) = child.lock() {
                 let _ = child.kill();
                 let _ = child.wait();
             }
-            mark_cancelled(store, writer, &task.id);
-            return None;
+            unregister_process(store, &task.id, &child);
+            return ProbeInfo {
+                cancelled: true,
+                ..ProbeInfo::default()
+            };
         }
-        let finished = child.lock().ok()?.try_wait().ok()?;
+        let finished = match child.lock() {
+            Ok(mut child) => match child.try_wait() {
+                Ok(status) => status,
+                Err(_) => return ProbeInfo::default(),
+            },
+            Err(_) => return ProbeInfo::default(),
+        };
         if let Some(status) = finished {
             let mut bytes = Vec::new();
             if let Ok(mut child) = child.lock() {
@@ -574,58 +676,73 @@ fn probe_size(store: &Store, writer: &Writer, task: &Task) -> Option<u64> {
                     let _ = stdout.read_to_end(&mut bytes);
                 }
             }
-            unregister_process(store, &task.id);
+            unregister_process(store, &task.id, &child);
             if !status.success() {
-                return None;
+                return ProbeInfo::default();
             }
             let output = String::from_utf8_lossy(&bytes);
-            return output.lines().rev().find_map(|line| {
+            let total = output.lines().rev().find_map(|line| {
                 let (name, value) = line.split_once(':')?;
                 (name.trim().eq_ignore_ascii_case("content-length"))
                     .then(|| value.trim().parse().ok())
                     .flatten()
             });
+            let accept_ranges = output.lines().any(|line| {
+                line.split_once(':')
+                    .map(|(name, value)| {
+                        name.trim().eq_ignore_ascii_case("accept-ranges")
+                            && value.trim().eq_ignore_ascii_case("bytes")
+                    })
+                    .unwrap_or(false)
+            });
+            return ProbeInfo {
+                total,
+                accept_ranges,
+                cancelled: false,
+            };
         }
         thread::sleep(Duration::from_millis(50));
     }
 }
 
-fn start_http_download(store: Store, writer: Writer, task: Task, output: String) {
-    let total = probe_size(&store, &writer, &task);
-    if cancel_requested(&store, &task.id) {
-        mark_cancelled(&store, &writer, &task.id);
-        return;
-    }
+fn start_single_http_download(
+    store: Store,
+    writer: Writer,
+    task: Task,
+    output: String,
+    total: Option<u64>,
+) {
     update(&store, &writer, &task.id, |t| {
         t.state = "starting".into();
         t.phase = "starting".into();
         t.total_bytes = total;
+        t.active_connections = 0;
+        t.segments_completed = 0;
+        t.segments_total = 0;
         t.message = Some("正在连接资源".into());
     });
     let mut args = vec![
-        "--silent",
-        "--show-error",
-        "--fail",
-        "--location",
-        "--retry",
-        "3",
-        "--retry-all-errors",
-        "--continue-at",
-        "-",
-        "--output",
-        &output,
+        "--silent".into(),
+        "--show-error".into(),
+        "--fail".into(),
+        "--location".into(),
+        "--retry".into(),
+        "3".into(),
+        "--retry-all-errors".into(),
+        "--continue-at".into(),
+        "-".into(),
+        "--output".into(),
+        output.clone(),
     ];
-    if let Some(referer) = task.referer.as_deref() {
-        args.extend(["--referer", referer]);
-    }
-    args.push(&task.url);
+    add_header_args(&mut args, &task);
+    args.push(task.url.clone());
     let child = match Command::new("curl")
         .args(args)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
     {
-        Ok(child) => child,
+        Ok(child) => register_process(&store, &task.id, child),
         Err(error) => {
             update(&store, &writer, &task.id, |t| {
                 t.state = "failed".into();
@@ -636,7 +753,6 @@ fn start_http_download(store: Store, writer: Writer, task: Task, output: String)
             return;
         }
     };
-    let child = register_process(&store, &task.id, child);
     let mut sampled_at = Instant::now();
     let mut smoothed_speed = 0u64;
     let mut last_bytes = fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
@@ -644,6 +760,7 @@ fn start_http_download(store: Store, writer: Writer, task: Task, output: String)
         t.state = "running".into();
         t.phase = "downloading".into();
         t.downloaded_bytes = last_bytes;
+        t.active_connections = 1;
         t.message = Some("正在下载".into());
     });
     loop {
@@ -685,8 +802,6 @@ fn start_http_download(store: Store, writer: Writer, task: Task, output: String)
                 t.state.as_str(),
                 "succeeded" | "failed" | "cancelled" | "interrupted"
             ) {
-                t.state = "running".into();
-                t.phase = "downloading".into();
                 t.progress = percent;
                 t.downloaded_bytes = bytes;
                 t.total_bytes = total;
@@ -700,7 +815,7 @@ fn start_http_download(store: Store, writer: Writer, task: Task, output: String)
             .and_then(|mut child| child.try_wait());
         match process_status {
             Ok(Some(status)) => {
-                unregister_process(&store, &task.id);
+                unregister_process(&store, &task.id, &child);
                 if cancel_requested(&store, &task.id) {
                     mark_cancelled(&store, &writer, &task.id);
                     return;
@@ -713,6 +828,7 @@ fn start_http_download(store: Store, writer: Writer, task: Task, output: String)
                         t.downloaded_bytes =
                             fs::metadata(&output).map(|m| m.len()).unwrap_or(bytes);
                         t.total_bytes = total.or(Some(t.downloaded_bytes));
+                        t.active_connections = 0;
                         t.eta_seconds = Some(0);
                         t.message = Some("下载完成".into());
                     });
@@ -720,6 +836,7 @@ fn start_http_download(store: Store, writer: Writer, task: Task, output: String)
                     update(&store, &writer, &task.id, |t| {
                         t.state = "failed".into();
                         t.phase = "failed".into();
+                        t.active_connections = 0;
                         t.error = Some("curl_download_failed".into());
                         t.message = Some("下载失败，请检查网络或资源地址".into());
                     });
@@ -727,10 +844,11 @@ fn start_http_download(store: Store, writer: Writer, task: Task, output: String)
                 break;
             }
             Err(error) => {
-                unregister_process(&store, &task.id);
+                unregister_process(&store, &task.id, &child);
                 update(&store, &writer, &task.id, |t| {
                     t.state = "failed".into();
                     t.phase = "failed".into();
+                    t.active_connections = 0;
                     t.error = Some(error.to_string());
                 });
                 break;
@@ -738,6 +856,219 @@ fn start_http_download(store: Store, writer: Writer, task: Task, output: String)
             Ok(None) => {}
         }
     }
+}
+
+fn start_parallel_http_download(
+    store: Store,
+    writer: Writer,
+    task: Task,
+    output: String,
+    total: u64,
+) -> bool {
+    let count = usize::from(task.download_threads.clamp(2, MAX_DOWNLOAD_THREADS));
+    let part_dir = PathBuf::from(format!("{output}.streamfirefly-parts-{}", task.id));
+    if fs::create_dir_all(&part_dir).is_err() {
+        return false;
+    }
+    let ranges: Vec<(u64, u64)> = (0..count)
+        .map(|index| {
+            let start = total * index as u64 / count as u64;
+            let end = total * (index as u64 + 1) / count as u64 - 1;
+            (start, end)
+        })
+        .collect();
+    let mut children = Vec::new();
+    for (index, (start, end)) in ranges.iter().enumerate() {
+        let part = part_dir.join(format!("{index:04}.part"));
+        let mut args = vec![
+            "--silent".into(),
+            "--show-error".into(),
+            "--fail".into(),
+            "--location".into(),
+            "--retry".into(),
+            "3".into(),
+            "--retry-all-errors".into(),
+            "--range".into(),
+            format!("{start}-{end}"),
+            "--output".into(),
+            part.to_string_lossy().into(),
+        ];
+        add_header_args(&mut args, &task);
+        args.push(task.url.clone());
+        match Command::new("curl")
+            .args(args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(child) => children.push((part, register_process(&store, &task.id, child))),
+            Err(_) => {
+                stop_process(&store, &task.id);
+                let _ = fs::remove_dir_all(&part_dir);
+                return false;
+            }
+        }
+    }
+    update(&store, &writer, &task.id, |t| {
+        t.state = "running".into();
+        t.phase = "downloading".into();
+        t.total_bytes = Some(total);
+        t.active_connections = count as u8;
+        t.segments_total = count as u32;
+        t.segments_completed = 0;
+        t.message = Some(format!("正在并发下载（{count} 路）"));
+    });
+    let mut sampled_at = Instant::now();
+    let mut last_bytes = 0u64;
+    let mut smoothed_speed = 0u64;
+    loop {
+        thread::sleep(Duration::from_millis(500));
+        if cancel_requested(&store, &task.id) {
+            stop_process(&store, &task.id);
+            if let Some((first_part, _)) = children.first() {
+                if fs::metadata(first_part)
+                    .map(|metadata| metadata.len())
+                    .unwrap_or(0)
+                    > 0
+                {
+                    let _ = fs::copy(first_part, &output);
+                }
+            }
+            let _ = fs::remove_dir_all(&part_dir);
+            mark_cancelled(&store, &writer, &task.id);
+            return true;
+        }
+        let bytes: u64 = children
+            .iter()
+            .map(|(path, _)| fs::metadata(path).map(|m| m.len()).unwrap_or(0))
+            .sum();
+        let sample_seconds = sampled_at.elapsed().as_secs_f64().max(0.001);
+        let sampled_speed = bytes.saturating_sub(last_bytes) as f64 / sample_seconds;
+        if sampled_speed > 0.0 {
+            smoothed_speed = if smoothed_speed == 0 {
+                sampled_speed as u64
+            } else {
+                (smoothed_speed as f64 * 0.6 + sampled_speed * 0.4) as u64
+            };
+        }
+        sampled_at = Instant::now();
+        last_bytes = bytes;
+        let completed = children
+            .iter()
+            .filter(|(path, child)| {
+                child
+                    .lock()
+                    .ok()
+                    .and_then(|mut child| child.try_wait().ok().flatten())
+                    .map(|status| status.success())
+                    .unwrap_or(false)
+                    && path.exists()
+            })
+            .count() as u32;
+        update(&store, &writer, &task.id, |t| {
+            t.progress = ((bytes.saturating_mul(100) / total).min(99)) as u8;
+            t.downloaded_bytes = bytes;
+            t.speed_bytes_per_second = smoothed_speed;
+            t.eta_seconds =
+                (smoothed_speed > 0).then(|| total.saturating_sub(bytes) / smoothed_speed);
+            t.segments_completed = completed;
+        });
+        let statuses: Vec<Option<bool>> = children
+            .iter()
+            .map(|(_, child)| {
+                child
+                    .lock()
+                    .ok()
+                    .and_then(|mut child| child.try_wait().ok().flatten())
+                    .map(|status| status.success())
+            })
+            .collect();
+        if statuses.iter().all(Option::is_some) {
+            for (_, child) in &children {
+                unregister_process(&store, &task.id, child);
+            }
+            let valid = statuses.iter().all(|status| *status == Some(true))
+                && children.iter().enumerate().all(|(index, (path, _))| {
+                    fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+                        == ranges[index].1 - ranges[index].0 + 1
+                });
+            if !valid {
+                let _ = fs::remove_dir_all(&part_dir);
+                return false;
+            }
+            let mut destination = match OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&output)
+            {
+                Ok(file) => file,
+                Err(_) => {
+                    let _ = fs::remove_dir_all(&part_dir);
+                    return false;
+                }
+            };
+            for (path, _) in &children {
+                let mut part = match fs::File::open(path) {
+                    Ok(file) => file,
+                    Err(_) => {
+                        let _ = fs::remove_dir_all(&part_dir);
+                        return false;
+                    }
+                };
+                if io::copy(&mut part, &mut destination).is_err() {
+                    let _ = fs::remove_dir_all(&part_dir);
+                    return false;
+                }
+            }
+            let _ = fs::remove_dir_all(&part_dir);
+            update(&store, &writer, &task.id, |t| {
+                t.state = "succeeded".into();
+                t.phase = "completed".into();
+                t.progress = 100;
+                t.downloaded_bytes = total;
+                t.total_bytes = Some(total);
+                t.active_connections = 0;
+                t.segments_completed = count as u32;
+                t.speed_bytes_per_second = smoothed_speed;
+                t.eta_seconds = Some(0);
+                t.message = Some("下载完成".into());
+            });
+            return true;
+        }
+    }
+}
+
+fn start_http_download(store: Store, writer: Writer, task: Task, output: String) {
+    let probe = probe_size(&store, &task);
+    if probe.cancelled || cancel_requested(&store, &task.id) {
+        mark_cancelled(&store, &writer, &task.id);
+        return;
+    }
+    if probe.accept_ranges && task.download_threads > 1 {
+        if let Some(total) = probe.total {
+            if total >= 1024 * 1024
+                && start_parallel_http_download(
+                    store.clone(),
+                    writer.clone(),
+                    task.clone(),
+                    output.clone(),
+                    total,
+                )
+            {
+                return;
+            }
+        }
+    }
+    start_single_http_download(store, writer, task, output, probe.total);
+}
+
+fn bundled_tool(name: &str) -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|parent| parent.join(name)))
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| PathBuf::from(name))
 }
 
 fn start_download(store: Store, writer: Writer, task: Task) {
@@ -770,22 +1101,44 @@ fn start_download(store: Store, writer: Writer, task: Task) {
             t.phase = "fetching".into();
             t.message = Some("正在读取流媒体清单，需要 FFmpeg".into());
         });
-        let child = match Command::new("ffmpeg")
-            .args([
-                "-nostdin",
-                "-y",
-                "-loglevel",
-                "error",
-                "-i",
-                &task.url,
-                "-map",
-                "0:v?",
-                "-map",
-                "0:a?",
-                "-c",
-                "copy",
-                &output,
-            ])
+        let mut ffmpeg_args: Vec<String> = [
+            "-nostdin",
+            "-y",
+            "-loglevel",
+            "error",
+            "-http_multiple",
+            "1",
+            "-http_persistent",
+            "1",
+            "-http_seekable",
+            "1",
+            "-seg_max_retry",
+            "3",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        if !task.request_headers.is_empty() {
+            let headers = task
+                .request_headers
+                .iter()
+                .map(|(name, value)| format!("{name}: {value}\r\n"))
+                .collect::<String>();
+            ffmpeg_args.extend(["-headers".into(), headers]);
+        }
+        ffmpeg_args.extend([
+            "-i".into(),
+            task.url.clone(),
+            "-map".into(),
+            "0:v?".into(),
+            "-map".into(),
+            "0:a?".into(),
+            "-c".into(),
+            "copy".into(),
+            output.clone(),
+        ]);
+        let child = match Command::new(bundled_tool("ffmpeg.exe"))
+            .args(ffmpeg_args)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
@@ -802,6 +1155,10 @@ fn start_download(store: Store, writer: Writer, task: Task) {
             }
         };
         let child = register_process(&store, &task.id, child);
+        update(&store, &writer, &task.id, |t| {
+            t.active_connections = 1;
+            t.message = Some("FFmpeg 正在使用持久连接下载并合并流媒体".into());
+        });
         let mut last_bytes = 0u64;
         let mut sampled_at = Instant::now();
         loop {
@@ -832,7 +1189,7 @@ fn start_download(store: Store, writer: Writer, task: Task) {
                 .and_then(|mut child| child.try_wait());
             match process_status {
                 Ok(Some(status)) if status.success() => {
-                    unregister_process(&store, &task.id);
+                    unregister_process(&store, &task.id, &child);
                     if cancel_requested(&store, &task.id) {
                         mark_cancelled(&store, &writer, &task.id);
                         return;
@@ -844,12 +1201,13 @@ fn start_download(store: Store, writer: Writer, task: Task) {
                         t.downloaded_bytes =
                             fs::metadata(&output).map(|m| m.len()).unwrap_or(bytes);
                         t.total_bytes = Some(t.downloaded_bytes);
+                        t.active_connections = 0;
                         t.message = Some("流媒体下载完成".into());
                     });
                     break;
                 }
                 Ok(Some(_)) => {
-                    unregister_process(&store, &task.id);
+                    unregister_process(&store, &task.id, &child);
                     if cancel_requested(&store, &task.id) {
                         mark_cancelled(&store, &writer, &task.id);
                         return;
@@ -858,16 +1216,18 @@ fn start_download(store: Store, writer: Writer, task: Task) {
                         t.state = "failed".into();
                         t.phase = "failed".into();
                         t.error = Some("ffmpeg_unavailable_or_failed".into());
+                        t.active_connections = 0;
                         t.message = Some("FFmpeg 无法处理此资源".into());
                     });
                     break;
                 }
                 Err(error) => {
-                    unregister_process(&store, &task.id);
+                    unregister_process(&store, &task.id, &child);
                     update(&store, &writer, &task.id, |t| {
                         t.state = "failed".into();
                         t.phase = "failed".into();
                         t.error = Some(error.to_string());
+                        t.active_connections = 0;
                     });
                     break;
                 }
@@ -1010,6 +1370,11 @@ mod tests {
             error: None,
             mime: Some("video/mp4".into()),
             referer: None,
+            download_threads: DEFAULT_DOWNLOAD_THREADS,
+            request_headers: HashMap::new(),
+            active_connections: 0,
+            segments_completed: 0,
+            segments_total: 0,
         }];
         assert_eq!(
             unique_output_path(&dir, "视频", "mp4", &tasks),

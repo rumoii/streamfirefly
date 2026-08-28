@@ -11,19 +11,47 @@ const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'streamfirefly-e2e-'));
 const payload = Buffer.alloc(5 * 1024 * 1024, 83);
 const unknownPayload = Buffer.alloc(2 * 1024 * 1024, 85);
 const slowPayload = Buffer.alloc(12 * 1024 * 1024, 87);
+let rangeRequests = 0;
+let authorizationSeen = false;
+let forbiddenHeaderSeen = false;
+let slowHeadGets = 0;
+let notifySlowHeadStarted;
+const slowHeadStarted = new Promise(resolve => { notifySlowHeadStarted = resolve; });
 const server = http.createServer((request, response) => {
   const body = request.url === '/unknown.mp4' ? unknownPayload : request.url === '/slow.mp4' ? slowPayload : payload;
   const headers = { 'Content-Type': 'video/mp4', 'Accept-Ranges': 'bytes' };
+  if (request.headers.authorization === 'Bearer integration-test') authorizationSeen = true;
+  if (request.headers['x-secret']) forbiddenHeaderSeen = true;
   if (request.url !== '/unknown.mp4') headers['Content-Length'] = body.length;
-  response.writeHead(200, headers);
-  if (request.method === 'HEAD') { response.end(); return; }
+  if (request.method === 'HEAD') {
+    if (request.url === '/slow-head.mp4') {
+      notifySlowHeadStarted();
+      setTimeout(() => { if (!response.destroyed) { response.writeHead(200, headers); response.end(); } }, 1000);
+      return;
+    }
+    response.writeHead(200, headers); response.end(); return;
+  }
+  if (request.url === '/slow-head.mp4') slowHeadGets += 1;
+  const match = /^bytes=(\d+)-(\d+)$/.exec(request.headers.range || '');
+  let responseBody = body;
+  if (match) {
+    const start = Number(match[1]);
+    const end = Math.min(Number(match[2]), body.length - 1);
+    responseBody = body.subarray(start, end + 1);
+    headers['Content-Length'] = responseBody.length;
+    headers['Content-Range'] = `bytes ${start}-${end}/${body.length}`;
+    rangeRequests += 1;
+    response.writeHead(206, headers);
+  } else {
+    response.writeHead(200, headers);
+  }
   let offset = 0;
   const timer = setInterval(() => {
     const chunkSize = request.url === '/slow.mp4' ? 64 * 1024 : 512 * 1024;
-    const next = Math.min(offset + chunkSize, body.length);
-    response.write(body.subarray(offset, next));
+    const next = Math.min(offset + chunkSize, responseBody.length);
+    response.write(responseBody.subarray(offset, next));
     offset = next;
-    if (offset >= body.length) { clearInterval(timer); response.end(); }
+    if (offset >= responseBody.length) { clearInterval(timer); response.end(); }
   }, 120);
   response.on('close', () => clearInterval(timer));
 });
@@ -73,9 +101,16 @@ async function assertTaskAbsent(taskId) {
 const customDir = path.join(temp, 'custom-downloads');
 const validated = await send('path.validate', { path: customDir });
 if (!validated.ok || validated.path !== customDir) throw new Error(`Path validation failed: ${JSON.stringify(validated)}`);
+const cancelledDuringProbe = await send('task.create', { url: `http://127.0.0.1:${port}/slow-head.mp4`, title: 'slow-head', fileName: '探测阶段取消', mime: 'video/mp4', saveDir: customDir });
+await slowHeadStarted;
+const cancelledDuringProbeDelete = await send('task.delete', { id: cancelledDuringProbe.task.id, deleteFile: true });
+if (!cancelledDuringProbeDelete.ok) throw new Error(`Probe cancellation failed: ${JSON.stringify(cancelledDuringProbeDelete)}`);
+await assertTaskAbsent(cancelledDuringProbe.task.id);
+await new Promise(resolve => setTimeout(resolve, 1200));
+if (slowHeadGets !== 0 || fs.existsSync(cancelledDuringProbe.task.output)) throw new Error('Cancelled HEAD probe started a download or left an output file');
 const prepared = await send('task.prepare', { url: `http://127.0.0.1:${port}/sample.mp4`, title: '页面标题', mime: 'video/mp4' });
 if (!prepared.ok || prepared.payload.extension !== 'mp4') throw new Error(`Task preparation failed: ${JSON.stringify(prepared)}`);
-const created = await send('task.create', { url: `http://127.0.0.1:${port}/sample.mp4`, title: 'native-e2e', fileName: '自定义视频', mime: 'video/mp4', saveDir: customDir });
+const created = await send('task.create', { url: `http://127.0.0.1:${port}/sample.mp4`, title: 'native-e2e', fileName: '自定义视频', mime: 'video/mp4', saveDir: customDir, downloadThreads: 6, requestHeaders: { authorization: 'Bearer integration-test', 'x-secret': 'drop-me' } });
 if (!created.ok) throw new Error(JSON.stringify(created));
 const task = await waitTask(created.task.id);
 const duplicate = await send('task.create', { url: `http://127.0.0.1:${port}/sample.mp4`, title: 'native-e2e', fileName: '自定义视频', mime: 'video/mp4', saveDir: customDir });
@@ -112,6 +147,10 @@ if (!path.dirname(task.output).endsWith('custom-downloads')) throw new Error(`Un
 if (!task.output.endsWith('.mp4')) throw new Error(`MP4 download used wrong extension: ${task.output}`);
 if (!progressEvents.some(item => item.id === task.id && item.state === 'running')) throw new Error('No running progress event received');
 if (!progressEvents.some(item => item.id === task.id && item.state === 'succeeded' && item.progress === 100)) throw new Error('No completed progress event received');
+if (rangeRequests < 6 || task.segments_total !== 6 || task.segments_completed !== 6) throw new Error(`Parallel Range download was not used: ranges=${rangeRequests}, task=${JSON.stringify(task)}`);
+if (!authorizationSeen) throw new Error('Allowed Authorization header was not forwarded');
+if (forbiddenHeaderSeen) throw new Error('Disallowed request header was forwarded');
+if (fs.readdirSync(customDir).some(name => name.includes('.streamfirefly-parts-'))) throw new Error('Parallel temporary directory was not cleaned');
 if (duplicate.task.id === created.task.id || duplicateTask?.state !== 'succeeded' || duplicateTask.output === task.output) throw new Error('Explicit duplicate download was not created independently');
 if (unknownTask?.state !== 'succeeded' || !progressEvents.some(item => item.id === unknown.task.id && item.state === 'running' && item.total_bytes == null)) throw new Error('Unknown-size progress was not reported correctly');
 console.log('Native HTTP download integration test passed');

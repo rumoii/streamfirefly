@@ -1,0 +1,16 @@
+StreamFirefly bundles the FFmpeg n8.1.2-46-g139afe709a GPL build for
+Windows x64 or ARM64.
+
+Verified binary release:
+https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-08-26-13-06
+
+Exact FFmpeg source revision:
+https://github.com/FFmpeg/FFmpeg/tree/139afe709a
+
+FFmpeg build scripts and provenance:
+https://github.com/BtbN/FFmpeg-Builds
+
+The installer build records the exact binary archive name and SHA-256 in
+tools/download-ffmpeg.ps1. FFMPEG-LICENSE.txt is copied from that verified
+archive. FFmpeg is an independent executable invoked by StreamFirefly and is
+distributed under the GNU General Public License.

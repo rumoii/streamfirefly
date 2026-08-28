@@ -13,6 +13,10 @@ tasks.json
 *.pdb
 *.crx
 *.zip
+installer/build/
+installer/output/
+installer/*.generated.iss
+tools/ffmpeg-cache/
 
 # Node and browser tooling
 node_modules/

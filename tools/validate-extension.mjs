@@ -10,6 +10,6 @@ if (manifest.manifest_version !== 3) throw new Error('manifest_version must be 3
 if (!manifest.background?.service_worker) throw new Error('background service worker missing');
 if (!manifest.permissions?.includes('nativeMessaging')) throw new Error('nativeMessaging permission missing');
 if (!manifest.permissions?.includes('declarativeNetRequest')) throw new Error('declarativeNetRequest permission missing');
-if (manifest.version !== '0.5.0') throw new Error(`unexpected extension version: ${manifest.version}`);
+if (manifest.version !== '0.6.0') throw new Error(`unexpected extension version: ${manifest.version}`);
 if (missing.length) throw new Error(`missing files: ${missing.join(', ')}`);
 console.log(`StreamFirefly extension ${manifest.version} valid (${required.length} required files)`);

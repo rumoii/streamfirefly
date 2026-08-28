@@ -18,7 +18,7 @@ function formatDuration(value) { if (!Number.isFinite(value)) return "未知"; c
 function sourceLabel(source) { return source === "dom" ? "页面元素" : source === "network" ? "网络响应" : "页面脚本"; }
 function isActiveTask(task) { return ["queued", "starting", "running", "cancelling"].includes(task.state); }
 function stateLabel(task) { const running = task.phase === "fetching" ? "读取清单" : task.phase === "merging" ? "下载并合并" : "正在下载"; return ({ queued: "等待下载", starting: "正在连接", running, cancelling: "正在取消", cancelled: "已取消", succeeded: "已完成", failed: "下载失败", interrupted: "已中断" })[task.state] || task.message || task.state; }
-function taskPayload(item) { return { url: item.url, title: item.title || item.pageTitle || "streamfirefly-download", mime: item.mime || null, contentDisposition: item.contentDisposition || null, referer: item.referer || item.pageUrl || null }; }
+function taskPayload(item, downloadThreads = 6) { return { url: item.url, title: item.title || item.pageTitle || "streamfirefly-download", mime: item.mime || null, contentDisposition: item.contentDisposition || null, referer: item.referer || item.pageUrl || null, requestHeaders: item.requestHeaders || {}, downloadThreads }; }
 function closeDialog(id) { $(id).hidden = true; }
 function validateFileName(value) { const trimmed = value.trim().replace(/[. ]+$/g, ""); if (!trimmed) return "请输入文件名称"; if (/[<>:\"/\\|?*\u0000-\u001f]/.test(trimmed)) return "文件名不能包含 Windows 非法字符"; return ""; }
 function updateDownloadValidation() { const error = validateFileName($("#download-name").value); $("#download-name-error").textContent = error; $("#download-confirm").disabled = Boolean(error); return error; }
@@ -162,8 +162,8 @@ function renderCandidates(items) {
     const refreshMetadata = () => { meta.textContent = [item.mime, formatBytes(item.size), item.width && item.height ? `${item.width}×${item.height}` : null, sourceLabel(item.source)].filter(Boolean).join(" · "); resolutionRow.valueNode.textContent = item.width && item.height ? `${item.width} × ${item.height}` : "未知"; durationRow.valueNode.textContent = formatDuration(item.duration); mimeRow.valueNode.textContent = item.mime || "未知"; };
     const preview = createMediaPreview(item, refreshMetadata); preview.container.previewState = preview; refreshMetadata();
     details.append(sizeRow, resolutionRow, durationRow, mimeRow, detailRow("发现来源", sourceLabel(item.source)), detailRow("页面", item.pageTitle || "未知"), detailRow("来源地址", item.pageUrl || item.url));
-    if (item.type === "hls") { const tip = document.createElement("div"); tip.className = "stream-tip"; tip.textContent = "支持在线预览；下载并合并需要本机安装 FFmpeg"; details.appendChild(tip); }
-    if (item.type === "dash") { const tip = document.createElement("div"); tip.className = "stream-tip"; tip.textContent = "DASH 暂不支持在线预览；下载并合并需要本机安装 FFmpeg"; details.appendChild(tip); }
+    if (item.type === "hls") { const tip = document.createElement("div"); tip.className = "stream-tip"; tip.textContent = "支持在线预览；下载并合并由 StreamFirefly 安装包内的 FFmpeg 完成"; details.appendChild(tip); }
+    if (item.type === "dash") { const tip = document.createElement("div"); tip.className = "stream-tip"; tip.textContent = "DASH 暂不支持在线预览；下载并合并由 StreamFirefly 安装包内的 FFmpeg 完成"; details.appendChild(tip); }
     detailsButton.addEventListener("click", () => { details.hidden = !details.hidden; detailsButton.textContent = details.hidden ? "详情" : "收起"; });
     downloadButton.addEventListener("click", () => openDownloadDialog(item));
     node.append(row, preview.container, url, meta, details); root.appendChild(node);
@@ -174,8 +174,8 @@ function renderCandidates(items) {
 async function loadCandidates() { const result = await api.runtime.sendMessage({ type: "media.candidates", tabId }); const items = Array.isArray(result) ? result : []; renderCandidates(items); $("#status").textContent = `${items.length} 个候选资源`; }
 
 async function openDownloadDialog(item) {
-  const settings = api?.storage?.local ? await api.storage.local.get({ saveDir: "" }) : { saveDir: "" };
-  const payload = taskPayload(item);
+  const settings = api?.storage?.local ? await api.storage.local.get({ saveDir: "", downloadThreads: 6 }) : { saveDir: "", downloadThreads: 6 };
+  const payload = taskPayload(item, Number(settings.downloadThreads) || 6);
   const fallbackExtension = item.type === "hls" || item.type === "dash" ? "mp4" : item.url.match(/\.([a-z0-9]{1,8})(?:$|[?#])/i)?.[1] || "download";
   const fallbackName = (item.title || item.pageTitle || item.url.split(/[/?#]/).pop()?.replace(/\.[^.]+$/, "") || "streamfirefly-download").trim();
   let prepared = { ok: true, payload: { fileName: fallbackName, extension: fallbackExtension } };
@@ -213,7 +213,7 @@ function taskNode(task) {
   const node = document.createElement("article"); node.className = "item task-card";
   const head = document.createElement("div"); head.className = "task-head"; const title = document.createElement("strong"); title.textContent = task.title || task.id; const actions = document.createElement("div"); actions.className = "task-actions"; const state = document.createElement("span"); state.className = `task-state ${task.state}`; state.textContent = stateLabel(task); const remove = document.createElement("button"); remove.className = "task-delete"; remove.type = "button"; remove.textContent = task.state === "cancelling" ? "取消中…" : "删除"; remove.disabled = task.state === "cancelling"; remove.addEventListener("click", () => openDeleteDialog(task)); actions.append(state, remove); head.append(title, actions);
   const progress = document.createElement("div"); progress.className = `progress ${task.total_bytes == null && task.state === "running" ? "indeterminate" : ""}`; const bar = document.createElement("span"); bar.style.width = `${Math.max(0, Math.min(100, task.progress || 0))}%`; progress.appendChild(bar);
-  const stats = document.createElement("div"); stats.className = "task-stats"; const amount = task.total_bytes == null ? formatBytes(task.downloaded_bytes) : `${formatBytes(task.downloaded_bytes)} / ${formatBytes(task.total_bytes)}`; const parts = [task.total_bytes == null ? null : `${task.progress || 0}%`, amount, task.speed_bytes_per_second ? `${formatBytes(task.speed_bytes_per_second)}/s` : null, task.eta_seconds != null && task.state === "running" ? `剩余约 ${task.eta_seconds} 秒` : null]; stats.textContent = parts.filter(Boolean).join(" · ");
+  const stats = document.createElement("div"); stats.className = "task-stats"; const amount = task.total_bytes == null ? formatBytes(task.downloaded_bytes) : `${formatBytes(task.downloaded_bytes)} / ${formatBytes(task.total_bytes)}`; const parts = [task.total_bytes == null ? null : `${task.progress || 0}%`, amount, task.speed_bytes_per_second ? `${formatBytes(task.speed_bytes_per_second)}/s` : null, task.active_connections ? `${task.active_connections} 路连接` : null, task.segments_total ? `${task.segments_completed || 0}/${task.segments_total} 段` : null, task.eta_seconds != null && task.state === "running" ? `剩余约 ${task.eta_seconds} 秒` : null]; stats.textContent = parts.filter(Boolean).join(" · ");
   const message = document.createElement("div"); message.className = "task-message"; message.textContent = task.error || task.message || "";
   const output = document.createElement("div"); output.className = "task-output"; output.textContent = task.output || ""; output.title = task.output || "";
   node.append(head, progress, stats, message, output); return node;
