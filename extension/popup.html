@@ -3,9 +3,33 @@
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>流萤</title><link rel="icon" href="icon16.png"><link rel="stylesheet" href="popup.css"></head>
 <body>
   <main>
-    <header><div class="brand"><img src="icon48.png" alt="流萤"><div><h1>流萤</h1><p>网页媒体发现与下载</p></div></div><div class="header-actions"><button id="settings" class="ghost-button">设置</button><button id="refresh" class="ghost-button">刷新</button></div></header>
-    <section id="status" class="status">正在读取当前页面…</section>
-    <section id="candidates" class="list"></section>
+    <header><div class="brand"><img src="icon48.png" alt="流萤"><div><h1>流萤</h1><p>网页媒体发现与下载</p></div></div><div class="header-actions"><button id="jump-to-tasks" class="task-shortcut" type="button" hidden>下载任务</button><button id="settings" class="ghost-button">设置</button><button id="refresh" class="ghost-button">刷新</button></div></header>
+    <section id="status" class="status" role="status" hidden></section>
+    <section id="candidates-panel" class="candidates-panel">
+      <div id="candidates-header" class="candidates-header">
+        <div class="candidates-heading"><span class="candidates-icon" aria-hidden="true"></span><span>发现资源</span><span id="candidates-count" class="candidates-count"></span></div>
+        <button id="candidates-toggle" class="collapse-button" type="button" aria-expanded="true" aria-controls="candidates-content"><span id="candidates-toggle-label">收起</span><span class="panel-chevron" aria-hidden="true"></span></button>
+      </div>
+      <div id="candidates-content" class="candidates-content">
+        <div class="candidates-body">
+          <section id="candidate-sort-toolbar" class="sort-toolbar" hidden>
+            <div class="sort-caption"><span class="sort-icon" aria-hidden="true"></span><span>资源排序</span></div>
+            <div class="sort-menu">
+              <button id="candidate-sort-trigger" class="sort-trigger" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="candidate-sort-menu">
+                <span id="candidate-sort-label">嗅探顺序</span><span class="sort-chevron" aria-hidden="true"></span>
+              </button>
+              <div id="candidate-sort-menu" class="sort-menu-panel" role="menu" hidden>
+                <button type="button" role="menuitemradio" data-sort="detected" aria-checked="false"><span><strong>嗅探顺序</strong><small>最新发现优先</small></span><span class="sort-check" aria-hidden="true">✓</span></button>
+                <button type="button" role="menuitemradio" data-sort="size" aria-checked="false"><span><strong>文件大小</strong><small>从大到小排列</small></span><span class="sort-check" aria-hidden="true">✓</span></button>
+                <button type="button" role="menuitemradio" data-sort="type" aria-checked="false"><span><strong>类型分组</strong><small>视频、音频、图片</small></span><span class="sort-check" aria-hidden="true">✓</span></button>
+              </div>
+            </div>
+          </section>
+          <div id="candidate-sort-hint" class="sort-hint" role="note" hidden>提示：视频资源通常体积较大，按文件大小排序可以更快找到视频。</div>
+          <section id="candidates" class="list" aria-live="polite"></section>
+        </div>
+      </div>
+    </section>
     <section id="tasks-panel" class="tasks-panel" hidden>
       <button id="tasks-toggle" class="tasks-toggle" type="button" aria-expanded="false" aria-controls="tasks-list">
         <span class="tasks-heading"><span class="tasks-icon" aria-hidden="true"></span><span>下载任务</span></span>
@@ -38,6 +62,6 @@
       <div id="delete-choice-actions" class="dialog-actions"><button id="delete-cancel-secondary" type="button">取消</button></div>
     </section>
   </div>
-  <script src="lib/hls.min.js"></script><script src="popup.js"></script>
+  <script src="lib/hls.min.js"></script><script src="candidate-sort.js"></script><script src="popup.js"></script>
 </body>
 </html>

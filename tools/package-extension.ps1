@@ -10,6 +10,7 @@ $files = @(
   'background.js',
   'content.js',
   'page-probe.js',
+  'candidate-sort.js',
   'popup.html',
   'popup.js',
   'popup.css',

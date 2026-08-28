@@ -1,4 +1,4 @@
-# StreamFirefly 0.6.0 Beta 1 内测指南
+# StreamFirefly 0.6.0 Beta 2 内测指南
 
 此版本仅用于受邀测试，不是 Chrome Web Store 正式发布版本。测试人员需要登录受邀的 GitHub 账号，从私有 Release 下载测试包。请勿转发安装包、Release 链接或测试数据。
 
@@ -8,9 +8,9 @@ StreamFirefly 不绕过 DRM。请只测试自己拥有版权或已获授权的�
 
 1. 接受 `rumoii/streamfirefly-internal-releases` 私有仓库的协作者邀请。
 2. 登录 GitHub，进入该仓库的 **Releases** 页面。
-3. 打开 `StreamFirefly 0.6.0 Beta 1 内测版`，下载与当前 Windows 架构匹配的压缩包：
-   - Intel 或 AMD Windows 电脑：`StreamFirefly-0.6.0-beta.1-internal-x64.zip`
-   - Windows ARM 电脑：`StreamFirefly-0.6.0-beta.1-internal-arm64.zip`
+3. 打开 `StreamFirefly 0.6.0 Beta 2 内测版`，下载与当前 Windows 架构匹配的压缩包：
+   - Intel 或 AMD Windows 电脑：`StreamFirefly-0.6.0-beta.2-internal-x64.zip`
+   - Windows ARM 电脑：`StreamFirefly-0.6.0-beta.2-internal-arm64.zip`
 4. 同时下载 `INTERNAL-SHA256SUMS.txt`，用于核对压缩包完整性。
 
 可以在 Windows 的“设置 → 系统 → 系统信息 → 系统类型”中查看架构。大多数 Intel、AMD 电脑使用 x64；仅骁龙等 Windows ARM 设备使用 ARM64。
@@ -22,7 +22,7 @@ StreamFirefly 不绕过 DRM。请只测试自己拥有版权或已获授权的�
 在下载目录打开 PowerShell，计算压缩包的 SHA-256：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 -LiteralPath '.\StreamFirefly-0.6.0-beta.1-internal-x64.zip'
+Get-FileHash -Algorithm SHA256 -LiteralPath '.\StreamFirefly-0.6.0-beta.2-internal-x64.zip'
 ```
 
 ARM64 测试人员将文件名替换为 ARM64 包。输出应与 `INTERNAL-SHA256SUMS.txt` 中对应记录一致；不一致时不要继续安装，请重新下载并反馈。
@@ -30,8 +30,8 @@ ARM64 测试人员将文件名替换为 ARM64 包。输出应与 `INTERNAL-SHA25
 为避免 Windows 保留互联网下载标记，先解除 ZIP 锁定，再完整解压：
 
 ```powershell
-Unblock-File -LiteralPath '.\StreamFirefly-0.6.0-beta.1-internal-x64.zip'
-Expand-Archive -LiteralPath '.\StreamFirefly-0.6.0-beta.1-internal-x64.zip' -DestinationPath '.\StreamFirefly-Test'
+Unblock-File -LiteralPath '.\StreamFirefly-0.6.0-beta.2-internal-x64.zip'
+Expand-Archive -LiteralPath '.\StreamFirefly-0.6.0-beta.2-internal-x64.zip' -DestinationPath '.\StreamFirefly-Test'
 ```
 
 不要直接在压缩包内运行脚本，也不要单独移动 `extension`、`native-host` 或 `tools` 文件夹。
@@ -66,6 +66,9 @@ Set-ExecutionPolicy -Scope Process Bypass
 - 分别打开含视频、音频和图片的网页，确认资源可以被识别；
 - 播放一次网页视频，确认普通媒体、HLS 和 DASH 资源能够在实际请求发生后出现；
 - 展开资源详情，检查类型、地址、大小、分辨率和时长等已知信息；
+- 切换嗅探顺序、文件大小和类型分组，确认排序结果、分组数量和大小提示符合预期；
+- 收起资源列表，确认长列表隐藏且下载任务可以直接看到；再次展开后资源仍完整；
+- 有下载任务时，点击顶部“下载任务”按钮，确认任务区自动展开并滚动到可见位置；
 - 检查视频封面；点击可预览资源时，确认能够播放或查看；
 - 刷新、重复播放或重复请求同一资源，确认列表不会产生明显重复项。
 

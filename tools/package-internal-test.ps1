@@ -1,5 +1,5 @@
 param(
-  [string]$BundleVersion = '0.6.0-beta.1',
+  [string]$BundleVersion = '0.6.0-beta.2',
   [string]$OutputDir = (Join-Path (Split-Path -Parent $PSScriptRoot) 'release')
 )
 $ErrorActionPreference = 'Stop'
