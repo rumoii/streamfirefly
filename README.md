@@ -63,6 +63,14 @@ cargo build --release --manifest-path native-host/Cargo.toml
 
 上传包只包含 Chrome 扩展运行所需的白名单文件，不包含 Firefox Manifest、图标设计稿或本地状态。
 
+在取得 Chrome Web Store 正式 ID 前，为 x64 和 ARM64 测试机生成不绑定开发扩展 ID的完整内测包：
+
+```powershell
+.\tools\package-internal-test.ps1
+```
+
+内测包包含解压即用的扩展目录、Native Host、FFmpeg、安装/卸载脚本、宣传素材、内外层 SHA-256 和测试说明。测试机应先加载扩展，再将该电脑实际显示的扩展 ID传给包内安装脚本。
+
 ## Windows 安装包
 
 正式交付由浏览器商店扩展和 Windows Native Host 安装包组成。安装包包含 Native Host 与固定版本的 GPL FFmpeg，并分别生成 x64、ARM64 版本：
