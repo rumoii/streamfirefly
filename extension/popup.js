@@ -22,13 +22,16 @@ let pendingDeleteMode = null;
 let activePreview;
 let previewObserver;
 let pageUnloading = false;
+let nativeCapabilities = new Set();
+let segmentsExpanded = false;
+let segmentVisible = 100;
 
 const MOTION_MS = 210;
 function prefersReducedMotion() { return globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches; }
 function showStatus(text, kind = "info") { const status = $("#status"); status.textContent = text || ""; status.dataset.kind = kind; status.hidden = !text; }
 function hideStatus() { showStatus(""); }
 function wait(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
-function candidateKey(item) { return item?.canonicalUrl || item?.id || item?.url || ""; }
+function candidateKey(item) { return item?.id || item?.canonicalUrl || item?.url || ""; }
 async function setDetailsExpanded(details, button, expanded) {
   details._transitionToken = (details._transitionToken || 0) + 1;
   const token = details._transitionToken;
@@ -79,13 +82,15 @@ function formatBytes(value) { if (value == null) return "大小未知"; const un
 function candidateSizeLabel(item) { if (item.sizeKind !== "manifest") return formatBytes(item.size); return item.size == null ? "清单大小未知" : `清单 ${formatBytes(item.size)}`; }
 function formatDuration(value) { if (!Number.isFinite(value)) return "未知"; const seconds = Math.round(value); return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`; }
 function sourceLabel(source) { return source === "dom" ? "页面元素" : source === "network" ? "网络响应" : "页面脚本"; }
+function candidateSourceLabel(item) { return item.inlineManifest ? "内存清单" : sourceLabel(item.source); }
 function isActiveTask(task) { return ["queued", "starting", "running", "cancelling"].includes(task.state); }
 function stateLabel(task) { const running = task.phase === "fetching" ? "读取清单" : task.phase === "merging" ? "下载并合并" : "正在下载"; return ({ queued: "等待下载", starting: "正在连接", running, cancelling: "正在取消", cancelled: "已取消", succeeded: "已完成", failed: "下载失败", interrupted: "已中断" })[task.state] || task.message || task.state; }
-function taskPayload(item, downloadThreads = 6) { return { url: item.url, title: item.title || item.pageTitle || "streamfirefly-download", mime: item.mime || null, contentDisposition: item.contentDisposition || null, referer: item.referer || item.pageUrl || null, requestHeaders: item.requestHeaders || {}, downloadThreads }; }
+function taskPayload(item, downloadThreads = 6) { return { url: item.url, title: item.title || item.pageTitle || "streamfirefly-download", mime: item.mime || null, contentDisposition: item.contentDisposition || null, referer: item.referer || item.pageUrl || null, requestHeaders: item.requestHeaders || {}, inlineManifest: item.inlineManifest || null, downloadThreads }; }
 function closeDialog(id) { $(id).hidden = true; }
 function validateFileName(value) { const trimmed = value.trim().replace(/[. ]+$/g, ""); if (!trimmed) return "请输入文件名称"; if (/[<>:\"/\\|?*\u0000-\u001f]/.test(trimmed)) return "文件名不能包含 Windows 非法字符"; return ""; }
 function updateDownloadValidation() { const error = validateFileName($("#download-name").value); $("#download-name-error").textContent = error; $("#download-confirm").disabled = Boolean(error); return error; }
 function deleteErrorLabel(error) { return ({ task_not_found: "任务不存在或已被删除", cancel_failed: "无法停止下载进程，任务和文件均已保留", file_delete_failed: "本地文件删除失败，请检查文件是否被占用", file_delete_unsafe: "目标不是可安全删除的普通文件" })[error] || error || "unknown"; }
+function taskErrorLabel(error) { return ({ inline_hls_native_upgrade_required: "本地助手版本过旧，请升级并重启后重试", inline_manifest_invalid: "内存 HLS 清单格式无效", inline_manifest_too_large: "内存 HLS 清单超过大小限制", inline_manifest_unsafe_uri: "内存 HLS 清单包含不安全的资源地址", native_host_unavailable: "本地助手不可用，请重新安装或启动", native_host_timeout: "本地助手响应超时，请重启后重试" })[error] || error || "unknown"; }
 function detailRow(label, value) { const row = document.createElement("div"); row.className = "detail-row"; const name = document.createElement("span"); name.textContent = label; const content = document.createElement("span"); content.textContent = value || "未知"; content.title = value || "未知"; row.append(name, content); row.valueNode = content; return row; }
 function hasPreviewHeaders(item) { return Boolean(item.requestHeaders && Object.values(item.requestHeaders).some(Boolean)); }
 async function previewMessage(type, payload = {}) { if (!api?.runtime?.sendMessage) return { ok: true }; try { return await api.runtime.sendMessage({ type, payload }); } catch (_) { return { ok: false }; } }
@@ -133,7 +138,7 @@ function initializeHls(state, autoplay = false) {
 }
 
 function preparePreview(state) {
-  if (state.prepared || state.item.url?.startsWith("blob:") || state.item.type === "dash") return;
+  if (state.prepared || state.item.url?.startsWith("blob:") || state.item.inlineManifest || state.item.type === "dash" || state.item.type === "segment") return;
   state.prepared = true;
   if (state.item.type === "image") { state.image.src = state.item.url; return; }
   if (state.item.type === "hls") return;
@@ -158,7 +163,7 @@ async function stopActivePreview() {
 }
 
 async function playPreview(state) {
-  if (!["video", "audio", "hls"].includes(state.item.type) || state.item.url?.startsWith("blob:")) return;
+  if (!["video", "audio", "hls"].includes(state.item.type) || state.item.url?.startsWith("blob:") || state.item.inlineManifest) return;
   if (activePreview && activePreview !== state) await stopActivePreview();
   const retry = state.failed;
   await applyPreviewHeaders(state.item);
@@ -197,10 +202,14 @@ function createMediaPreview(item, refreshMetadata) {
     media.addEventListener("ended", () => stopActivePreview());
     container.appendChild(media); state.media = media;
   }
-  const placeholder = document.createElement("div"); placeholder.className = "preview-placeholder"; placeholder.innerHTML = `<span class="preview-mark">${item.type === "audio" ? "♫" : item.type === "dash" ? "DASH" : item.type === "image" ? "IMG" : "▶"}</span>`; container.appendChild(placeholder);
-  const status = document.createElement("div"); status.className = "preview-status"; status.textContent = item.type === "dash" ? "DASH 暂不支持在线预览" : item.url?.startsWith("blob:") ? "页面内 Blob 资源暂不支持预览" : item.type === "image" ? "图片预览" : "正在生成媒体封面…"; container.appendChild(status); state.status = status;
-  const overlay = document.createElement("button"); overlay.className = "preview-play"; overlay.type = "button"; overlay.innerHTML = `<span class="play-symbol">▶</span><span>${item.type === "audio" ? "播放音频" : "播放预览"}</span>`; overlay.hidden = !["video", "audio", "hls"].includes(item.type) || item.url?.startsWith("blob:"); overlay.addEventListener("click", event => { event.stopPropagation(); playPreview(state); }); container.appendChild(overlay); state.overlay = overlay;
-  if (item.type === "dash" || item.url?.startsWith("blob:")) container.classList.add("preview-unavailable");
+  const placeholder = document.createElement("div"); placeholder.className = "preview-placeholder";
+  const previewMark = document.createElement("span"); previewMark.className = "preview-mark"; previewMark.textContent = item.type === "audio" ? "♫" : item.type === "dash" ? "DASH" : item.type === "image" ? "IMG" : "▶"; placeholder.appendChild(previewMark); container.appendChild(placeholder);
+  const status = document.createElement("div"); status.className = "preview-status"; status.textContent = item.inlineManifest ? "内存 HLS 清单暂不在线预览" : item.type === "dash" ? "DASH 暂不支持在线预览" : item.url?.startsWith("blob:") ? "页面内 Blob 资源暂不支持预览" : item.type === "image" ? "图片预览" : "正在生成媒体封面…"; container.appendChild(status); state.status = status;
+  const overlay = document.createElement("button"); overlay.className = "preview-play"; overlay.type = "button";
+  const playSymbol = document.createElement("span"); playSymbol.className = "play-symbol"; playSymbol.textContent = "▶";
+  const playLabel = document.createElement("span"); playLabel.textContent = item.type === "audio" ? "播放音频" : "播放预览";
+  overlay.append(playSymbol, playLabel); overlay.hidden = !["video", "audio", "hls"].includes(item.type) || item.url?.startsWith("blob:") || Boolean(item.inlineManifest); overlay.addEventListener("click", event => { event.stopPropagation(); playPreview(state); }); container.appendChild(overlay); state.overlay = overlay;
+  if (item.type === "dash" || item.url?.startsWith("blob:") || item.inlineManifest) container.classList.add("preview-unavailable");
   return state;
 }
 
@@ -302,16 +311,16 @@ function createCandidateNode(item) {
   const tag = document.createElement("strong"); tag.textContent = item.type.toUpperCase();
   const actions = document.createElement("div"); actions.className = "card-actions";
   const detailsButton = document.createElement("button"); detailsButton.className = "detail-button"; detailsButton.textContent = "详情"; detailsButton.type = "button"; detailsButton.setAttribute("aria-expanded", "false");
-  const downloadButton = document.createElement("button"); const unavailable = item.url?.startsWith("blob:"); downloadButton.textContent = unavailable ? "暂不支持" : creating.has(item.canonicalUrl || item.url) ? "创建中…" : "下载"; downloadButton.disabled = unavailable || creating.has(item.canonicalUrl || item.url); if (unavailable) downloadButton.title = "页面内 Blob 地址需要专用清单解析器";
+  const downloadButton = document.createElement("button"); const key = candidateKey(item); const unavailable = item.url?.startsWith("blob:") && !item.inlineManifest || item.inlineManifest && !nativeCapabilities.has("inline-hls-v1"); downloadButton.textContent = unavailable ? "暂不支持" : creating.has(key) ? "创建中…" : "下载"; downloadButton.disabled = unavailable || creating.has(key); if (item.inlineManifest && unavailable) downloadButton.title = "请升级并重启流萤本地助手后再下载内存清单"; else if (unavailable) downloadButton.title = "页面内 Blob 地址不是可下载清单";
   actions.append(detailsButton, downloadButton); row.append(tag, actions);
   const url = document.createElement("div"); url.className = "url"; url.textContent = item.url; url.title = item.url;
   const meta = document.createElement("div"); meta.className = "meta";
   const details = document.createElement("div"); details.className = "details"; details.hidden = true; details._expanded = false;
   const sizeRow = detailRow(item.sizeKind === "manifest" ? "清单大小" : "文件大小", formatBytes(item.size)); const resolutionRow = detailRow("分辨率", "未知"); const durationRow = detailRow("时长", "未知"); const mimeRow = detailRow("MIME", item.mime || "未知");
-  const refreshMetadata = () => { meta.textContent = [item.mime, candidateSizeLabel(item), item.width && item.height ? `${item.width}×${item.height}` : null, sourceLabel(item.source)].filter(Boolean).join(" · "); sizeRow.valueNode.textContent = formatBytes(item.size); resolutionRow.valueNode.textContent = item.width && item.height ? `${item.width} × ${item.height}` : "未知"; durationRow.valueNode.textContent = formatDuration(item.duration); mimeRow.valueNode.textContent = item.mime || "未知"; };
+  const refreshMetadata = () => { meta.textContent = [item.mime, candidateSizeLabel(item), item.width && item.height ? `${item.width}×${item.height}` : null, candidateSourceLabel(item)].filter(Boolean).join(" · "); sizeRow.valueNode.textContent = formatBytes(item.size); resolutionRow.valueNode.textContent = item.width && item.height ? `${item.width} × ${item.height}` : "未知"; durationRow.valueNode.textContent = formatDuration(item.duration); mimeRow.valueNode.textContent = item.mime || "未知"; };
   const preview = createMediaPreview(item, refreshMetadata); preview.container.previewState = preview; refreshMetadata();
-  details.append(sizeRow, resolutionRow, durationRow, mimeRow, detailRow("发现来源", sourceLabel(item.source)), detailRow("页面", item.pageTitle || "未知"), detailRow("来源地址", item.pageUrl || item.url));
-  if (item.type === "hls") { const tip = document.createElement("div"); tip.className = "stream-tip"; tip.textContent = "支持在线预览；下载并合并由 StreamFirefly 安装包内的 FFmpeg 完成"; details.appendChild(tip); }
+  details.append(sizeRow, resolutionRow, durationRow, mimeRow, detailRow("发现来源", candidateSourceLabel(item)), detailRow("页面", item.pageTitle || "未知"), detailRow("来源地址", item.pageUrl || item.url));
+  if (item.type === "hls") { const tip = document.createElement("div"); tip.className = "stream-tip"; tip.textContent = item.inlineManifest ? "内存 HLS 清单可下载但暂不在线预览；下载并合并由安装包内的 FFmpeg 完成" : "支持在线预览；下载并合并由 StreamFirefly 安装包内的 FFmpeg 完成"; details.appendChild(tip); }
   if (item.type === "dash") { const tip = document.createElement("div"); tip.className = "stream-tip"; tip.textContent = "DASH 暂不支持在线预览；下载并合并由 StreamFirefly 安装包内的 FFmpeg 完成"; details.appendChild(tip); }
   detailsButton.addEventListener("click", () => { void setDetailsExpanded(details, detailsButton, !details._expanded); });
   downloadButton.addEventListener("click", () => openDownloadDialog(item));
@@ -328,21 +337,61 @@ function appendCandidate(root, item) {
   else preparePreview(node.preview);
 }
 
+function createSegmentNode(item) {
+  const node = document.createElement("article"); node.className = "segment-item"; node.dataset.resourceKey = candidateKey(item);
+  const kind = document.createElement("strong"); kind.textContent = item.segmentKind?.toUpperCase() || item.url.match(/\.([a-z0-9]+)(?:$|[?#&])/i)?.[1]?.toUpperCase() || "SEG";
+  const address = document.createElement("span"); address.textContent = item.url; address.title = item.url;
+  const download = document.createElement("button"); download.type = "button"; download.textContent = creating.has(candidateKey(item)) ? "创建中…" : "下载"; download.disabled = creating.has(candidateKey(item)); download.addEventListener("click", () => openDownloadDialog(item));
+  node.append(kind, address, download);
+  return node;
+}
+
+function renderSegments(items) {
+  const panel = $("#segments-panel");
+  const content = $("#segments-content");
+  const root = $("#segments-list");
+  panel.hidden = !items.length;
+  root.innerHTML = "";
+  if (!items.length) { segmentsExpanded = false; return; }
+  const sorted = candidateSort.sortCandidates(items, "detected");
+  const shown = sorted.slice(0, segmentVisible);
+  $("#segments-summary").textContent = `${items.length} 个${segmentsExpanded ? ` · 已显示 ${shown.length}` : ""}`;
+  $("#segments-toggle").setAttribute("aria-expanded", String(segmentsExpanded));
+  content.hidden = !segmentsExpanded;
+  if (!segmentsExpanded) return;
+  for (const item of shown) root.appendChild(createSegmentNode(item));
+  const more = $("#segments-more");
+  more.hidden = shown.length >= sorted.length;
+  more.textContent = `再显示 ${Math.min(100, sorted.length - shown.length)} 个`;
+}
+
 function renderCandidates(items) {
   void stopActivePreview();
   previewObserver?.disconnect();
   const root = $("#candidates"); root.innerHTML = "";
+  const segments = items.filter(item => item.type === "segment");
+  const resources = items.filter(item => item.type !== "segment");
   updateCandidatesHeader(items.length);
-  updateSortControls(items.length > 0);
-  if (!items.length) { root.innerHTML = '<div class="candidate-empty"><span class="empty-mark" aria-hidden="true"></span><strong>暂未发现资源</strong><p>请播放网页中的视频或音频后刷新重试</p></div>'; return; }
+  updateSortControls(resources.length > 0);
+  renderSegments(segments);
+  if (!resources.length) {
+    const empty = document.createElement("div"); empty.className = "candidate-empty";
+    const mark = document.createElement("span"); mark.className = "empty-mark"; mark.setAttribute("aria-hidden", "true");
+    const title = document.createElement("strong"); title.textContent = segments.length ? "暂未发现完整媒体" : "暂未发现资源";
+    const hint = document.createElement("p"); hint.textContent = segments.length ? "已捕获媒体分片，可在下方展开查看" : "请播放网页中的视频或音频后刷新重试";
+    empty.append(mark, title, hint); root.appendChild(empty); return;
+  }
   previewObserver = typeof IntersectionObserver === "function" ? new IntersectionObserver(entries => { for (const entry of entries) if (entry.isIntersecting) { preparePreview(entry.target.previewState); previewObserver.unobserve(entry.target); } }, { rootMargin: "80px" }) : null;
   if (candidateSortMode === "type") {
-    for (const group of candidateSort.groupCandidates(items)) {
-      const heading = document.createElement("div"); heading.className = "candidate-group-heading"; heading.innerHTML = `<span>${group.label}</span><span class="candidate-group-count">${group.items.length}</span>`; root.appendChild(heading);
+    for (const group of candidateSort.groupCandidates(resources)) {
+      const heading = document.createElement("div"); heading.className = "candidate-group-heading";
+      const label = document.createElement("span"); label.textContent = group.label;
+      const count = document.createElement("span"); count.className = "candidate-group-count"; count.textContent = String(group.items.length);
+      heading.append(label, count); root.appendChild(heading);
       for (const item of group.items) appendCandidate(root, item);
     }
   } else {
-    for (const item of candidateSort.sortCandidates(items, candidateSortMode)) appendCandidate(root, item);
+    for (const item of candidateSort.sortCandidates(resources, candidateSortMode)) appendCandidate(root, item);
   }
 }
 
@@ -364,6 +413,7 @@ function renderCandidateSkeleton() {
 async function loadCandidates() {
   const result = await api.runtime.sendMessage({ type: "media.candidates", tabId });
   currentCandidates = Array.isArray(result) ? result : [];
+  segmentVisible = 100;
   renderCandidates(currentCandidates);
   hideStatus();
 }
@@ -402,7 +452,7 @@ async function openDownloadDialog(item) {
   const fallbackName = (item.title || item.pageTitle || item.url.split(/[/?#]/).pop()?.replace(/\.[^.]+$/, "") || "streamfirefly-download").trim();
   let prepared = { ok: true, payload: { fileName: fallbackName, extension: fallbackExtension } };
   if (api?.runtime?.sendMessage) prepared = await api.runtime.sendMessage({ type: "task.prepare", payload });
-  if (!prepared?.ok) { showStatus(`无法准备下载：${prepared?.error || "unknown"}`, "error"); return; }
+  if (!prepared?.ok) { showStatus(`无法准备下载：${taskErrorLabel(prepared?.error)}`, "error"); return; }
   pendingDownload = { item, payload, saveDir: settings.saveDir || null };
   $("#download-name").value = prepared.payload.fileName;
   $("#download-extension").textContent = `.${prepared.payload.extension}`;
@@ -418,7 +468,7 @@ async function openDownloadDialog(item) {
 async function createTask() {
   if (!pendingDownload) return;
   const item = pendingDownload.item;
-  const key = item.canonicalUrl || item.url;
+  const key = candidateKey(item);
   if (creating.has(key)) return;
   const fileName = $("#download-name").value.trim();
   const validationError = updateDownloadValidation();
@@ -426,7 +476,7 @@ async function createTask() {
   closeDialog("#download-dialog");
   creating.add(key); tasksOpen = true; await loadCandidates(); showStatus("正在创建下载任务…");
   let finalStatus = "任务创建完成";
-  try { const result = await api.runtime.sendMessage({ type: "task.create", payload: { ...pendingDownload.payload, fileName, saveDir: pendingDownload.saveDir } }); finalStatus = !result?.ok ? `创建失败：${result?.error || "unknown"}` : `任务已创建：${result.task?.title || "等待中"}`; }
+  try { const result = await api.runtime.sendMessage({ type: "task.create", payload: { ...pendingDownload.payload, fileName, saveDir: pendingDownload.saveDir } }); finalStatus = !result?.ok ? `创建失败：${taskErrorLabel(result?.error)}` : `任务已创建：${result.task?.title || "等待中"}`; }
   catch (error) { finalStatus = `创建失败：${error.message}`; }
   finally { creating.delete(key); pendingDownload = null; await loadCandidates(); await loadTasks(); showStatus(finalStatus, finalStatus.startsWith("创建失败") ? "error" : "success"); }
 }
@@ -543,7 +593,7 @@ async function init() {
     if (pageUnloading) return;
     renderCandidates(currentCandidates); renderTasks(currentTasks); hideStatus(); return;
   }
-  const tab = await currentTab(); tabId = tab?.id; await api.runtime.sendMessage({ type: "native.connect" });
+  const tab = await currentTab(); tabId = tab?.id; const nativeInfo = await api.runtime.sendMessage({ type: "native.connect" }); nativeCapabilities = new Set(nativeInfo?.capabilities || []);
   const candidatesResult = await api.runtime.sendMessage({ type: "media.candidates", tabId });
   await wait(Math.max(0, 300 - (performance.now() - startedAt)));
   if (pageUnloading) return;
@@ -559,6 +609,8 @@ $("#candidate-sort-trigger").addEventListener("click", () => $("#candidate-sort-
 $("#candidate-sort-trigger").addEventListener("keydown", event => { if (!["ArrowDown", "ArrowUp"].includes(event.key)) return; event.preventDefault(); openSortMenu(); const options = [...$("#candidate-sort-menu").querySelectorAll("[data-sort]")]; options[event.key === "ArrowDown" ? 0 : options.length - 1]?.focus(); });
 $("#candidate-sort-menu").addEventListener("click", event => { const option = event.target.closest("[data-sort]"); if (option) void selectCandidateSort(option.dataset.sort); });
 $("#candidate-sort-menu").addEventListener("keydown", event => { const options = [...event.currentTarget.querySelectorAll("[data-sort]")]; const index = options.indexOf(document.activeElement); if (event.key === "Escape") { event.preventDefault(); closeSortMenu(true); return; } if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return; event.preventDefault(); const next = event.key === "Home" ? 0 : event.key === "End" ? options.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length; options[next].focus(); });
+$("#segments-toggle").addEventListener("click", () => { segmentsExpanded = !segmentsExpanded; renderSegments(currentCandidates.filter(item => item.type === "segment")); });
+$("#segments-more").addEventListener("click", () => { segmentVisible += 100; renderSegments(currentCandidates.filter(item => item.type === "segment")); });
 document.addEventListener("click", event => { if (!event.target.closest(".sort-menu")) closeSortMenu(); });
 $("#tasks-toggle").addEventListener("click", () => { tasksManuallyToggled = true; void setTasksOpen(!tasksOpen); });
 $("#download-confirm").addEventListener("click", createTask);

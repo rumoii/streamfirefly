@@ -7,18 +7,19 @@
     const url = element.currentSrc || element.src;
     if (!url || (!force && seen.has(url))) return;
     seen.add(url);
-    const isVideo = element.tagName === "VIDEO";
+    const media = element.tagName === "SOURCE" ? element.parentElement : element;
+    const isVideo = media?.tagName === "VIDEO";
     api.runtime.sendMessage({ type: "media.add", candidate: {
       url,
-      mime: element.getAttribute("type") || (isVideo ? "video/unknown" : "audio/unknown"),
+      mime: element.getAttribute("type") || media?.getAttribute("type") || (isVideo ? "video/unknown" : "audio/unknown"),
       title: document.title,
       pageTitle: document.title,
       pageUrl: location.href,
       faviconUrl: document.querySelector('link[rel~="icon"]')?.href || `${location.origin}/favicon.ico`,
-      poster: isVideo ? element.poster || pagePoster() : null,
-      width: isVideo ? element.videoWidth || null : null,
-      height: isVideo ? element.videoHeight || null : null,
-      duration: Number.isFinite(element.duration) ? element.duration : null,
+      poster: isVideo ? media.poster || pagePoster() : null,
+      width: isVideo ? media.videoWidth || null : null,
+      height: isVideo ? media.videoHeight || null : null,
+      duration: Number.isFinite(media?.duration) ? media.duration : null,
       source: "dom"
     }}).catch?.(() => {});
   };
@@ -34,6 +35,7 @@
     if (event.source !== window || event.data?.source !== "streamfirefly" || event.data.type !== "media") return;
     api.runtime.sendMessage({ type: "media.add", candidate: event.data.candidate }).catch?.(() => {});
   });
+  api.runtime.onMessage?.addListener(message => { if (message?.type === "media.rescan") { seen.clear(); scan(); } });
   api.runtime.sendMessage({ type: "probe.install" }).catch?.(() => {});
   new MutationObserver(scan).observe(document.documentElement, { childList: true, subtree: true });
   scan();

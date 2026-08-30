@@ -8,7 +8,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{Arc, Mutex},
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 use uuid::Uuid;
 
@@ -16,7 +16,14 @@ const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 const STORE_VERSION: u8 = 1;
 const DEFAULT_DOWNLOAD_THREADS: u8 = 6;
 const MAX_DOWNLOAD_THREADS: u8 = 16;
+const INLINE_MANIFEST_MAX_BYTES: usize = 512 * 1024;
 const SENSITIVE_REQUEST_HEADERS: [&str; 2] = ["cookie", "authorization"];
+
+#[derive(Debug, Clone)]
+struct InlineManifest {
+    text: String,
+    base_url: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Task {
@@ -54,6 +61,22 @@ struct Task {
     segments_completed: u32,
     #[serde(default)]
     segments_total: u32,
+    #[serde(skip)]
+    inline_manifest: Option<InlineManifest>,
+}
+
+struct TempManifestFile(PathBuf);
+
+impl TempManifestFile {
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempManifestFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
 }
 
 #[derive(Clone)]
@@ -82,6 +105,31 @@ fn state_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
         .join("StreamFirefly")
         .join("tasks.json")
+}
+fn inline_manifest_dir() -> PathBuf {
+    std::env::temp_dir().join("StreamFirefly").join("manifests")
+}
+
+fn cleanup_stale_inline_manifests() {
+    let dir = inline_manifest_dir();
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let stale = entry
+            .metadata()
+            .ok()
+            .and_then(|metadata| metadata.modified().ok())
+            .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+            .is_some_and(|age| age >= Duration::from_secs(24 * 60 * 60));
+        if stale
+            && path.is_file()
+            && path.extension().and_then(|value| value.to_str()) == Some("m3u8")
+        {
+            let _ = fs::remove_file(path);
+        }
+    }
 }
 fn default_download_dir() -> PathBuf {
     state_path()
@@ -161,6 +209,7 @@ fn strip_sensitive_headers(task: &mut Task) {
 fn sanitized_task(task: &Task) -> Task {
     let mut copy = task.clone();
     strip_sensitive_headers(&mut copy);
+    copy.inline_manifest = None;
     copy
 }
 
@@ -261,10 +310,95 @@ fn extension_from_content_disposition(value: &str) -> Option<String> {
     extension_from_url(&filename_from_content_disposition(value)?)
 }
 
+fn is_network_url(value: &str) -> bool {
+    value.starts_with("https://") || value.starts_with("http://")
+}
+
+fn validate_manifest_uri(value: &str) -> Result<(), &'static str> {
+    is_network_url(value.trim())
+        .then_some(())
+        .ok_or("inline_manifest_unsafe_uri")
+}
+
+fn validate_manifest_line(line: &str) -> Result<(), &'static str> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+    if !trimmed.starts_with('#') {
+        return validate_manifest_uri(trimmed);
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let mut offset = 0;
+    while let Some(relative) = lower[offset..].find("uri=") {
+        let value_start = offset + relative + 4;
+        let quote = trimmed.as_bytes().get(value_start).copied();
+        if !matches!(quote, Some(b'\"' | b'\'')) {
+            return Err("inline_manifest_unsafe_uri");
+        }
+        let quote = quote.unwrap();
+        let rest = &trimmed.as_bytes()[value_start + 1..];
+        let Some(length) = rest.iter().position(|value| *value == quote) else {
+            return Err("inline_manifest_invalid");
+        };
+        let value_end = value_start + 1 + length;
+        validate_manifest_uri(&trimmed[value_start + 1..value_end])?;
+        offset = value_end + 1;
+    }
+    Ok(())
+}
+
+fn inline_manifest(payload: &Value) -> Result<Option<InlineManifest>, &'static str> {
+    let Some(value) = payload.get("inlineManifest").filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    if value["format"].as_str() != Some("hls") {
+        return Err("inline_manifest_invalid");
+    }
+    let text = value["text"].as_str().ok_or("inline_manifest_invalid")?;
+    if text.is_empty() || text.len() > INLINE_MANIFEST_MAX_BYTES {
+        return Err("inline_manifest_too_large");
+    }
+    if text.lines().next().map(str::trim) != Some("#EXTM3U") || text.contains('\0') {
+        return Err("inline_manifest_invalid");
+    }
+    let base_url = value["baseUrl"]
+        .as_str()
+        .filter(|url| is_network_url(url))
+        .ok_or("inline_manifest_invalid")?;
+    for line in text.lines() {
+        validate_manifest_line(line)?;
+    }
+    Ok(Some(InlineManifest {
+        text: text.into(),
+        base_url: base_url.into(),
+    }))
+}
+
+fn write_inline_manifest(
+    task_id: &str,
+    manifest: &InlineManifest,
+) -> io::Result<TempManifestFile> {
+    let dir = inline_manifest_dir();
+    fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("{task_id}.m3u8"));
+    let mut file = OpenOptions::new().write(true).create_new(true).open(&path)?;
+    if let Err(error) = file
+        .write_all(manifest.text.as_bytes())
+        .and_then(|_| file.flush())
+    {
+        drop(file);
+        let _ = fs::remove_file(&path);
+        return Err(error);
+    }
+    Ok(TempManifestFile(path))
+}
+
 fn extension_for(payload: &Value) -> String {
     let url = payload["url"].as_str().unwrap_or("");
     let mime = payload["mime"].as_str().unwrap_or("");
-    if mime.contains("mpegurl")
+    if payload.get("inlineManifest").is_some_and(|value| !value.is_null())
+        || mime.contains("mpegurl")
         || mime.contains("dash+xml")
         || url.contains(".m3u8")
         || url.contains(".mpd")
@@ -300,18 +434,28 @@ fn recommended_file_stem(payload: &Value) -> String {
                 .file_stem()
                 .map(|value| value.to_string_lossy().into())
         });
+    let title = payload["title"].as_str().map(str::to_string);
     disposition
+        .or_else(|| {
+            payload
+                .get("inlineManifest")
+                .filter(|value| !value.is_null())
+                .and(title.clone())
+        })
         .or(url_name)
-        .or_else(|| payload["title"].as_str().map(str::to_string))
+        .or(title)
         .and_then(|name| safe_file_stem(&name))
         .unwrap_or_else(|| "streamfirefly-download".into())
 }
 
 fn prepare_task(payload: &Value) -> Result<Value, &'static str> {
-    payload["url"]
-        .as_str()
-        .filter(|url| url.starts_with("http://") || url.starts_with("https://"))
-        .ok_or("invalid_url")?;
+    let manifest = inline_manifest(payload)?;
+    if manifest.is_none() {
+        payload["url"]
+            .as_str()
+            .filter(|url| is_network_url(url))
+            .ok_or("invalid_url")?;
+    }
     Ok(json!({"fileName": recommended_file_stem(payload), "extension": extension_for(payload)}))
 }
 
@@ -387,10 +531,13 @@ fn allowed_request_headers(payload: &Value) -> HashMap<String, String> {
 }
 
 fn create_task(store: &Store, payload: &Value) -> Result<Task, &'static str> {
+    let inline_manifest = inline_manifest(payload)?;
     let url = payload["url"]
         .as_str()
-        .filter(|u| u.starts_with("http://") || u.starts_with("https://"))
-        .ok_or("invalid_url")?;
+        .filter(|url| is_network_url(url))
+        .or_else(|| inline_manifest.as_ref().map(|manifest| manifest.base_url.as_str()))
+        .ok_or("invalid_url")?
+        .to_string();
     let title = safe_title(
         payload["title"]
             .as_str()
@@ -421,9 +568,13 @@ fn create_task(store: &Store, payload: &Value) -> Result<Task, &'static str> {
     } else {
         custom_name
     };
+    let mut request_headers = allowed_request_headers(payload);
+    if inline_manifest.is_some() {
+        request_headers.retain(|name, _| !is_sensitive_request_header(name));
+    }
     let task = Task {
         id,
-        url: url.into(),
+        url,
         title: display_title,
         state: "queued".into(),
         phase: "queued".into(),
@@ -439,10 +590,11 @@ fn create_task(store: &Store, payload: &Value) -> Result<Task, &'static str> {
         mime: payload["mime"].as_str().map(str::to_string),
         referer: payload["referer"].as_str().map(str::to_string),
         download_threads: download_threads(payload),
-        request_headers: allowed_request_headers(payload),
+        request_headers,
         active_connections: 0,
         segments_completed: 0,
         segments_total: 0,
+        inline_manifest,
     };
     tasks.push(task.clone());
     drop(tasks);
@@ -1121,7 +1273,8 @@ fn start_download(store: Store, writer: Writer, task: Task) {
         if let Some(parent) = Path::new(&output).parent() {
             let _ = fs::create_dir_all(parent);
         }
-        let is_stream = task.url.to_ascii_lowercase().contains(".m3u8")
+        let is_stream = task.inline_manifest.is_some()
+            || task.url.to_ascii_lowercase().contains(".m3u8")
             || task.url.to_ascii_lowercase().contains(".mpd")
             || task.mime.as_deref().unwrap_or("").contains("mpegurl")
             || task.mime.as_deref().unwrap_or("").contains("dash+xml");
@@ -1134,6 +1287,25 @@ fn start_download(store: Store, writer: Writer, task: Task) {
             t.phase = "fetching".into();
             t.message = Some("正在读取流媒体清单，需要 FFmpeg".into());
         });
+        let manifest_file = match task.inline_manifest.as_ref() {
+            Some(manifest) => match write_inline_manifest(&task.id, manifest) {
+                Ok(file) => Some(file),
+                Err(error) => {
+                    update(&store, &writer, &task.id, |t| {
+                        t.state = "failed".into();
+                        t.phase = "failed".into();
+                        t.error = Some(error.to_string());
+                        t.message = Some("无法创建临时流媒体清单".into());
+                    });
+                    return;
+                }
+            },
+            None => None,
+        };
+        let input = manifest_file
+            .as_ref()
+            .map(|file| file.path().to_string_lossy().into_owned())
+            .unwrap_or_else(|| task.url.clone());
         let mut ffmpeg_args: Vec<String> = [
             "-nostdin",
             "-y",
@@ -1151,6 +1323,12 @@ fn start_download(store: Store, writer: Writer, task: Task) {
         .into_iter()
         .map(str::to_string)
         .collect();
+        if manifest_file.is_some() {
+            ffmpeg_args.extend([
+                "-protocol_whitelist".into(),
+                "file,http,https,tcp,tls,crypto".into(),
+            ]);
+        }
         if !task.request_headers.is_empty() {
             let headers = task
                 .request_headers
@@ -1161,7 +1339,7 @@ fn start_download(store: Store, writer: Writer, task: Task) {
         }
         ffmpeg_args.extend([
             "-i".into(),
-            task.url.clone(),
+            input,
             "-map".into(),
             "0:v?".into(),
             "-map".into(),
@@ -1271,6 +1449,7 @@ fn start_download(store: Store, writer: Writer, task: Task) {
 }
 
 fn main() -> io::Result<()> {
+    cleanup_stale_inline_manifests();
     let store = load_store(&state_path());
     let writer: Writer = Arc::new(Mutex::new(io::BufWriter::new(io::stdout())));
     let mut input = io::stdin().lock();
@@ -1281,6 +1460,7 @@ fn main() -> io::Result<()> {
         };
         let id = message["id"].clone();
         let response = match message["type"].as_str().unwrap_or("") {
+            "host.info" => json!({"version":1,"id":id,"ok":true,"protocolVersion":2,"capabilities":["inline-hls-v1"]}),
             "task.create" => match create_task(&store, &message["payload"]) {
                 Ok(task) => {
                     start_download(store.clone(), writer.clone(), task.clone());
@@ -1469,12 +1649,59 @@ mod tests {
             active_connections: 0,
             segments_completed: 0,
             segments_total: 0,
+            inline_manifest: Some(InlineManifest {
+                text: "#EXTM3U\n".into(),
+                base_url: "https://example.test/".into(),
+            }),
         }];
+        assert!(serde_json::to_value(&tasks[0])
+            .unwrap()
+            .get("inline_manifest")
+            .is_none());
         assert_eq!(
             unique_output_path(&dir, "视频", "mp4", &tasks),
             dir.join("视频 (2).mp4")
         );
         fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn inline_hls_prepare_validates_and_uses_mp4() {
+        let prepared = prepare_task(&json!({
+            "url":"blob:https://example.test/generated",
+            "title":"内存视频",
+            "inlineManifest": {
+                "format":"hls",
+                "text":"#EXTM3U\n#EXTINF:2,\nhttps://cdn.example.test/one.ts\n",
+                "baseUrl":"https://example.test/player"
+            }
+        }))
+        .unwrap();
+        assert_eq!(prepared["fileName"], "内存视频");
+        assert_eq!(prepared["extension"], "mp4");
+    }
+    #[test]
+    fn inline_hls_rejects_local_file_uris() {
+        let result = inline_manifest(&json!({
+            "inlineManifest": {
+                "format":"hls",
+                "text":"#EXTM3U\n#EXTINF:2,\nfile:///C:/secret.txt\n",
+                "baseUrl":"https://example.test/player"
+            }
+        }));
+        assert_eq!(result.unwrap_err(), "inline_manifest_unsafe_uri");
+    }
+    #[test]
+    fn inline_hls_temp_file_is_removed_on_drop() {
+        let manifest = InlineManifest {
+            text: "#EXTM3U\n#EXTINF:2,\nhttps://cdn.example.test/one.ts\n".into(),
+            base_url: "https://example.test/player".into(),
+        };
+        let id = Uuid::new_v4().to_string();
+        let file = write_inline_manifest(&id, &manifest).unwrap();
+        let path = file.path().to_path_buf();
+        assert_eq!(fs::read_to_string(&path).unwrap(), manifest.text);
+        drop(file);
+        assert!(!path.exists());
     }
     #[test]
     fn delete_output_rejects_directories_and_accepts_missing_files() {

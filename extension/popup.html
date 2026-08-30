@@ -27,6 +27,10 @@
           </section>
           <div id="candidate-sort-hint" class="sort-hint" role="note" hidden>提示：视频资源通常体积较大，按文件大小排序可以更快找到视频。</div>
           <section id="candidates" class="list" aria-live="polite"></section>
+          <section id="segments-panel" class="segments-panel" hidden>
+            <button id="segments-toggle" class="segments-toggle" type="button" aria-expanded="false" aria-controls="segments-content"><span><strong>媒体分片</strong><small id="segments-summary"></small></span><span class="chevron" aria-hidden="true"></span></button>
+            <div id="segments-content" hidden><div id="segments-list" class="segments-list"></div><button id="segments-more" class="segments-more" type="button" hidden>再显示 100 个</button></div>
+          </section>
         </div>
       </div>
     </section>

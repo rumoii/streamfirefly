@@ -2,7 +2,8 @@
   const typeGroups = [
     { key: "video", label: "视频", types: new Set(["video", "hls", "dash"]) },
     { key: "audio", label: "音频", types: new Set(["audio"]) },
-    { key: "image", label: "图片", types: new Set(["image"]) }
+    { key: "image", label: "图片", types: new Set(["image"]) },
+    { key: "segment", label: "分片", types: new Set(["segment"]) }
   ];
 
   function detectedValue(item) {
