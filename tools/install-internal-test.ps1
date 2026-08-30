@@ -1,8 +1,8 @@
 param(
-  [Parameter(Mandatory = $true)]
   [ValidatePattern('^[a-z]{32}$')]
-  [string]$ChromeExtensionId,
+  [AllowEmptyString()][string]$ChromeExtensionId = '',
   [string]$EdgeExtensionId = '',
+  [string]$FirefoxExtensionId = 'streamfirefly@example.invalid',
   [string]$InstallDir = (Join-Path $env:LOCALAPPDATA 'StreamFirefly\bin')
 )
 $ErrorActionPreference = 'Stop'
@@ -27,6 +27,6 @@ try {
 } catch {
   throw "Unable to update StreamFirefly files. Close Chrome and Edge, then retry. $($_.Exception.Message)"
 }
-& (Join-Path $InstallDir 'register-native-host.ps1') -ChromeExtensionId $ChromeExtensionId -EdgeExtensionId $EdgeExtensionId -NativeHostPath (Join-Path $InstallDir 'streamfirefly-native.exe') -InstallDir $InstallDir
+& (Join-Path $InstallDir 'register-native-host.ps1') -ChromeExtensionId $ChromeExtensionId -EdgeExtensionId $EdgeExtensionId -FirefoxExtensionId $FirefoxExtensionId -NativeHostPath (Join-Path $InstallDir 'streamfirefly-native.exe') -InstallDir $InstallDir
 Write-Host "StreamFirefly internal test host installed in $InstallDir"
-Write-Host 'Reload the unpacked extension in chrome://extensions before testing.'
+Write-Host 'Reload the unpacked Chromium extension or Firefox temporary add-on before testing.'

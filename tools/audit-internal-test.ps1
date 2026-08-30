@@ -24,7 +24,8 @@ try {
     "$bundleName/README-INTERNAL.md",
     "$bundleName/PACKAGE-INFO.json",
     "$bundleName/SHA256SUMS.txt",
-    "$bundleName/StreamFirefly-extension-0.6.0.zip"
+    "$bundleName/StreamFirefly-extension-0.6.0.zip",
+    "$bundleName/StreamFirefly-firefox-0.6.0-test.xpi"
   )
   foreach ($name in $required) { if ($normalized -notcontains $name) { throw "Archive file is missing: $name" } }
 } finally {
@@ -74,6 +75,16 @@ try {
     if ($nestedNames -notcontains 'manifest.json') { throw 'Nested extension ZIP has no root manifest.json' }
     if ($nestedNames -contains 'manifest.firefox.json' -or @($nestedNames | Where-Object { $_.StartsWith('icon-concepts/') }).Count) { throw 'Nested extension ZIP contains excluded files' }
   } finally { $nestedZip.Dispose() }
+  $firefoxXpi = [System.IO.Compression.ZipFile]::OpenRead((Join-Path $root 'StreamFirefly-firefox-0.6.0-test.xpi'))
+  try {
+    $firefoxNames = @($firefoxXpi.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
+    if ($firefoxNames -notcontains 'manifest.json') { throw 'Firefox XPI has no root manifest.json' }
+    if ($firefoxNames -contains 'manifest.firefox.json' -or @($firefoxNames | Where-Object { $_.StartsWith('icon-concepts/') }).Count) { throw 'Firefox XPI contains excluded files' }
+    $entry = $firefoxXpi.GetEntry('manifest.json')
+    $reader = New-Object System.IO.StreamReader($entry.Open())
+    try { $firefoxManifest = $reader.ReadToEnd() | ConvertFrom-Json } finally { $reader.Dispose() }
+    if ($firefoxManifest.browser_specific_settings.gecko.id -ne 'streamfirefly@example.invalid') { throw 'Firefox XPI extension ID is incorrect' }
+  } finally { $firefoxXpi.Dispose() }
 } finally {
   if (Test-Path -LiteralPath $extractBase) { Remove-Item -LiteralPath $extractBase -Recurse -Force }
 }

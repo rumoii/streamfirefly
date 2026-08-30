@@ -1,5 +1,5 @@
 param(
-  [Parameter(Mandatory = $true)][string]$ChromeExtensionId,
+  [string]$ChromeExtensionId = '',
   [string]$EdgeExtensionId = '',
   [string]$FirefoxExtensionId = '',
   [string]$NativeHostPath = (Join-Path $PSScriptRoot 'streamfirefly-native.exe'),

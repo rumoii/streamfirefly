@@ -1,0 +1,18 @@
+{
+  "name": "streamfirefly-extension-tools",
+  "private": true,
+  "version": "0.6.0",
+  "scripts": {
+    "validate:extension": "node tools/validate-extension.mjs && node tools/validate-firefox-extension.mjs",
+    "test:unit": "node tools/test-extension-logic.mjs && node tools/test-candidate-sort.mjs && node tools/test-page-probe.mjs && node tools/test-firefox-integration.mjs",
+    "test:native": "node tools/test-native.mjs",
+    "lint:firefox": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/package-firefox-extension.ps1 -LintOnly",
+    "package:firefox": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/package-firefox-extension.ps1",
+    "test:firefox": "node tools/test-browser-extension.mjs --browser firefox",
+    "test:chrome": "node tools/test-browser-extension.mjs --browser chrome",
+    "test:browsers": "npm run test:chrome && npm run test:firefox"
+  },
+  "devDependencies": {
+    "web-ext": "10.6.0"
+  }
+}

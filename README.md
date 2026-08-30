@@ -6,8 +6,11 @@
 
 当前版本已实现：
 
-- Chrome/Edge Manifest V3 扩展；
-- 页面资源候选发现（请求 URL、响应 MIME、媒体元素）；
+- Chrome/Edge 与 Firefox 142+ Manifest V3 扩展；
+- 页面资源候选发现（请求 URL、响应 MIME、媒体元素、小型 JSON/文本和内联脚本）；
+- 图片识别默认关闭；TS、M4S、KEY 分片独立折叠显示，每批 100 个、每页最多保留 1000 个；
+- 可下载页面通过 POST、Blob 或脚本在内存中生成的 HLS 清单；清单仅在当前会话中保存，并在交给 FFmpeg 前校验所有资源地址；
+- 可选的高级深度搜索观察 JSON.parse、Base64、文本解码和同源经典 Worker，默认关闭；
 - 普通 HTTP 下载任务创建；
 - Native Messaging 协议与 Rust 助手任务状态机；
 - Rust 助手通过系统 `curl` 执行下载，并持久化任务清单；
@@ -34,23 +37,39 @@
 
 ## 开发验证
 
-扩展静态检查：
+安装固定版本的浏览器测试工具并运行静态、单元测试：
 
 ```powershell
-node tools/validate-extension.mjs
+npm install
+npm run validate:extension
+npm run test:unit
+npm run lint:firefox
 ```
+
+真实浏览器测试使用独立临时配置，不复用日常浏览器数据：
+
+```powershell
+npm run test:firefox
+npm run test:chrome
+npm run test:browsers
+```
+
+Firefox 测试默认查找 `C:\Program Files\Mozilla Firefox\firefox.exe`，也可通过 `FIREFOX_BINARY` 指定。Chrome 对应变量为 `CHROME_BINARY`。Firefox 测试使用 headless 模式；Chrome 因正式版不支持 headless 加载未打包扩展，使用独立配置的屏幕外窗口。
 
 Rust 助手需要 Rust 工具链：
 
 ```powershell
 cargo test --manifest-path native-host/Cargo.toml
 cargo build --release --manifest-path native-host/Cargo.toml
+npm run test:native
 ```
 
-构建后，以浏览器扩展 ID 注册本地助手：
+构建后，以浏览器扩展 ID 注册本地助手；Firefox 使用清单中的固定 ID：
 
 ```powershell
-.\tools\install-native-host.ps1 -ChromeExtensionId '<扩展ID>'
+.\tools\install-native-host.ps1 `
+  -ChromeExtensionId '<Chrome扩展ID>' `
+  -FirefoxExtensionId 'streamfirefly@example.invalid'
 ```
 
 每次重新编译 Native Host 后，需要再次运行安装脚本，覆盖浏览器实际调用的本地助手程序。扩展更新后在 `chrome://extensions` 中点击“重新加载”。
@@ -62,6 +81,15 @@ cargo build --release --manifest-path native-host/Cargo.toml
 ```
 
 上传包只包含 Chrome 扩展运行所需的白名单文件，不包含 Firefox Manifest、图标设计稿或本地状态。
+
+生成 Firefox 临时测试 XPI：
+
+```powershell
+npm run package:firefox
+```
+
+产物为 `release/StreamFirefly-firefox-0.6.0-test.xpi`，可在 `about:debugging#/runtime/this-firefox` 中通过“临时载入附加组件”测试。它未经过 Mozilla 签名，不能作为 Firefox 正式版的长期安装包；长期安装或分发必须提交 Mozilla 签名。
+
 
 在取得 Chrome Web Store 正式 ID 前，为 x64 和 ARM64 测试机生成不绑定开发扩展 ID的完整内测包：
 
@@ -80,7 +108,7 @@ cargo build --release --manifest-path native-host/Cargo.toml
 .\tools\build-installer.ps1 -Architecture arm64
 ```
 
-构建机需要 Rust 对应目标工具链和 Inno Setup 6。FFmpeg 二进制在构建阶段按固定 URL 与 SHA-256 下载，不提交到 Git；安装过程本身不访问网络。本地开发扩展 ID 为 `gimoeapmpoeogpabfdplccplmmohklff`，Chrome Web Store 正式 ID 取得后通过 `-ChromeExtensionId` 传入；Edge 商店 ID 通过 `-EdgeExtensionId` 传入。
+构建机需要 Rust 对应目标工具链和 Inno Setup 6。FFmpeg 二进制在构建阶段按固定 URL 与 SHA-256 下载，不提交到 Git；安装过程本身不访问网络。本地开发扩展 ID 为 `gimoeapmpoeogpabfdplccplmmohklff`，Chrome Web Store 正式 ID 取得后通过 `-ChromeExtensionId` 传入；Edge 商店 ID 通过 `-EdgeExtensionId` 传入；Firefox Native Messaging 固定使用 `streamfirefly@example.invalid`。
 
 Chrome Web Store 创建条目并取得正式扩展 ID 后，使用该 ID 一次性生成扩展 ZIP、两个架构的安装包和校验文件：
 

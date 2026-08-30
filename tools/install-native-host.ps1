@@ -1,5 +1,5 @@
 param(
-  [Parameter(Mandatory=$true)][string]$ChromeExtensionId,
+  [string]$ChromeExtensionId = '',
   [string]$FirefoxExtensionId = '',
   [string]$BuiltExe = (Join-Path $PSScriptRoot '..\native-host\target\release\streamfirefly-native.exe'),
   [string]$InstallDir = (Join-Path $env:LOCALAPPDATA 'StreamFirefly\bin')

@@ -3,6 +3,7 @@
 #define AppPublisher "rumoii"
 #define ChromeExtensionId "gimoeapmpoeogpabfdplccplmmohklff"
 #define EdgeExtensionId ""
+#define FirefoxExtensionId "streamfirefly@example.invalid"
 #define ARCH "x64"
 #define ARCH_ALLOWED "x64compatible"
 
@@ -31,11 +32,12 @@ Source: "build\{#ARCH}\FFMPEG-SOURCE.txt"; DestDir: "{app}"; Flags: ignoreversio
 Source: "build\{#ARCH}\FFMPEG-LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Run]
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\register-native-host.ps1"" -ChromeExtensionId ""{#ChromeExtensionId}"" -EdgeExtensionId ""{#EdgeExtensionId}"" -NativeHostPath ""{app}\streamfirefly-native.exe"" -InstallDir ""{app}"""; StatusMsg: "正在注册浏览器本地助手…"; Flags: runhidden waituntilterminated
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\register-native-host.ps1"" -ChromeExtensionId ""{#ChromeExtensionId}"" -EdgeExtensionId ""{#EdgeExtensionId}"" -FirefoxExtensionId ""{#FirefoxExtensionId}"" -NativeHostPath ""{app}\streamfirefly-native.exe"" -InstallDir ""{app}"""; StatusMsg: "正在注册浏览器本地助手…"; Flags: runhidden waituntilterminated
 
 [Registry]
 Root: HKCU; Subkey: "Software\Google\Chrome\NativeMessagingHosts\com.streamfirefly.native"; ValueType: none; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Microsoft\Edge\NativeMessagingHosts\com.streamfirefly.native"; ValueType: none; Flags: uninsdeletekey; Check: EdgeExtensionConfigured
+Root: HKCU; Subkey: "Software\Mozilla\NativeMessagingHosts\com.streamfirefly.native"; ValueType: none; Flags: uninsdeletekey
 
 [Code]
 function EdgeExtensionConfigured(): Boolean;

@@ -4,7 +4,8 @@ param(
 $ErrorActionPreference = 'Stop'
 foreach ($registryPath in @(
   'HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.streamfirefly.native',
-  'HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\com.streamfirefly.native'
+  'HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\com.streamfirefly.native',
+  'HKCU:\Software\Mozilla\NativeMessagingHosts\com.streamfirefly.native'
 )) {
   if (Test-Path -LiteralPath $registryPath) { Remove-Item -LiteralPath $registryPath -Force }
 }
@@ -16,7 +17,8 @@ $ownedFiles = @(
   'FFMPEG-SOURCE.txt',
   'FFMPEG-LICENSE.txt',
   'com.streamfirefly.native.googlechrome.json',
-  'com.streamfirefly.native.microsoftedge.json'
+  'com.streamfirefly.native.microsoftedge.json',
+  'com.streamfirefly.native.firefox.json'
 )
 foreach ($name in $ownedFiles) {
   $path = Join-Path $InstallDir $name

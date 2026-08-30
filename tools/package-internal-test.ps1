@@ -8,7 +8,9 @@ $cargo = Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe'
 if (-not (Test-Path -LiteralPath $cargo -PathType Leaf)) { throw 'Rust Cargo was not found' }
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 & $PSScriptRoot\package-extension.ps1 -OutputDir $OutputDir
+& $PSScriptRoot\package-firefox-extension.ps1 -OutputDir $OutputDir
 $extensionZip = Join-Path $OutputDir 'StreamFirefly-extension-0.6.0.zip'
+$firefoxXpi = Join-Path $OutputDir 'StreamFirefly-firefox-0.6.0-test.xpi'
 $sourceCommit = (& git -C $root rev-parse HEAD).Trim()
 $sourceBranch = (& git -C $root branch --show-current).Trim()
 $sourceStatus = @(& git -C $root status --porcelain)
@@ -30,6 +32,7 @@ foreach ($architecture in @('x64', 'arm64')) {
   try {
     Expand-Archive -LiteralPath $extensionZip -DestinationPath (Join-Path $bundleRoot 'extension')
     Copy-Item -LiteralPath $extensionZip -Destination (Join-Path $bundleRoot 'StreamFirefly-extension-0.6.0.zip')
+    Copy-Item -LiteralPath $firefoxXpi -Destination (Join-Path $bundleRoot 'StreamFirefly-firefox-0.6.0-test.xpi')
     foreach ($directory in @('native-host', 'tools', 'store-assets')) { New-Item -ItemType Directory -Path (Join-Path $bundleRoot $directory) | Out-Null }
     Copy-Item -LiteralPath (Join-Path $root "native-host\target\$target\release\streamfirefly-native.exe") -Destination (Join-Path $bundleRoot 'native-host\streamfirefly-native.exe')
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "ffmpeg-cache\ffmpeg-$architecture.exe") -Destination (Join-Path $bundleRoot 'native-host\ffmpeg.exe')

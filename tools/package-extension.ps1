@@ -5,25 +5,8 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $extension = Join-Path $root 'extension'
 $manifest = Get-Content -Raw -LiteralPath (Join-Path $extension 'manifest.json') | ConvertFrom-Json
-$files = @(
-  'manifest.json',
-  'background.js',
-  'content.js',
-  'page-probe.js',
-  'candidate-sort.js',
-  'popup.html',
-  'popup.js',
-  'popup.css',
-  'options.html',
-  'options.js',
-  'icon16.png',
-  'icon32.png',
-  'icon48.png',
-  'icon128.png',
-  'lib/hls.min.js',
-  'lib/hls.LICENSE.txt',
-  'THIRD_PARTY_NOTICES.md'
-)
+[string[]]$runtimeFiles = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'extension-package-files.json') | ConvertFrom-Json
+$files = @('manifest.json') + $runtimeFiles
 foreach ($relative in $files) {
   if (-not (Test-Path -LiteralPath (Join-Path $extension $relative) -PathType Leaf)) {
     throw "Extension package file is missing: $relative"

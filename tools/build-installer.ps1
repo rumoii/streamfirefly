@@ -2,6 +2,7 @@ param(
   [Parameter(Mandatory = $true)][ValidateSet('x64','arm64')][string]$Architecture,
   [string]$ChromeExtensionId = 'gimoeapmpoeogpabfdplccplmmohklff',
   [string]$EdgeExtensionId = '',
+  [string]$FirefoxExtensionId = 'streamfirefly@example.invalid',
   [string]$Iscc = 'iscc.exe'
 )
 $ErrorActionPreference = 'Stop'
@@ -36,7 +37,7 @@ $tempIss = Join-Path $root "installer\streamfirefly-$Architecture.generated.iss"
 $archAllowed = if ($Architecture -eq 'x64') { 'x64compatible' } else { 'arm64' }
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $content = [System.IO.File]::ReadAllText($iss, $utf8NoBom)
-$content = $content.Replace('#define EdgeExtensionId ""', "#define EdgeExtensionId `"$EdgeExtensionId`"").Replace('#define ARCH "x64"', "#define ARCH `"$Architecture`"").Replace('#define ARCH_ALLOWED "x64compatible"', "#define ARCH_ALLOWED `"$archAllowed`"").Replace('#define ChromeExtensionId "gimoeapmpoeogpabfdplccplmmohklff"', "#define ChromeExtensionId `"$ChromeExtensionId`"")
+$content = $content.Replace('#define EdgeExtensionId ""', "#define EdgeExtensionId `"$EdgeExtensionId`"").Replace('#define FirefoxExtensionId "streamfirefly@example.invalid"', "#define FirefoxExtensionId `"$FirefoxExtensionId`"").Replace('#define ARCH "x64"', "#define ARCH `"$Architecture`"").Replace('#define ARCH_ALLOWED "x64compatible"', "#define ARCH_ALLOWED `"$archAllowed`"").Replace('#define ChromeExtensionId "gimoeapmpoeogpabfdplccplmmohklff"', "#define ChromeExtensionId `"$ChromeExtensionId`"")
 $utf8WithBom = New-Object System.Text.UTF8Encoding($true)
 [System.IO.File]::WriteAllText($tempIss, $content, $utf8WithBom)
 Push-Location (Join-Path $root 'installer'); try { & $isccCommand.FullName $tempIss } finally { Pop-Location; Remove-Item -LiteralPath $tempIss -Force -ErrorAction SilentlyContinue }

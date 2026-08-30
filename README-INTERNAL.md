@@ -59,12 +59,26 @@ Set-ExecutionPolicy -Scope Process Bypass
   -EdgeExtensionId '<Edge扩展ID>'
 ```
 
+如需测试 Firefox 142 或更高版本：
+
+1. 打开 `about:debugging#/runtime/this-firefox`，点击“临时载入附加组件”；
+2. 选择包内的 `StreamFirefly-firefox-0.6.0-test.xpi`；
+3. Firefox 扩展 ID 固定为 `streamfirefly@example.invalid`。如果只测试 Firefox，可直接运行以下命令注册 Native Host：
+
+```powershell
+.\tools\install-internal-test.ps1
+```
+
+4. Firefox 重启后临时扩展会自动移除，需要重新载入 XPI；测试 XPI 未经 Mozilla 签名，不能通过 `about:addons` 长期安装。
+
 ## 四、测试清单
 
 ### 1. 资源识别与预览
 
-- 分别打开含视频、音频和图片的网页，确认资源可以被识别；
+- 分别打开含视频和音频的网页，确认资源可以被识别；图片默认不显示，在设置中开启“识别图片”并刷新目标网页后再确认图片识别；
 - 播放一次网页视频，确认普通媒体、HLS 和 DASH 资源能够在实际请求发生后出现；
+- 如果页面产生大量 TS、M4S 或 KEY 请求，确认它们只出现在默认折叠的“媒体分片”区域，并按每次 100 个展开；
+- 在设置中开启“高级深度搜索”并刷新目标网页，确认由 JSON、Base64、文本解码或同源 Worker 生成的媒体地址可以出现；完成后关闭该选项并刷新；
 - 展开资源详情，检查类型、地址、大小、分辨率和时长等已知信息；
 - 切换嗅探顺序、文件大小和类型分组，确认排序结果、分组数量和大小提示符合预期；
 - 收起资源列表，确认长列表隐藏且下载任务可以直接看到；再次展开后资源仍完整；
@@ -80,6 +94,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 - 连续下载同名资源，确认不会覆盖已有文件，而是自动增加序号；
 - 下载较大文件，观察百分比、已下载大小、总大小、速度和状态是否持续更新；
 - 测试 HLS 或 DASH 下载，确认完成后得到可播放的媒体文件，而不是残留的 `.download` 临时文件；
+- 测试由 POST 或 Blob 在页面内生成的 HLS 清单，确认资源标记为“内存清单”且可以下载；旧版 Native Host 应显示升级提示；
 - 对需要登录的资源，在仍保持登录的页面中发起下载，确认授权范围内的资源可以完成。
 
 ### 3. 下载任务管理
@@ -141,7 +156,7 @@ Windows 版本及系统架构：
 
 ## 七、卸载
 
-先关闭 Chrome 和 Edge，然后在内测包根目录执行：
+先关闭 Chrome、Edge 和 Firefox，然后在内测包根目录执行：
 
 ```powershell
 .\tools\uninstall-internal-test.ps1
