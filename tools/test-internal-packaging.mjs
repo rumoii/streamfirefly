@@ -25,6 +25,7 @@ requireText(readme, `StreamFirefly-${bundleVersion}-internal-arm64.zip`, 'Intern
 for (const expected of [
   'runs-on: windows-2025',
   '11d5960a326750d5838078e36cf38b85af677262',
+  'fetch-depth: 0',
   '49933ea5288caeca8642d1e84afbd3f7d6820020',
   'ea165f8d65b6e75b540449e92b4886f43607fa02',
   '6da471c0440a153b291e45f648b9ebbf9a0afbe0',
