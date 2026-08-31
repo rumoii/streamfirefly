@@ -1,7 +1,7 @@
 {
   "name": "streamfirefly-extension-tools",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.7.0",
   "scripts": {
     "validate:extension": "node tools/validate-extension.mjs && node tools/validate-firefox-extension.mjs",
     "test:unit": "node tools/test-extension-logic.mjs && node tools/test-candidate-sort.mjs && node tools/test-page-probe.mjs && node tools/test-firefox-integration.mjs",

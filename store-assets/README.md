@@ -20,7 +20,7 @@
 
 ## 提交清单
 
-- `release/StreamFirefly-extension-0.6.0.zip`；
+- `release/StreamFirefly-extension-0.7.0.zip`；
 - 128×128 扩展图标：`extension/icon128.png`；
 - 440×280 小型宣传图：`store-assets/promo-small.png`；
 - 1280×800 界面截图：`store-assets/screenshot-popup.png`；

@@ -1,4 +1,4 @@
-# StreamFirefly 0.6.0 Beta 2 内测指南
+# StreamFirefly 0.7.0 Beta 1 内测指南
 
 此版本仅用于受邀测试，不是 Chrome Web Store 正式发布版本。测试人员需要登录受邀的 GitHub 账号，从私有 Release 下载测试包。请勿转发安装包、Release 链接或测试数据。
 
@@ -8,9 +8,9 @@ StreamFirefly 不绕过 DRM。请只测试自己拥有版权或已获授权的�
 
 1. 接受 `rumoii/streamfirefly-internal-releases` 私有仓库的协作者邀请。
 2. 登录 GitHub，进入该仓库的 **Releases** 页面。
-3. 打开 `StreamFirefly 0.6.0 Beta 2 内测版`，下载与当前 Windows 架构匹配的压缩包：
-   - Intel 或 AMD Windows 电脑：`StreamFirefly-0.6.0-beta.2-internal-x64.zip`
-   - Windows ARM 电脑：`StreamFirefly-0.6.0-beta.2-internal-arm64.zip`
+3. 打开 `StreamFirefly 0.7.0 Beta 1 内测版`，下载与当前 Windows 架构匹配的压缩包：
+   - Intel 或 AMD Windows 电脑：`StreamFirefly-0.7.0-beta.1-internal-x64.zip`
+   - Windows ARM 电脑：`StreamFirefly-0.7.0-beta.1-internal-arm64.zip`
 4. 同时下载 `INTERNAL-SHA256SUMS.txt`，用于核对压缩包完整性。
 
 可以在 Windows 的“设置 → 系统 → 系统信息 → 系统类型”中查看架构。大多数 Intel、AMD 电脑使用 x64；仅骁龙等 Windows ARM 设备使用 ARM64。
@@ -22,7 +22,7 @@ StreamFirefly 不绕过 DRM。请只测试自己拥有版权或已获授权的�
 在下载目录打开 PowerShell，计算压缩包的 SHA-256：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 -LiteralPath '.\StreamFirefly-0.6.0-beta.2-internal-x64.zip'
+Get-FileHash -Algorithm SHA256 -LiteralPath '.\StreamFirefly-0.7.0-beta.1-internal-x64.zip'
 ```
 
 ARM64 测试人员将文件名替换为 ARM64 包。输出应与 `INTERNAL-SHA256SUMS.txt` 中对应记录一致；不一致时不要继续安装，请重新下载并反馈。
@@ -30,8 +30,8 @@ ARM64 测试人员将文件名替换为 ARM64 包。输出应与 `INTERNAL-SHA25
 为避免 Windows 保留互联网下载标记，先解除 ZIP 锁定，再完整解压：
 
 ```powershell
-Unblock-File -LiteralPath '.\StreamFirefly-0.6.0-beta.2-internal-x64.zip'
-Expand-Archive -LiteralPath '.\StreamFirefly-0.6.0-beta.2-internal-x64.zip' -DestinationPath '.\StreamFirefly-Test'
+Unblock-File -LiteralPath '.\StreamFirefly-0.7.0-beta.1-internal-x64.zip'
+Expand-Archive -LiteralPath '.\StreamFirefly-0.7.0-beta.1-internal-x64.zip' -DestinationPath '.\StreamFirefly-Test'
 ```
 
 不要直接在压缩包内运行脚本，也不要单独移动 `extension`、`native-host` 或 `tools` 文件夹。
@@ -62,7 +62,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 如需测试 Firefox 142 或更高版本：
 
 1. 打开 `about:debugging#/runtime/this-firefox`，点击“临时载入附加组件”；
-2. 选择包内的 `StreamFirefly-firefox-0.6.0-test.xpi`；
+2. 选择包内的 `StreamFirefly-firefox-0.7.0-test.xpi`；
 3. Firefox 扩展 ID 固定为 `streamfirefly@example.invalid`。如果只测试 Firefox，可直接运行以下命令注册 Native Host：
 
 ```powershell
