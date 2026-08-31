@@ -69,15 +69,20 @@ await send({ type: 'media.add', candidate: { url: 'https://media.example/a.mp4',
 await send({ type: 'media.add', candidate: { url: 'https://media.example/cover.jpg', mime: 'image/jpeg' } }, { tab: { id: 7 } });
 await send({ type: 'media.add', candidate: { url: 'https://media.example/chunk-1.m4s', mime: 'application/octet-stream' } }, { tab: { id: 7 } });
 await send({ type: 'media.add', candidate: { url: 'blob:https://media.example/generated', mime: 'application/vnd.apple.mpegurl', inlineManifest: { format: 'hls', text: '#EXTM3U\n#EXTINF:2,\nhttps://media.example/chunk-1.ts\n', baseUrl: 'https://media.example/page', sourceUrl: 'https://media.example/player-config' } } }, { tab: { id: 7 } });
+const namespaceAccepted = await send({ type: 'media.add', candidate: { url: 'https://media.example/watch/com.bapis.bilibili.broadcast.message.ogv', mime: '', source: 'inline-script' } }, { tab: { id: 7 } });
+if (namespaceAccepted?.ok) throw new Error('Namespace-like script candidate was accepted');
+const relativeAccepted = await send({ type: 'media.add', candidate: { url: 'https://media.example/watch/clip.ogv', mime: '', source: 'inline-script' } }, { tab: { id: 7 } });
+if (!relativeAccepted?.ok) throw new Error('Ordinary relative media filename was rejected');
 
 let candidates = await send({ type: 'media.candidates', tabId: 7 });
-if (candidates.length !== 3) throw new Error(`Expected video, segment, and inline manifest, got ${candidates.length}`);
+if (candidates.length !== 4) throw new Error(`Expected two videos, segment, and inline manifest, got ${candidates.length}`);
 const video = candidates.find(item => item.type === 'video');
 if (video.size !== 8192 || video.sizeSource !== 'content-range' || video.width !== 1920 || video.referer !== 'https://media.example/page' || !video.contentDisposition) throw new Error(`Candidate metadata was not merged: ${JSON.stringify(video)}`);
 if (video.mime !== 'video/mp4') throw new Error(`Accurate MIME was overwritten: ${video.mime}`);
 if (video.requestHeaders.authorization !== 'Bearer preview' || video.requestHeaders['x-secret']) throw new Error(`Request header allowlist failed: ${JSON.stringify(video.requestHeaders)}`);
 if (candidates.some(item => item.type === 'image')) throw new Error('Images must be ignored by default');
 if (!candidates.some(item => item.type === 'segment')) throw new Error('Segment was not classified');
+if (!candidates.some(item => item.url.endsWith('/clip.ogv'))) throw new Error('Ordinary relative media filename was not retained');
 const inline = candidates.find(item => item.id.startsWith('inline-hls:'));
 if (!inline) throw new Error('Inline manifest did not receive a content fingerprint');
 if (inline.requestHeaders.cookie || inline.requestHeaders.authorization) throw new Error('Inline manifest inherited sensitive request credentials');

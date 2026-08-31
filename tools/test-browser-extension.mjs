@@ -100,6 +100,7 @@ function reporterSource(origin) {
       return complete ? items : null;
     }, 'required media candidates were not captured');
     if (first.some(item => item.type === 'image')) throw new Error('images were captured while image detection was disabled');
+    if (first.some(item => String(item.url || '').includes('com.bapis.bilibili.broadcast.message.ogv'))) throw new Error('namespace-like script value was captured as media');
     const postManifest = first.find(item => item.inlineManifest && item.source === 'fetch-body');
     if (!postManifest.inlineManifest.text.includes(origin + '/media/post-segment.ts') || !postManifest.inlineManifest.text.includes('URI="' + origin + '/api/key.bin"')) throw new Error('POST HLS manifest URLs were not normalized');
 
@@ -148,6 +149,7 @@ function stageExtension(stage, origin) {
 function fixtureHtml(origin) {
   return `<!doctype html><html><head><meta charset="utf-8"><title>StreamFirefly browser fixture</title><script>
   window.fixtureConfig = { url: ${JSON.stringify(`${origin}/media/inline.m3u8`)} };
+  window.fixtureDescriptor = 'com.bapis.bilibili.broadcast.message.ogv';
   window.addEventListener('load', async () => {
     const base = ${JSON.stringify(origin)};
     await fetch(base + '/api/config').then(response => response.json());

@@ -9,8 +9,14 @@
   const decoder = new TextDecoder();
   const mediaExtension = /\.(?:m3u8?|mpd|mp4|webm|mov|mkv|flv|f4v|m4v|mpeg|mpg|avi|wmv|asf|ogv|3gp|mp3|m4a|aac|wav|flac|ogg|opus|wma|weba|ts|m4s|key)(?:$|[?#&])/i;
   const quotedMediaUrl = /(?:https?:\\?\/\\?\/|\/|\.\.\/|\.\/)?[^\s"'<>\\]+\.(?:m3u8?|mpd|mp4|webm|mov|mkv|flv|f4v|m4v|mpeg|mpg|avi|wmv|asf|ogv|3gp|mp3|m4a|aac|wav|flac|ogg|opus|wma|weba|ts|m4s|key)(?:\?[^\s"'<>\\]*)?/gi;
+  const namespaceMediaReference = /^(?:[a-z_][a-z0-9_]*\.){4,}(?:m3u8?|mpd|mp4|webm|mov|mkv|flv|f4v|m4v|mpeg|mpg|avi|wmv|asf|ogv|3gp|mp3|m4a|aac|wav|flac|ogg|opus|wma|weba|ts|m4s|key)$/;
   let scannedScriptBytes = 0;
   const scannedScripts = new WeakMap();
+
+  const isNamespaceMediaReference = value => {
+    const path = String(value || "").trim().split(/[?#]/, 1)[0];
+    return !/[\\/]/.test(path) && namespaceMediaReference.test(path);
+  };
 
   const absoluteUrl = (value, baseUrl = location.href) => {
     if (typeof value !== "string" || !value.trim()) return null;
@@ -88,6 +94,7 @@
     for (const match of text.matchAll(quotedMediaUrl)) {
       if (matches++ >= 1000) break;
       const value = match[0].replace(/\\\//g, "/");
+      if (isNamespaceMediaReference(value)) continue;
       const resolved = absoluteUrl(value, resolvedBase);
       if (resolved && mediaExtension.test(resolved)) emit(resolved, "", source);
     }

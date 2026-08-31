@@ -80,6 +80,12 @@ function schedulePersist(state) {
 }
 
 function canonicalize(rawUrl) { try { const url = new URL(rawUrl); url.hash = ""; return url.href; } catch (_) { return rawUrl; } }
+const namespaceMediaLeaf = /^(?:[a-z_][a-z0-9_]*\.){4,}(?:m3u8?|mpd|mp4|webm|mov|mkv|flv|f4v|m4v|mpeg|mpg|avi|wmv|asf|ogv|3gp|mp3|m4a|aac|wav|flac|ogg|opus|wma|weba|ts|m4s|key)$/;
+function isHeuristicNamespaceCandidate(item) {
+  if (item?.inlineManifest || item?.resourceType === "media" || item?.mime || ["network", "dom"].includes(item?.source)) return false;
+  try { return namespaceMediaLeaf.test(decodeURIComponent(new URL(item.url).pathname.split("/").pop() || "")); }
+  catch (_) { return false; }
+}
 function requestContextKey(tabId, url) { return `${tabId}|${canonicalize(url)}`; }
 function rememberRequestContext(tabId, url, context) {
   if (!Number.isInteger(tabId) || tabId < 0 || !url) return;
@@ -145,6 +151,7 @@ async function hashInlineManifest(inlineManifest) {
 
 async function addCandidate(tabId, item) {
   if (!Number.isInteger(tabId) || tabId < 0 || !item?.url) return false;
+  if (isHeuristicNamespaceCandidate(item)) return false;
   await settingsReady;
   if (item.inlineManifest) {
     const bytes = new TextEncoder().encode(item.inlineManifest.text || "").byteLength;
