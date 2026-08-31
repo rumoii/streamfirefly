@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const exe = path.join(root, 'native-host', 'target', 'debug', 'streamfirefly-native.exe');
+const exe = process.env.STREAMFIREFLY_NATIVE_EXE || path.join(root, 'native-host', 'target', 'debug', 'streamfirefly-native.exe');
 const child = spawn(exe, [], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
 const request = Buffer.from(JSON.stringify({ version: 1, id: 'smoke', type: 'host.info', payload: {} }));
 child.stdin.write(Buffer.from([request.length & 255, (request.length >> 8) & 255, (request.length >> 16) & 255, (request.length >> 24) & 255]));

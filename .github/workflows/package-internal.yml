@@ -1,0 +1,119 @@
+name: Package internal test bundles
+
+on:
+  workflow_dispatch:
+    inputs:
+      bundle_version:
+        description: Internal bundle version
+        required: true
+        default: 0.7.0-beta.2
+        type: string
+      expected_commit:
+        description: Exact main commit to package
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: windows-2025
+    timeout-minutes: 90
+    env:
+      BUNDLE_VERSION: ${{ inputs.bundle_version }}
+      EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+    steps:
+      - name: Check out the requested source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Verify source identity
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -ne 'refs/heads/main') { throw "Internal packages must be dispatched from main, got $env:GITHUB_REF" }
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:EXPECTED_COMMIT) { throw "Checked out $actual, expected $env:EXPECTED_COMMIT" }
+          git merge-base --is-ancestor 6da471c0440a153b291e45f648b9ebbf9a0afbe0 HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'The package source does not contain the media false-positive fix' }
+          $status = @(git status --porcelain)
+          if ($status.Count) { throw "Checkout is dirty: $($status -join '; ')" }
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Set up Rust targets
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.98.0-x86_64-pc-windows-msvc --profile minimal
+          rustup default 1.98.0-x86_64-pc-windows-msvc
+          rustup target add x86_64-pc-windows-msvc aarch64-pc-windows-msvc
+          cargo --version
+          rustc --version
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Verify source behavior
+        shell: pwsh
+        run: |
+          npm run validate:extension
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:unit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:browsers
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run lint:firefox
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --manifest-path native-host/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build and audit both architectures
+        shell: pwsh
+        run: |
+          .\tools\package-internal-test.ps1 -BundleVersion $env:BUNDLE_VERSION
+
+      - name: Smoke test the packaged x64 install
+        shell: pwsh
+        run: |
+          $extract = Join-Path $env:RUNNER_TEMP 'streamfirefly-x64-install-smoke'
+          $installDir = Join-Path $env:RUNNER_TEMP 'streamfirefly-x64-installed'
+          Expand-Archive -LiteralPath ".\release\StreamFirefly-$env:BUNDLE_VERSION-internal-x64.zip" -DestinationPath $extract
+          $bundle = Get-ChildItem -LiteralPath $extract -Directory | Select-Object -First 1
+          if (-not $bundle) { throw 'The x64 bundle root was not found' }
+          $installScript = Join-Path $bundle.FullName 'tools\install-internal-test.ps1'
+          $uninstallScript = Join-Path $bundle.FullName 'tools\uninstall-internal-test.ps1'
+          $registryPaths = @(
+            'HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.streamfirefly.native',
+            'HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\com.streamfirefly.native',
+            'HKCU:\Software\Mozilla\NativeMessagingHosts\com.streamfirefly.native'
+          )
+          $installed = $false
+          try {
+            & $installScript -ChromeExtensionId ('a' * 32) -EdgeExtensionId ('b' * 32) -InstallDir $installDir
+            $installed = $true
+            foreach ($path in $registryPaths) { if (-not (Test-Path -LiteralPath $path)) { throw "Native Messaging registration is missing: $path" } }
+            $env:STREAMFIREFLY_NATIVE_EXE = Join-Path $installDir 'streamfirefly-native.exe'
+            npm run test:native
+            if ($LASTEXITCODE -ne 0) { throw 'Packaged Native Host protocol test failed' }
+            & (Join-Path $installDir 'ffmpeg.exe') -version | Select-Object -First 1
+            if ($LASTEXITCODE -ne 0) { throw 'Packaged FFmpeg failed to start' }
+          } finally {
+            if ($installed) { & $uninstallScript -InstallDir $installDir }
+          }
+          foreach ($path in $registryPaths) { if (Test-Path -LiteralPath $path) { throw "Native Messaging registration was not removed: $path" } }
+          if (Test-Path -LiteralPath $installDir) { throw "Temporary install directory was not removed: $installDir" }
+
+      - name: Upload audited internal bundles
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: StreamFirefly-${{ inputs.bundle_version }}-internal
+          path: |
+            release/StreamFirefly-${{ inputs.bundle_version }}-internal-x64.zip
+            release/StreamFirefly-${{ inputs.bundle_version }}-internal-arm64.zip
+            release/INTERNAL-SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

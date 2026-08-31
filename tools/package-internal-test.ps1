@@ -1,20 +1,27 @@
 param(
-  [string]$BundleVersion = '0.7.0-beta.1',
+  [ValidatePattern('^\d+\.\d+\.\d+-beta\.\d+$')]
+  [string]$BundleVersion = '0.7.0-beta.2',
   [string]$OutputDir = (Join-Path (Split-Path -Parent $PSScriptRoot) 'release')
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
+$sourceCommit = (& git -C $root rev-parse HEAD).Trim()
+$sourceBranch = (& git -C $root branch --show-current).Trim()
+if ([string]::IsNullOrWhiteSpace($sourceBranch) -and $env:GITHUB_REF_NAME) { $sourceBranch = $env:GITHUB_REF_NAME }
+$sourceStatus = @(& git -C $root status --porcelain)
+$sourceDirty = $sourceStatus.Count -gt 0
+if ($sourceDirty) { throw "Internal packages require a clean source tree: $($sourceStatus -join '; ')" }
 $cargo = Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe'
 if (-not (Test-Path -LiteralPath $cargo -PathType Leaf)) { throw 'Rust Cargo was not found' }
+$rustc = Join-Path (Split-Path -Parent $cargo) 'rustc.exe'
+if (-not (Test-Path -LiteralPath $rustc -PathType Leaf)) { throw 'Rust compiler was not found next to Cargo' }
+$node = Get-Command node -ErrorAction SilentlyContinue
+if (-not $node) { throw 'Node.js was not found' }
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 & $PSScriptRoot\package-extension.ps1 -OutputDir $OutputDir
 & $PSScriptRoot\package-firefox-extension.ps1 -OutputDir $OutputDir
 $extensionZip = Join-Path $OutputDir 'StreamFirefly-extension-0.7.0.zip'
 $firefoxXpi = Join-Path $OutputDir 'StreamFirefly-firefox-0.7.0-test.xpi'
-$sourceCommit = (& git -C $root rev-parse HEAD).Trim()
-$sourceBranch = (& git -C $root branch --show-current).Trim()
-$sourceStatus = @(& git -C $root status --porcelain)
-$sourceDirty = $sourceStatus.Count -gt 0
 $architectures = @{
   x64 = @{ Target = 'x86_64-pc-windows-msvc'; Machine = '8664' }
   arm64 = @{ Target = 'aarch64-pc-windows-msvc'; Machine = 'AA64' }
@@ -51,6 +58,16 @@ foreach ($architecture in @('x64', 'arm64')) {
       sourceBranch = $sourceBranch
       sourceDirty = $sourceDirty
       sourceChanges = @($sourceStatus)
+      buildEnvironment = [ordered]@{
+        runnerOS = $env:RUNNER_OS
+        runnerArchitecture = $env:RUNNER_ARCH
+        runnerImage = $env:ImageOS
+        runnerImageVersion = $env:ImageVersion
+        cargo = (& $cargo --version).Trim()
+        rustc = (& $rustc --version).Trim()
+        node = (& $node.Source --version).Trim()
+        powershell = $PSVersionTable.PSVersion.ToString()
+      }
       generatedAtUtc = [DateTime]::UtcNow.ToString('o')
     }
     $packageInfo | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $bundleRoot 'PACKAGE-INFO.json') -Encoding UTF8
@@ -64,7 +81,7 @@ foreach ($architecture in @('x64', 'arm64')) {
     if (Test-Path -LiteralPath $archive) { Remove-Item -LiteralPath $archive -Force }
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     [System.IO.Compression.ZipFile]::CreateFromDirectory($bundleRoot, $archive, [System.IO.Compression.CompressionLevel]::Optimal, $true)
-    & $PSScriptRoot\audit-internal-test.ps1 -Archive $archive -ExpectedArchitecture $architecture
+    & $PSScriptRoot\audit-internal-test.ps1 -Archive $archive -ExpectedArchitecture $architecture -ExpectedBundleVersion $BundleVersion -ExpectedSourceCommit $sourceCommit
     $archives += $archive
   } finally {
     if (Test-Path -LiteralPath $tempBase) { Remove-Item -LiteralPath $tempBase -Recurse -Force }
