@@ -9,6 +9,7 @@ const listeners = {};
 const nativeListeners = {};
 const localValues = {};
 const sessionValues = {};
+let fetchResponse = new Response('#EXTM3U\n#EXTINF:2,\nsegment.ts\n', { headers: { 'content-type': 'application/vnd.apple.mpegurl' } });
 const storageArea = values => ({
   async get(query) {
     if (query == null) return { ...values };
@@ -39,13 +40,13 @@ const api = {
     connectNative: () => ({
       onMessage: { addListener: listener => { nativeListeners.message = listener; } },
       onDisconnect: { addListener: listener => { nativeListeners.disconnect = listener; } },
-      postMessage: message => queueMicrotask(() => nativeListeners.message({ version: 1, id: message.id, ok: true, protocolVersion: 2, capabilities: ['inline-hls-v1'] }))
+      postMessage: message => queueMicrotask(() => nativeListeners.message({ version: 1, id: message.id, ok: true, protocolVersion: 3, supportedProtocolVersions: [2, 3], capabilities: ['inline-hls-v1', 'task-control-v1'] }))
     })
   },
   tabs: { query: async () => [{ id: 7, active: true, url: 'https://media.example/page', lastAccessed: 1 }], onRemoved: { addListener: listener => { listeners.removed = listener; } } }
 };
 const source = fs.readFileSync(path.join(root, 'extension', 'background.js'), 'utf8');
-vm.runInNewContext(source, { chrome: api, URL, Map, Set, Number, Object, Date, Promise, TextEncoder, Uint8Array, crypto: webcrypto, structuredClone, setTimeout, clearTimeout, console });
+vm.runInNewContext(source, { chrome: api, URL, Map, Set, Number, Object, Date, Promise, TextEncoder, TextDecoder, Headers, Uint8Array, crypto: webcrypto, structuredClone, fetch: async () => fetchResponse, setTimeout, clearTimeout, console });
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const send = (message, sender = {}) => new Promise((resolve, reject) => {
@@ -56,7 +57,7 @@ const send = (message, sender = {}) => new Promise((resolve, reject) => {
 });
 
 const nativeInfo = await send({ type: 'native.connect' });
-if (!nativeInfo.ok || !nativeInfo.capabilities.includes('inline-hls-v1')) throw new Error(`Native capability negotiation failed: ${JSON.stringify(nativeInfo)}`);
+if (!nativeInfo.ok || !nativeInfo.capabilities.includes('inline-hls-v1') || !nativeInfo.capabilities.includes('task-control-v1')) throw new Error(`Native capability negotiation failed: ${JSON.stringify(nativeInfo)}`);
 
 listeners.beforeHeaders({ tabId: 7, url: 'https://media.example/a.mp4#fragment', requestId: '1', requestHeaders: [{ name: 'Referer', value: 'https://media.example/page' }, { name: 'Authorization', value: 'Bearer preview' }, { name: 'X-Secret', value: 'must-not-leak' }] });
 listeners.headers({ tabId: 7, url: 'https://media.example/a.mp4#fragment', requestId: '1', statusCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'video/mp4' }, { name: 'Content-Length', value: '1024' }, { name: 'Content-Disposition', value: 'attachment; filename=movie.mp4' }] });
@@ -87,6 +88,12 @@ const inline = candidates.find(item => item.id.startsWith('inline-hls:'));
 if (!inline) throw new Error('Inline manifest did not receive a content fingerprint');
 if (inline.requestHeaders.cookie || inline.requestHeaders.authorization) throw new Error('Inline manifest inherited sensitive request credentials');
 if (inline.referer !== 'https://media.example/page') throw new Error('Inline manifest did not inherit its safe request context');
+
+const manifest = await send({ type: 'media.fetchText', tabId: 7, id: video.id, url: 'https://media.example/master.m3u8' });
+if (!manifest.ok || !manifest.text.startsWith('#EXTM3U')) throw new Error(`Bounded manifest fetch failed: ${JSON.stringify(manifest)}`);
+fetchResponse = new Response('too large', { headers: { 'content-length': String(4 * 1024 * 1024 + 1) } });
+const oversizedManifest = await send({ type: 'media.fetchText', tabId: 7, id: video.id, url: 'https://media.example/large.m3u8' });
+if (oversizedManifest.ok || oversizedManifest.error !== 'media_manifest_too_large') throw new Error(`Oversized manifest was not rejected: ${JSON.stringify(oversizedManifest)}`);
 
 await send({ type: 'preview.headers.apply', payload: { url: video.url, headers: video.requestHeaders } });
 if (listeners.previewRules?.addRules?.[0]?.condition?.initiatorDomains?.[0] !== 'streamfirefly-test') throw new Error(`Preview rule was not scoped to the extension: ${JSON.stringify(listeners.previewRules)}`);

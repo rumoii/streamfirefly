@@ -14,5 +14,5 @@ child.stdin.end();
 const [output] = await once(child.stdout, 'data');
 const size = output.readUInt32LE(0);
 const response = JSON.parse(output.subarray(4, 4 + size).toString('utf8'));
-if (!response.ok || response.id !== 'smoke' || response.protocolVersion !== 2 || !response.capabilities?.includes('inline-hls-v1')) throw new Error(`Unexpected native response: ${JSON.stringify(response)}`);
+if (!response.ok || response.id !== 'smoke' || response.protocolVersion !== 3 || !response.supportedProtocolVersions?.includes(2) || !response.capabilities?.includes('inline-hls-v1') || !response.capabilities?.includes('task-control-v1')) throw new Error(`Unexpected native response: ${JSON.stringify(response)}`);
 console.log('Native protocol capability test passed');

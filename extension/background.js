@@ -24,15 +24,15 @@ api.storage?.onChanged?.addListener((changes, area) => {
 });
 
 function stateKey(tabId) { return `${STATE_PREFIX}${tabId}`; }
-function emptyState(tabId, pageUrl = "") { return { schemaVersion: STATE_VERSION, tabId, pageUrl, lastTouchedAt: Date.now(), candidates: new Map() }; }
-function serializeState(state) { return { schemaVersion: STATE_VERSION, tabId: state.tabId, pageUrl: state.pageUrl, lastTouchedAt: state.lastTouchedAt, candidates: [...state.candidates.values()] }; }
+function emptyState(tabId, pageUrl = "") { return { schemaVersion: STATE_VERSION, tabId, pageUrl, paused: false, lastTouchedAt: Date.now(), candidates: new Map() }; }
+function serializeState(state) { return { schemaVersion: STATE_VERSION, tabId: state.tabId, pageUrl: state.pageUrl, paused: Boolean(state.paused), lastTouchedAt: state.lastTouchedAt, candidates: [...state.candidates.values()] }; }
 
 async function loadTabState(tabId) {
   if (candidatesByTab.has(tabId)) return candidatesByTab.get(tabId);
   let stored;
   try { stored = (await api.storage.session.get(stateKey(tabId)))[stateKey(tabId)]; } catch (_) {}
   const state = stored?.schemaVersion === STATE_VERSION && Array.isArray(stored.candidates)
-    ? { ...stored, tabId, candidates: new Map(stored.candidates.filter(item => item?.id && item?.url).map(item => [item.id, item])) }
+    ? { ...stored, tabId, paused: Boolean(stored.paused), candidates: new Map(stored.candidates.filter(item => item?.id && item?.url).map(item => [item.id, item])) }
     : emptyState(tabId);
   candidatesByTab.set(tabId, state);
   return state;
@@ -80,6 +80,7 @@ function schedulePersist(state) {
 }
 
 function canonicalize(rawUrl) { try { const url = new URL(rawUrl); url.hash = ""; return url.href; } catch (_) { return rawUrl; } }
+function updateBadge(state) { api.action.setBadgeText({ tabId: state.tabId, text: state.paused ? "Ⅱ" : state.candidates.size ? String(state.candidates.size) : "" }).catch?.(() => {}); }
 const namespaceMediaLeaf = /^(?:[a-z_][a-z0-9_]*\.){4,}(?:m3u8?|mpd|mp4|webm|mov|mkv|flv|f4v|m4v|mpeg|mpg|avi|wmv|asf|ogv|3gp|mp3|m4a|aac|wav|flac|ogg|opus|wma|weba|ts|m4s|key)$/;
 function isHeuristicNamespaceCandidate(item) {
   if (item?.inlineManifest || item?.resourceType === "media" || item?.mime || ["network", "dom"].includes(item?.source)) return false;
@@ -159,6 +160,7 @@ async function addCandidate(tabId, item) {
   }
   return queueTab(tabId, async () => {
     const state = await loadTabState(tabId);
+    if (state.paused) return false;
     const canonicalUrl = canonicalize(item.url);
     const id = item.inlineManifest ? await hashInlineManifest(item.inlineManifest) : canonicalUrl;
     const existing = state.candidates.get(id);
@@ -175,7 +177,7 @@ async function addCandidate(tabId, item) {
     const inlineItems = [...state.candidates.values()].filter(value => value.inlineManifest).sort((a, b) => (b.lastSeenAt || 0) - (a.lastSeenAt || 0));
     for (const stale of inlineItems.slice(4)) state.candidates.delete(stale.id);
     schedulePersist(state);
-    api.action.setBadgeText({ tabId, text: String(state.candidates.size) }).catch?.(() => {});
+    updateBadge(state);
     return true;
   });
 }
@@ -229,7 +231,89 @@ api.webNavigation?.onHistoryStateUpdated?.addListener(details => {
   if (details.frameId !== 0) return;
   void clearTab(details.tabId, details.url).then(() => api.tabs.sendMessage?.(details.tabId, { type: "media.rescan" })?.catch?.(() => {}));
 });
+
+async function setSniffingPaused(tabId, paused) {
+  return queueTab(tabId, async () => {
+    const state = await loadTabState(tabId);
+    state.paused = Boolean(paused);
+    state.lastTouchedAt = Date.now();
+    await persistState(state);
+    updateBadge(state);
+    return { ok: true, paused: state.paused };
+  });
+}
+
+async function removeCandidates(tabId, ids) {
+  return queueTab(tabId, async () => {
+    const state = await loadTabState(tabId);
+    const selected = new Set(Array.isArray(ids) ? ids.filter(Boolean) : []);
+    let removed = 0;
+    for (const id of selected) if (state.candidates.delete(id)) removed += 1;
+    state.lastTouchedAt = Date.now();
+    await persistState(state);
+    updateBadge(state);
+    return { ok: true, removed };
+  });
+}
+
+async function candidateFor(tabId, id) {
+  const state = await loadTabState(tabId);
+  if (!id) return [...state.candidates.values()].filter(item => ["hls", "dash"].includes(item.type));
+  return state.candidates.get(id) || null;
+}
+
+async function readBoundedText(response, maxBytes) {
+  const declaredLength = Number(response.headers?.get?.("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) throw new Error("media_manifest_too_large");
+  if (!response.body?.getReader) {
+    const text = await response.text();
+    if (new TextEncoder().encode(text).byteLength > maxBytes) throw new Error("media_manifest_too_large");
+    return text;
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let received = 0;
+  let text = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value.byteLength;
+      if (received > maxBytes) throw new Error("media_manifest_too_large");
+      text += decoder.decode(value, { stream: true });
+    }
+    return text + decoder.decode();
+  } finally {
+    reader.releaseLock?.();
+  }
+}
+
+async function fetchMediaText(tabId, id, requestedUrl) {
+  const candidate = await candidateFor(tabId, id);
+  const owner = Array.isArray(candidate) ? null : candidate;
+  if (!owner) return { ok: false, error: "media_candidate_not_found" };
+  let url;
+  try { url = new URL(requestedUrl || owner.url); }
+  catch (_) { return { ok: false, error: "media_url_invalid" }; }
+  if (!/^https?:$/.test(url.protocol)) return { ok: false, error: "media_url_unsupported" };
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(owner.requestHeaders || {})) {
+    if (["authorization", "origin", "referer"].includes(name.toLowerCase()) && typeof value === "string" && value) headers.set(name, value);
+  }
+  const response = await fetch(url.href, { headers, credentials: "include", redirect: "follow" });
+  if (!response.ok) return { ok: false, error: "media_fetch_failed", status: response.status };
+  let text;
+  try { text = await readBoundedText(response, 4 * 1024 * 1024); }
+  catch (error) { return { ok: false, error: error.message === "media_manifest_too_large" ? error.message : "media_fetch_failed" }; }
+  return { ok: true, url: response.url || url.href, text };
+}
 api.tabs.onRemoved.addListener(tabId => { void clearTab(tabId, "", true); });
+
+api.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true }).catch?.(() => {});
+api.action?.onClicked?.addListener(tab => {
+  if (api.sidePanel?.open && Number.isInteger(tab?.windowId)) { api.sidePanel.open({ windowId: tab.windowId }).catch?.(() => {}); return; }
+  api.sidebarAction?.open?.().catch?.(() => {});
+});
 
 function ensureNative() {
   if (native.port) return;
@@ -285,6 +369,29 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     queueTab(tabId, async () => [...(await loadTabState(tabId)).candidates.values()]).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
     return true;
   }
+  if (message?.type === "media.sniffing.get") {
+    const tabId = message.tabId ?? sender.tab?.id;
+    loadTabState(tabId).then(state => sendResponse({ ok: true, paused: Boolean(state.paused) })).catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+  if (message?.type === "media.sniffing.set") {
+    const tabId = message.tabId ?? sender.tab?.id;
+    setSniffingPaused(tabId, message.payload?.paused).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+  if (message?.type === "media.remove") {
+    const tabId = message.tabId ?? sender.tab?.id;
+    removeCandidates(tabId, message.payload?.ids).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+  if (message?.type === "media.candidate.get") {
+    candidateFor(message.tabId, message.id).then(candidate => sendResponse({ ok: true, candidate })).catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+  if (message?.type === "media.fetchText") {
+    fetchMediaText(message.tabId, message.id, message.url).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
   if (message?.type === "media.add") { addCandidate(sender.tab?.id, { ...message.candidate, source: message.candidate?.source || "dom" }).then(ok => sendResponse({ ok })).catch(error => sendResponse({ ok: false, error: error.message })); return true; }
   if (message?.type === "probe.install") {
     (async () => {
@@ -302,7 +409,7 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     nativeInfo().then(info => info.capabilities.includes("inline-hls-v1") ? nativeRequestPromise(message.type, message.payload).then(sendResponse) : sendResponse({ ok: false, error: "inline_hls_native_upgrade_required" }));
     return true;
   }
-  if (["task.create", "task.prepare", "task.list", "task.delete", "path.validate"].includes(message?.type)) { nativeRequestPromise(message.type, message.payload || {}).then(sendResponse); return true; }
+  if (["task.create", "task.prepare", "task.list", "task.delete", "task.control", "path.validate"].includes(message?.type)) { nativeRequestPromise(message.type, message.payload || {}).then(sendResponse); return true; }
   if (message?.type === "preview.headers.apply") { updatePreviewHeaders({ ...message.payload, action: "apply" }).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message })); return true; }
   if (message?.type === "preview.headers.clear") { updatePreviewHeaders({ action: "clear" }).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message })); return true; }
   return false;

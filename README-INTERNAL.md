@@ -1,4 +1,4 @@
-# StreamFirefly 0.7.0 Beta 2 内测指南
+# StreamFirefly 0.8.0 Beta 1 内测指南
 
 此版本仅用于受邀测试，不是 Chrome Web Store 正式发布版本。测试人员需要登录受邀的 GitHub 账号，从私有 Release 下载测试包。请勿转发安装包、Release 链接或测试数据。
 
@@ -8,9 +8,9 @@ StreamFirefly 不绕过 DRM。请只测试自己拥有版权或已获授权的�
 
 1. 接受 `rumoii/streamfirefly-internal-releases` 私有仓库的协作者邀请。
 2. 登录 GitHub，进入该仓库的 **Releases** 页面。
-3. 打开 `StreamFirefly 0.7.0 Beta 2 内测版`，下载与当前 Windows 架构匹配的压缩包：
-   - Intel 或 AMD Windows 电脑：`StreamFirefly-0.7.0-beta.2-internal-x64.zip`
-   - Windows ARM 电脑：`StreamFirefly-0.7.0-beta.2-internal-arm64.zip`
+3. 打开 `StreamFirefly 0.8.0 Beta 1 内测版`，下载与当前 Windows 架构匹配的压缩包：
+   - Intel 或 AMD Windows 电脑：`StreamFirefly-0.8.0-beta.1-internal-x64.zip`
+   - Windows ARM 电脑：`StreamFirefly-0.8.0-beta.1-internal-arm64.zip`
 4. 同时下载 `INTERNAL-SHA256SUMS.txt`，用于核对压缩包完整性。
 
 可以在 Windows 的“设置 → 系统 → 系统信息 → 系统类型”中查看架构。大多数 Intel、AMD 电脑使用 x64；仅骁龙等 Windows ARM 设备使用 ARM64。
@@ -22,7 +22,7 @@ StreamFirefly 不绕过 DRM。请只测试自己拥有版权或已获授权的�
 在下载目录打开 PowerShell，计算压缩包的 SHA-256：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 -LiteralPath '.\StreamFirefly-0.7.0-beta.2-internal-x64.zip'
+Get-FileHash -Algorithm SHA256 -LiteralPath '.\StreamFirefly-0.8.0-beta.1-internal-x64.zip'
 ```
 
 ARM64 测试人员将文件名替换为 ARM64 包。输出应与 `INTERNAL-SHA256SUMS.txt` 中对应记录一致；不一致时不要继续安装，请重新下载并反馈。
@@ -30,8 +30,8 @@ ARM64 测试人员将文件名替换为 ARM64 包。输出应与 `INTERNAL-SHA25
 为避免 Windows 保留互联网下载标记，先解除 ZIP 锁定，再完整解压：
 
 ```powershell
-Unblock-File -LiteralPath '.\StreamFirefly-0.7.0-beta.2-internal-x64.zip'
-Expand-Archive -LiteralPath '.\StreamFirefly-0.7.0-beta.2-internal-x64.zip' -DestinationPath '.\StreamFirefly-Test'
+Unblock-File -LiteralPath '.\StreamFirefly-0.8.0-beta.1-internal-x64.zip'
+Expand-Archive -LiteralPath '.\StreamFirefly-0.8.0-beta.1-internal-x64.zip' -DestinationPath '.\StreamFirefly-Test'
 ```
 
 不要直接在压缩包内运行脚本，也不要单独移动 `extension`、`native-host` 或 `tools` 文件夹。
@@ -62,7 +62,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 如需测试 Firefox 142 或更高版本：
 
 1. 打开 `about:debugging#/runtime/this-firefox`，点击“临时载入附加组件”；
-2. 选择包内的 `StreamFirefly-firefox-0.7.0-test.xpi`；
+2. 选择包内的 `StreamFirefly-firefox-0.8.0-test.xpi`；
 3. Firefox 扩展 ID 固定为 `streamfirefly@example.invalid`。如果只测试 Firefox，可直接运行以下命令注册 Native Host：
 
 ```powershell
@@ -75,6 +75,10 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 ### 1. 资源识别与预览
 
+- 点击扩展图标，确认 Chrome/Edge 直接打开浏览器右侧栏；资源、下载和设置可在侧边栏内部切换，设置不再打开新标签页；
+- 点击“暂停嗅探”和“继续嗅探”，确认暂停期间不新增资源且角标显示暂停状态；
+- 使用正则、类型、大小范围和时长排序筛选资源，并验证批量复制、下载和移除；
+- 对 HLS 或 DASH 点击“解析”，确认媒体工作台能够显示清晰度、轨道、切片、时长和加密/内容保护信息；
 - 分别打开含视频和音频的网页，确认资源可以被识别；图片默认不显示，在设置中开启“识别图片”并刷新目标网页后再确认图片识别；
 - 播放一次网页视频，确认普通媒体、HLS 和 DASH 资源能够在实际请求发生后出现；
 - 如果页面产生大量 TS、M4S 或 KEY 请求，确认它们只出现在默认折叠的“媒体分片”区域，并按每次 100 个展开；
@@ -82,11 +86,13 @@ Set-ExecutionPolicy -Scope Process Bypass
 - 展开资源详情，检查类型、地址、大小、分辨率和时长等已知信息；
 - 切换嗅探顺序、文件大小和类型分组，确认排序结果、分组数量和大小提示符合预期；
 - 收起资源列表，确认长列表隐藏且下载任务可以直接看到；再次展开后资源仍完整；
-- 有下载任务时，点击顶部“下载任务”按钮，确认任务区自动展开并滚动到可见位置；
+- 点击侧边栏顶部的“下载”导航，确认资源列表切换为下载任务视图；再次点击“资源”后资源列表仍完整；
 - 检查视频封面；点击可预览资源时，确认能够播放或查看；
 - 刷新、重复播放或重复请求同一资源，确认列表不会产生明显重复项。
 
 ### 2. 下载行为
+
+- 对进行中的普通文件任务执行暂停和继续，确认暂停期间文件大小不再变化，继续后能够完成；对失败或取消任务验证重试；
 
 - 使用默认目录下载普通视频、音频或图片，确认最终文件可正常打开；
 - 修改默认保存目录后重新下载，确认文件进入所选目录；

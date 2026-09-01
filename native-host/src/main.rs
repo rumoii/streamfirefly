@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::{self, OpenOptions},
     io::{self, Read, Write},
     path::{Path, PathBuf},
@@ -85,6 +85,7 @@ struct Store {
     tasks: Arc<Mutex<Vec<Task>>>,
     processes: Arc<Mutex<HashMap<String, Vec<Arc<Mutex<Child>>>>>>,
     cancellations: Arc<Mutex<HashMap<String, bool>>>,
+    pauses: Arc<Mutex<HashSet<String>>>,
 }
 type Writer = Arc<Mutex<io::BufWriter<io::Stdout>>>;
 
@@ -158,7 +159,13 @@ fn load_store(path: &Path) -> Store {
         strip_sensitive_headers(task);
         if matches!(
             task.state.as_str(),
-            "running" | "queued" | "starting" | "downloading" | "cancelling"
+            "running"
+                | "queued"
+                | "starting"
+                | "downloading"
+                | "retrying"
+                | "pausing"
+                | "cancelling"
         ) {
             task.state = "interrupted".into();
             task.phase = "interrupted".into();
@@ -175,6 +182,7 @@ fn load_store(path: &Path) -> Store {
         tasks: Arc::new(Mutex::new(tasks)),
         processes: Arc::new(Mutex::new(HashMap::new())),
         cancellations: Arc::new(Mutex::new(HashMap::new())),
+        pauses: Arc::new(Mutex::new(HashSet::new())),
     };
     save_store(&store);
     store
@@ -349,7 +357,10 @@ fn validate_manifest_line(line: &str) -> Result<(), &'static str> {
 }
 
 fn inline_manifest(payload: &Value) -> Result<Option<InlineManifest>, &'static str> {
-    let Some(value) = payload.get("inlineManifest").filter(|value| !value.is_null()) else {
+    let Some(value) = payload
+        .get("inlineManifest")
+        .filter(|value| !value.is_null())
+    else {
         return Ok(None);
     };
     if value["format"].as_str() != Some("hls") {
@@ -375,14 +386,14 @@ fn inline_manifest(payload: &Value) -> Result<Option<InlineManifest>, &'static s
     }))
 }
 
-fn write_inline_manifest(
-    task_id: &str,
-    manifest: &InlineManifest,
-) -> io::Result<TempManifestFile> {
+fn write_inline_manifest(task_id: &str, manifest: &InlineManifest) -> io::Result<TempManifestFile> {
     let dir = inline_manifest_dir();
     fs::create_dir_all(&dir)?;
     let path = dir.join(format!("{task_id}.m3u8"));
-    let mut file = OpenOptions::new().write(true).create_new(true).open(&path)?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)?;
     if let Err(error) = file
         .write_all(manifest.text.as_bytes())
         .and_then(|_| file.flush())
@@ -397,7 +408,9 @@ fn write_inline_manifest(
 fn extension_for(payload: &Value) -> String {
     let url = payload["url"].as_str().unwrap_or("");
     let mime = payload["mime"].as_str().unwrap_or("");
-    if payload.get("inlineManifest").is_some_and(|value| !value.is_null())
+    if payload
+        .get("inlineManifest")
+        .is_some_and(|value| !value.is_null())
         || mime.contains("mpegurl")
         || mime.contains("dash+xml")
         || url.contains(".m3u8")
@@ -535,7 +548,11 @@ fn create_task(store: &Store, payload: &Value) -> Result<Task, &'static str> {
     let url = payload["url"]
         .as_str()
         .filter(|url| is_network_url(url))
-        .or_else(|| inline_manifest.as_ref().map(|manifest| manifest.base_url.as_str()))
+        .or_else(|| {
+            inline_manifest
+                .as_ref()
+                .map(|manifest| manifest.base_url.as_str())
+        })
         .ok_or("invalid_url")?
         .to_string();
     let title = safe_title(
@@ -653,22 +670,39 @@ fn clear_cancellation(store: &Store, id: &str) {
     store.cancellations.lock().unwrap().remove(id);
 }
 
+fn clear_pause(store: &Store, id: &str) {
+    store.pauses.lock().unwrap().remove(id);
+}
+
+fn pause_requested(store: &Store, id: &str) -> bool {
+    store.pauses.lock().unwrap().contains(id)
+}
+
 fn cancel_requested(store: &Store, id: &str) -> bool {
     store.cancellations.lock().unwrap().contains_key(id)
 }
 
-fn mark_cancelled(store: &Store, writer: &Writer, id: &str) {
+fn mark_stopped(store: &Store, writer: &Writer, id: &str) {
     unregister_all_processes(store, id);
+    let paused = pause_requested(store, id);
     update(store, writer, id, |task| {
-        task.state = "cancelled".into();
-        task.phase = "cancelled".into();
+        task.state = if paused { "paused" } else { "cancelled" }.into();
+        task.phase = if paused { "paused" } else { "cancelled" }.into();
         task.speed_bytes_per_second = 0;
         task.eta_seconds = None;
         task.active_connections = 0;
         task.error = None;
-        task.message = Some("下载已取消".into());
+        task.message = Some(
+            if paused {
+                "下载已暂停"
+            } else {
+                "下载已取消"
+            }
+            .into(),
+        );
     });
     clear_cancellation(store, id);
+    clear_pause(store, id);
 }
 
 fn stop_process(store: &Store, id: &str) {
@@ -685,6 +719,154 @@ fn stop_process(store: &Store, id: &str) {
             let _ = child.wait();
         }
     }
+}
+
+fn wait_for_state(store: &Store, id: &str, expected: &[&str], deadline: Instant) -> bool {
+    loop {
+        let reached = store
+            .tasks
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|item| item.id == id)
+            .map(|item| expected.contains(&item.state.as_str()))
+            .unwrap_or(false);
+        if reached || Instant::now() >= deadline {
+            return reached;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn task_control(store: &Store, writer: &Writer, payload: &Value) -> Result<Task, &'static str> {
+    let id = payload["id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .ok_or("task_id_empty")?;
+    let action = payload["action"].as_str().ok_or("task_action_empty")?;
+    let task = store
+        .tasks
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|task| task.id == id)
+        .cloned()
+        .ok_or("task_not_found")?;
+    match action {
+        "pause" => {
+            if task.state == "paused" {
+                return Ok(sanitized_task(&task));
+            }
+            if !matches!(
+                task.state.as_str(),
+                "queued" | "starting" | "running" | "retrying"
+            ) {
+                return Err("task_not_pauseable");
+            }
+            store.pauses.lock().unwrap().insert(id.into());
+            store.cancellations.lock().unwrap().insert(id.into(), true);
+            update(store, writer, id, |task| {
+                task.state = "pausing".into();
+                task.phase = "pausing".into();
+                task.message = Some("正在暂停下载".into());
+            });
+            stop_process(store, id);
+            if !wait_for_state(
+                store,
+                id,
+                &["paused"],
+                Instant::now() + Duration::from_secs(5),
+            ) {
+                clear_pause(store, id);
+                clear_cancellation(store, id);
+                return Err("pause_failed");
+            }
+        }
+        "cancel" => {
+            if task.state == "cancelled" {
+                return Ok(sanitized_task(&task));
+            }
+            if !matches!(
+                task.state.as_str(),
+                "queued" | "starting" | "running" | "retrying" | "pausing" | "paused"
+            ) {
+                return Err("task_not_cancellable");
+            }
+            clear_pause(store, id);
+            store.cancellations.lock().unwrap().insert(id.into(), true);
+            update(store, writer, id, |task| {
+                task.state = "cancelling".into();
+                task.phase = "cancelling".into();
+                task.message = Some("正在取消下载".into());
+            });
+            stop_process(store, id);
+            if task.state == "paused" {
+                mark_stopped(store, writer, id);
+            }
+            if !wait_for_state(
+                store,
+                id,
+                &["cancelled"],
+                Instant::now() + Duration::from_secs(5),
+            ) {
+                clear_cancellation(store, id);
+                return Err("cancel_failed");
+            }
+        }
+        "resume" | "retry" => {
+            let allowed = if action == "resume" {
+                matches!(task.state.as_str(), "paused" | "interrupted")
+            } else {
+                matches!(
+                    task.state.as_str(),
+                    "failed" | "cancelled" | "interrupted" | "paused"
+                )
+            };
+            if !allowed {
+                return Err(if action == "resume" {
+                    "task_not_resumable"
+                } else {
+                    "task_not_retryable"
+                });
+            }
+            clear_pause(store, id);
+            clear_cancellation(store, id);
+            update(store, writer, id, |task| {
+                task.state = "retrying".into();
+                task.phase = "retrying".into();
+                task.attempt = task.attempt.saturating_add(1);
+                task.error = None;
+                task.speed_bytes_per_second = 0;
+                task.eta_seconds = None;
+                task.message = Some(
+                    if action == "resume" {
+                        "正在恢复下载"
+                    } else {
+                        "正在重新下载"
+                    }
+                    .into(),
+                );
+            });
+            let restarted = store
+                .tasks
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|task| task.id == id)
+                .cloned()
+                .ok_or("task_not_found")?;
+            start_download(store.clone(), writer.clone(), restarted);
+        }
+        _ => return Err("task_action_unsupported"),
+    }
+    store
+        .tasks
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|task| task.id == id)
+        .map(sanitized_task)
+        .ok_or("task_not_found")
 }
 
 fn delete_output(path: &str) -> Result<bool, &'static str> {
@@ -717,8 +899,9 @@ fn delete_task(store: &Store, writer: &Writer, payload: &Value) -> Result<Value,
         .ok_or("task_not_found")?;
     if matches!(
         task.state.as_str(),
-        "queued" | "starting" | "running" | "cancelling"
+        "queued" | "starting" | "running" | "retrying" | "pausing" | "cancelling"
     ) {
+        clear_pause(store, id);
         update(store, writer, id, |task| {
             task.state = "cancelling".into();
             task.phase = "cancelling".into();
@@ -788,6 +971,7 @@ fn delete_task(store: &Store, writer: &Writer, payload: &Value) -> Result<Value,
         return Err("task_not_found");
     }
     clear_cancellation(store, id);
+    clear_pause(store, id);
     save_store(store);
     emit(writer, json!({"version":1,"type":"task.deleted","id":id}));
     Ok(
@@ -955,7 +1139,7 @@ fn start_single_http_download(
                 let _ = child.kill();
                 let _ = child.wait();
             }
-            mark_cancelled(&store, &writer, &task.id);
+            mark_stopped(&store, &writer, &task.id);
             return;
         }
         let bytes = fs::metadata(&output).map(|m| m.len()).unwrap_or(last_bytes);
@@ -1002,7 +1186,7 @@ fn start_single_http_download(
             Ok(Some(status)) => {
                 unregister_process(&store, &task.id, &child);
                 if cancel_requested(&store, &task.id) {
-                    mark_cancelled(&store, &writer, &task.id);
+                    mark_stopped(&store, &writer, &task.id);
                     return;
                 }
                 if status.success() {
@@ -1120,7 +1304,7 @@ fn start_parallel_http_download(
                 }
             }
             let _ = fs::remove_dir_all(&part_dir);
-            mark_cancelled(&store, &writer, &task.id);
+            mark_stopped(&store, &writer, &task.id);
             return true;
         }
         let bytes: u64 = children
@@ -1227,7 +1411,7 @@ fn start_parallel_http_download(
 fn start_http_download(store: Store, writer: Writer, task: Task, output: String) {
     let probe = probe_size(&store, &task);
     if probe.cancelled || cancel_requested(&store, &task.id) {
-        mark_cancelled(&store, &writer, &task.id);
+        mark_stopped(&store, &writer, &task.id);
         return;
     }
     if probe.accept_ranges && task.download_threads > 1 {
@@ -1259,7 +1443,7 @@ fn bundled_tool(name: &str) -> PathBuf {
 fn start_download(store: Store, writer: Writer, task: Task) {
     thread::spawn(move || {
         if cancel_requested(&store, &task.id) {
-            mark_cancelled(&store, &writer, &task.id);
+            mark_stopped(&store, &writer, &task.id);
             return;
         }
         let Some(output) = task.output.clone() else {
@@ -1379,7 +1563,7 @@ fn start_download(store: Store, writer: Writer, task: Task) {
                     let _ = child.kill();
                     let _ = child.wait();
                 }
-                mark_cancelled(&store, &writer, &task.id);
+                mark_stopped(&store, &writer, &task.id);
                 return;
             }
             let bytes = fs::metadata(&output).map(|m| m.len()).unwrap_or(last_bytes);
@@ -1402,7 +1586,7 @@ fn start_download(store: Store, writer: Writer, task: Task) {
                 Ok(Some(status)) if status.success() => {
                     unregister_process(&store, &task.id, &child);
                     if cancel_requested(&store, &task.id) {
-                        mark_cancelled(&store, &writer, &task.id);
+                        mark_stopped(&store, &writer, &task.id);
                         return;
                     }
                     update(&store, &writer, &task.id, |t| {
@@ -1420,7 +1604,7 @@ fn start_download(store: Store, writer: Writer, task: Task) {
                 Ok(Some(_)) => {
                     unregister_process(&store, &task.id, &child);
                     if cancel_requested(&store, &task.id) {
-                        mark_cancelled(&store, &writer, &task.id);
+                        mark_stopped(&store, &writer, &task.id);
                         return;
                     }
                     update(&store, &writer, &task.id, |t| {
@@ -1460,7 +1644,9 @@ fn main() -> io::Result<()> {
         };
         let id = message["id"].clone();
         let response = match message["type"].as_str().unwrap_or("") {
-            "host.info" => json!({"version":1,"id":id,"ok":true,"protocolVersion":2,"capabilities":["inline-hls-v1"]}),
+            "host.info" => {
+                json!({"version":1,"id":id,"ok":true,"protocolVersion":3,"supportedProtocolVersions":[2,3],"capabilities":["inline-hls-v1","task-control-v1","task-pause-resume-v1"]})
+            }
             "task.create" => match create_task(&store, &message["payload"]) {
                 Ok(task) => {
                     start_download(store.clone(), writer.clone(), task.clone());
@@ -1474,6 +1660,10 @@ fn main() -> io::Result<()> {
             },
             "task.delete" => match delete_task(&store, &writer, &message["payload"]) {
                 Ok(value) => json!({"version":1,"id":id,"ok":true,"payload":value}),
+                Err(error) => json!({"version":1,"id":id,"ok":false,"error":error}),
+            },
+            "task.control" => match task_control(&store, &writer, &message["payload"]) {
+                Ok(task) => json!({"version":1,"id":id,"ok":true,"task":task}),
                 Err(error) => json!({"version":1,"id":id,"ok":false,"error":error}),
             },
             "task.list" => {

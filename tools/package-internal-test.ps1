@@ -1,6 +1,6 @@
 param(
   [ValidatePattern('^\d+\.\d+\.\d+-beta\.\d+$')]
-  [string]$BundleVersion = '0.7.0-beta.2',
+  [string]$BundleVersion = '0.8.0-beta.1',
   [string]$OutputDir = (Join-Path (Split-Path -Parent $PSScriptRoot) 'release')
 )
 $ErrorActionPreference = 'Stop'
@@ -20,8 +20,8 @@ if (-not $node) { throw 'Node.js was not found' }
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 & $PSScriptRoot\package-extension.ps1 -OutputDir $OutputDir
 & $PSScriptRoot\package-firefox-extension.ps1 -OutputDir $OutputDir
-$extensionZip = Join-Path $OutputDir 'StreamFirefly-extension-0.7.0.zip'
-$firefoxXpi = Join-Path $OutputDir 'StreamFirefly-firefox-0.7.0-test.xpi'
+$extensionZip = Join-Path $OutputDir 'StreamFirefly-extension-0.8.0.zip'
+$firefoxXpi = Join-Path $OutputDir 'StreamFirefly-firefox-0.8.0-test.xpi'
 $architectures = @{
   x64 = @{ Target = 'x86_64-pc-windows-msvc'; Machine = '8664' }
   arm64 = @{ Target = 'aarch64-pc-windows-msvc'; Machine = 'AA64' }
@@ -38,8 +38,8 @@ foreach ($architecture in @('x64', 'arm64')) {
   New-Item -ItemType Directory -Path $bundleRoot | Out-Null
   try {
     Expand-Archive -LiteralPath $extensionZip -DestinationPath (Join-Path $bundleRoot 'extension')
-    Copy-Item -LiteralPath $extensionZip -Destination (Join-Path $bundleRoot 'StreamFirefly-extension-0.7.0.zip')
-    Copy-Item -LiteralPath $firefoxXpi -Destination (Join-Path $bundleRoot 'StreamFirefly-firefox-0.7.0-test.xpi')
+    Copy-Item -LiteralPath $extensionZip -Destination (Join-Path $bundleRoot 'StreamFirefly-extension-0.8.0.zip')
+    Copy-Item -LiteralPath $firefoxXpi -Destination (Join-Path $bundleRoot 'StreamFirefly-firefox-0.8.0-test.xpi')
     foreach ($directory in @('native-host', 'tools', 'store-assets')) { New-Item -ItemType Directory -Path (Join-Path $bundleRoot $directory) | Out-Null }
     Copy-Item -LiteralPath (Join-Path $root "native-host\target\$target\release\streamfirefly-native.exe") -Destination (Join-Path $bundleRoot 'native-host\streamfirefly-native.exe')
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "ffmpeg-cache\ffmpeg-$architecture.exe") -Destination (Join-Path $bundleRoot 'native-host\ffmpeg.exe')
@@ -51,7 +51,7 @@ foreach ($architecture in @('x64', 'arm64')) {
     $packageInfo = [ordered]@{
       product = 'StreamFirefly'
       version = $BundleVersion
-      extensionVersion = '0.7.0'
+      extensionVersion = '0.8.0'
       architecture = $architecture
       peMachine = $architectures[$architecture].Machine
       sourceCommit = $sourceCommit
