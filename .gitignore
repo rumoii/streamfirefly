@@ -21,6 +21,7 @@ release/
 
 # Node and browser tooling
 node_modules/
+extension/dist/
 .playwright-mcp/
 playwright-report/
 test-results/

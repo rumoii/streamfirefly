@@ -7,6 +7,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $archivePath = (Resolve-Path -LiteralPath $Archive).Path
 $bundleName = [System.IO.Path]::GetFileNameWithoutExtension($archivePath)
+$extensionVersion = $ExpectedBundleVersion -replace '-beta\.\d+$', ''
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zip = [System.IO.Compression.ZipFile]::OpenRead($archivePath)
 try {
@@ -26,8 +27,8 @@ try {
     "$bundleName/README-INTERNAL.md",
     "$bundleName/PACKAGE-INFO.json",
     "$bundleName/SHA256SUMS.txt",
-    "$bundleName/StreamFirefly-extension-0.8.0.zip",
-    "$bundleName/StreamFirefly-firefox-0.8.0-test.xpi"
+    "$bundleName/StreamFirefly-extension-$extensionVersion.zip",
+    "$bundleName/StreamFirefly-firefox-$extensionVersion-test.xpi"
   )
   foreach ($name in $required) { if ($normalized -notcontains $name) { throw "Archive file is missing: $name" } }
 } finally {
@@ -79,13 +80,14 @@ try {
     $machine = Get-PeMachine (Join-Path $root $name)
     if ($machine -ne $expectedMachine) { throw "$name has PE machine $machine, expected $expectedMachine" }
   }
-  $nestedZip = [System.IO.Compression.ZipFile]::OpenRead((Join-Path $root 'StreamFirefly-extension-0.8.0.zip'))
+  if ($packageInfo.extensionVersion -ne $extensionVersion) { throw "Extension version metadata mismatch: $($packageInfo.extensionVersion)" }
+  $nestedZip = [System.IO.Compression.ZipFile]::OpenRead((Join-Path $root "StreamFirefly-extension-$extensionVersion.zip"))
   try {
     $nestedNames = @($nestedZip.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
     if ($nestedNames -notcontains 'manifest.json') { throw 'Nested extension ZIP has no root manifest.json' }
     if ($nestedNames -contains 'manifest.firefox.json' -or @($nestedNames | Where-Object { $_.StartsWith('icon-concepts/') }).Count) { throw 'Nested extension ZIP contains excluded files' }
   } finally { $nestedZip.Dispose() }
-  $firefoxXpi = [System.IO.Compression.ZipFile]::OpenRead((Join-Path $root 'StreamFirefly-firefox-0.8.0-test.xpi'))
+  $firefoxXpi = [System.IO.Compression.ZipFile]::OpenRead((Join-Path $root "StreamFirefly-firefox-$extensionVersion-test.xpi"))
   try {
     $firefoxNames = @($firefoxXpi.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
     if ($firefoxNames -notcontains 'manifest.json') { throw 'Firefox XPI has no root manifest.json' }

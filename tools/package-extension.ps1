@@ -5,6 +5,8 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $extension = Join-Path $root 'extension'
 $manifest = Get-Content -Raw -LiteralPath (Join-Path $extension 'manifest.json') | ConvertFrom-Json
+& npm --prefix $root run build:extension
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 [string[]]$runtimeFiles = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'extension-package-files.json') | ConvertFrom-Json
 $files = @('manifest.json') + $runtimeFiles
 foreach ($relative in $files) {

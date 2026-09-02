@@ -1,0 +1,188 @@
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref, watch } from "vue";
+import type { MediaCandidate, PageContext } from "../types";
+import { chooseHlsContainer, defaultAudio, defaultVariant, deriveMediaPlaylist, parseHls, segmentRangeForTime, type HlsManifest, type HlsTrack } from "../media";
+import { formatDuration } from "../format";
+import { sendMessage } from "../api";
+import { humanError } from "../store";
+
+const props = defineProps<{ candidate: MediaCandidate; session: PageContext; capabilities: string[]; saveDir: string; downloadThreads: number }>();
+const emit = defineEmits<{ back: []; created: [message: string] }>();
+const loading = ref(true);
+const error = ref("");
+const master = ref<HlsManifest | null>(null);
+const videoManifest = ref<HlsManifest | null>(null);
+const selectedVariantId = ref("");
+const selectedAudioId = ref("");
+const selectedSubtitleIds = ref<string[]>([]);
+const rangeMode = ref<"all" | "time" | "segment">("all");
+const range = reactive({ startTime: 0, endTime: 0, first: 0, last: 0 });
+const form = reactive({ name: "", extension: "mp4", container: "mp4", busy: false });
+const trackManifests = new Map<string, HlsManifest>();
+
+const variants = computed(() => master.value?.variants || []);
+const selectedVariant = computed(() => variants.value.find(item => item.id === selectedVariantId.value) || null);
+const audioTracks = computed(() => (master.value?.tracks || []).filter(item => item.type === "AUDIO" && (!selectedVariant.value?.audioGroup || item.groupId === selectedVariant.value.audioGroup) && item.uri));
+const subtitleTracks = computed(() => (master.value?.tracks || []).filter(item => item.type === "SUBTITLES" && (!selectedVariant.value?.subtitlesGroup || item.groupId === selectedVariant.value.subtitlesGroup) && item.uri));
+const actualRange = computed(() => {
+  const manifest = videoManifest.value;
+  if (!manifest?.segments.length) return null;
+  const first = rangeMode.value === "all" ? 0 : rangeMode.value === "time" ? segmentRangeForTime(manifest, range.startTime, range.endTime)[0] : range.first;
+  const last = rangeMode.value === "all" ? manifest.segments.length - 1 : rangeMode.value === "time" ? segmentRangeForTime(manifest, range.startTime, range.endTime)[1] : range.last;
+  const derived = deriveMediaPlaylist(manifest, first, last);
+  return { ...derived, count: derived.last - derived.first + 1 };
+});
+const advancedSupported = computed(() => props.capabilities.includes("hls-selection-v1") || props.session.sessionId === "preview");
+
+async function fetchText(url: string): Promise<{ text: string; url: string }> {
+  if (props.session.sessionId === "preview") return previewManifest(url);
+  const result: any = await sendMessage({ type: "media.fetchText", tabId: props.session.sourceTabId, id: props.candidate.id, url });
+  if (!result?.ok) throw new Error(result?.error || "media_fetch_failed");
+  return { text: result.text, url: result.url || url };
+}
+
+async function loadTrack(track: HlsTrack): Promise<HlsManifest> {
+  if (!track.uri) throw new Error("轨道没有清单地址");
+  if (trackManifests.has(track.id)) return trackManifests.get(track.id)!;
+  const response = await fetchText(track.uri);
+  const parsed = parseHls(response.text, response.url);
+  trackManifests.set(track.id, parsed);
+  return parsed;
+}
+
+async function loadVariant() {
+  const variant = selectedVariant.value;
+  if (!variant) return;
+  loading.value = true; error.value = "";
+  try {
+    const response = await fetchText(variant.uri);
+    videoManifest.value = parseHls(response.text, response.url);
+    resetRange();
+    const preferred = defaultAudio(master.value?.tracks || [], variant.audioGroup);
+    selectedAudioId.value = preferred?.id || "";
+    form.container = chooseHlsContainer(variant.codecs);
+    form.extension = form.container;
+  } catch (reason: any) { error.value = humanError(reason?.message); }
+  finally { loading.value = false; }
+}
+
+function resetRange() {
+  const manifest = videoManifest.value;
+  range.startTime = 0; range.endTime = manifest?.duration || 0; range.first = 0; range.last = Math.max(0, (manifest?.segments.length || 1) - 1);
+}
+
+watch(selectedVariantId, () => { void loadVariant(); });
+watch(() => [range.startTime, range.endTime], () => {
+  if (rangeMode.value !== "time" || !videoManifest.value) return;
+  [range.first, range.last] = segmentRangeForTime(videoManifest.value, range.startTime, range.endTime);
+});
+watch(() => [range.first, range.last], () => {
+  if (rangeMode.value !== "segment" || !videoManifest.value?.segments.length) return;
+  const first = videoManifest.value.segments[Math.max(0, Math.min(range.first, videoManifest.value.segments.length - 1))];
+  const last = videoManifest.value.segments[Math.max(first.index, Math.min(range.last, videoManifest.value.segments.length - 1))];
+  range.startTime = first.start; range.endTime = last.end;
+});
+
+async function initialize() {
+  loading.value = true; error.value = "";
+  try {
+    const response = props.candidate.inlineManifest ? { text: props.candidate.inlineManifest.text, url: props.candidate.inlineManifest.baseUrl || props.candidate.url } : await fetchText(props.candidate.url);
+    master.value = parseHls(response.text, response.url);
+    if (master.value.live) return;
+    if (master.value.kind === "master") {
+      const preferred = defaultVariant(master.value.variants);
+      selectedVariantId.value = preferred?.id || "";
+    } else {
+      videoManifest.value = master.value;
+      resetRange();
+    }
+    const prepared: any = await sendMessage({ type: "task.prepare", payload: basePayload() }).catch(() => null);
+    form.name = prepared?.payload?.fileName || props.candidate.pageTitle || "streamfirefly-media";
+  } catch (reason: any) { error.value = humanError(reason?.message); }
+  finally { loading.value = false; }
+}
+
+function basePayload() {
+  return { url: props.candidate.url, title: props.candidate.title || props.candidate.pageTitle || "streamfirefly-media", mime: props.candidate.mime || "application/vnd.apple.mpegurl", referer: props.candidate.referer || props.candidate.pageUrl || null, requestHeaders: props.candidate.requestHeaders || {}, downloadThreads: props.downloadThreads, sourceContextId: props.session.sourceContextId };
+}
+
+async function createTask() {
+  if (!videoManifest.value || !actualRange.value || !advancedSupported.value) return;
+  form.busy = true; error.value = "";
+  try {
+    const media = deriveMediaPlaylist(videoManifest.value, actualRange.value.first, actualRange.value.last);
+    const audio = audioTracks.value.find(item => item.id === selectedAudioId.value) || null;
+    const audioManifest = audio ? await loadTrack(audio) : null;
+    const audioDerived = audioManifest ? deriveMediaPlaylist(audioManifest, ...segmentRangeForTime(audioManifest, media.actualStart, media.actualEnd)) : null;
+    const subtitles = [];
+    for (const id of selectedSubtitleIds.value) {
+      const track = subtitleTracks.value.find(item => item.id === id);
+      if (!track) continue;
+      const parsed = await loadTrack(track);
+      const derived = deriveMediaPlaylist(parsed, ...segmentRangeForTime(parsed, media.actualStart, media.actualEnd));
+      subtitles.push({ id: track.id, language: track.language || null, label: track.name, extension: "vtt", manifest: { format: "hls", baseUrl: derived.baseUrl, text: derived.text } });
+    }
+    const hlsPlan = {
+      version: 1,
+      duration: media.actualEnd - media.actualStart,
+      container: form.container,
+      range: { requestedStart: range.startTime, requestedEnd: range.endTime, actualStart: media.actualStart, actualEnd: media.actualEnd, firstSegment: media.first, lastSegment: media.last },
+      videoManifest: { format: "hls", baseUrl: media.baseUrl, text: media.text },
+      audioManifest: audioDerived ? { format: "hls", baseUrl: audioDerived.baseUrl, text: audioDerived.text } : null,
+      subtitles
+    };
+    const result: any = await sendMessage({ type: "task.create", payload: { ...basePayload(), fileName: form.name.trim(), saveDir: props.saveDir || null, hlsPlan } });
+    if (!result?.ok) throw new Error(result?.error || "task_create_failed");
+    emit("created", `HLS 任务已创建：${result.task?.title || form.name}`);
+  } catch (reason: any) { error.value = humanError(reason?.message); }
+  finally { form.busy = false; }
+}
+
+onMounted(initialize);
+
+function previewManifest(url: string) {
+  if (url.includes("1080")) return { url, text: `#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\nhttps://media.example/v1.ts\n#EXTINF:6,\nhttps://media.example/v2.ts\n#EXTINF:6,\nhttps://media.example/v3.ts\n#EXT-X-ENDLIST` };
+  if (url.includes("720")) return { url, text: `#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\nhttps://media.example/720-1.ts\n#EXTINF:6,\nhttps://media.example/720-2.ts\n#EXT-X-ENDLIST` };
+  if (url.includes("audio")) return { url, text: `#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\nhttps://media.example/a1.aac\n#EXTINF:6,\nhttps://media.example/a2.aac\n#EXTINF:6,\nhttps://media.example/a3.aac\n#EXT-X-ENDLIST` };
+  if (url.includes("sub")) return { url, text: `#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\nhttps://media.example/s1.vtt\n#EXTINF:6,\nhttps://media.example/s2.vtt\n#EXTINF:6,\nhttps://media.example/s3.vtt\n#EXT-X-ENDLIST` };
+  return { url, text: `#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="默认音轨",LANGUAGE="zh-CN",DEFAULT=YES,URI="audio.m3u8"\n#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="中文字幕",LANGUAGE="zh-CN",URI="sub.m3u8"\n#EXT-X-STREAM-INF:BANDWIDTH=1800000,RESOLUTION=1280x720,CODECS="avc1.64001f,mp4a.40.2",AUDIO="audio",SUBTITLES="subs"\n720.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=4200000,RESOLUTION=1920x1080,CODECS="avc1.640028,mp4a.40.2",AUDIO="audio",SUBTITLES="subs"\n1080.m3u8` };
+}
+</script>
+
+<template>
+  <section class="parser-page">
+    <div class="subpage-heading"><button class="button subtle" type="button" @click="$emit('back')">← 返回资源</button><div><span class="tag">HLS</span><h2>媒体解析</h2><p>{{ candidate.pageTitle || candidate.title || candidate.url }}</p></div></div>
+    <div v-if="error" class="status-banner error">{{ error }}</div>
+    <div v-if="master?.live" class="status-banner warning"><strong>检测到直播清单</strong><span>Beta 1 支持查看和预览；直播轮询、边下边存将在后续版本实现。</span></div>
+    <div v-if="!advancedSupported" class="status-banner warning"><strong>需要升级本地助手</strong><span>安装流萤 0.9.0 Native Host 后才能按选择下载 HLS。</span></div>
+    <div class="parser-grid">
+      <section class="panel parser-options">
+        <div class="panel-title"><div><h3>画质与轨道</h3><p>选择最终保存的媒体内容</p></div></div>
+        <div v-if="loading" class="option-skeleton"><i v-for="i in 5" :key="i"></i></div>
+        <template v-else>
+          <fieldset v-if="variants.length" class="choice-group"><legend>清晰度</legend><label v-for="variant in variants" :key="variant.id" class="choice-card"><input v-model="selectedVariantId" type="radio" :value="variant.id"><span><strong>{{ variant.width && variant.height ? `${variant.width} × ${variant.height}` : '自适应画质' }}</strong><small>{{ variant.averageBandwidth || variant.bandwidth ? `${Math.round((variant.averageBandwidth || variant.bandwidth || 0) / 1000)} Kbps` : '码率未知' }} · {{ variant.codecs || '编码未知' }}</small></span></label></fieldset>
+          <fieldset v-if="audioTracks.length" class="choice-group"><legend>音轨</legend><label v-for="track in audioTracks" :key="track.id" class="choice-card"><input v-model="selectedAudioId" type="radio" :value="track.id"><span><strong>{{ track.name }}</strong><small>{{ track.language || '语言未知' }}{{ track.isDefault ? ' · 默认' : '' }}</small></span></label></fieldset>
+          <fieldset v-if="subtitleTracks.length" class="choice-group"><legend>字幕（可多选）</legend><label v-for="track in subtitleTracks" :key="track.id" class="choice-card"><input v-model="selectedSubtitleIds" type="checkbox" :value="track.id"><span><strong>{{ track.name }}</strong><small>{{ track.language || '语言未知' }} · 独立字幕文件</small></span></label></fieldset>
+          <div v-if="!subtitleTracks.length" class="muted-box">此清单没有声明可选字幕。</div>
+        </template>
+      </section>
+
+      <section class="panel parser-range">
+        <div class="panel-title"><div><h3>切片与时间范围</h3><p>范围按完整切片边界执行</p></div><span v-if="videoManifest" class="tag">{{ videoManifest.segments.length }} 个切片</span></div>
+        <div class="range-tabs"><button v-for="mode in [['all','全部'],['time','按时间'],['segment','按切片']]" :key="mode[0]" type="button" :class="{ active: rangeMode === mode[0] }" @click="rangeMode = mode[0] as any">{{ mode[1] }}</button></div>
+        <div v-if="videoManifest" class="range-body">
+          <div class="timeline"><i v-for="segment in videoManifest.segments.slice(0, 160)" :key="segment.index" :class="{ selected: actualRange && segment.index >= actualRange.first && segment.index <= actualRange.last }" :style="{ flexGrow: Math.max(.2, segment.duration) }"></i></div>
+          <div v-if="rangeMode === 'time'" class="range-inputs"><label><span>开始时间（秒）</span><input v-model.number="range.startTime" class="control" type="number" min="0" :max="videoManifest.duration" step="0.1"></label><label><span>结束时间（秒）</span><input v-model.number="range.endTime" class="control" type="number" :min="range.startTime" :max="videoManifest.duration" step="0.1"></label></div>
+          <div v-if="rangeMode === 'segment'" class="range-inputs"><label><span>起始切片</span><input v-model.number="range.first" class="control" type="number" min="0" :max="videoManifest.segments.length - 1"></label><label><span>结束切片</span><input v-model.number="range.last" class="control" type="number" :min="range.first" :max="videoManifest.segments.length - 1"></label></div>
+          <dl v-if="actualRange" class="range-summary"><div><dt>清单总时长</dt><dd>{{ formatDuration(videoManifest.duration) }}</dd></div><div><dt>实际下载范围</dt><dd>{{ formatDuration(actualRange.actualStart) }} — {{ formatDuration(actualRange.actualEnd) }}</dd></div><div><dt>实际切片</dt><dd>#{{ actualRange.first }} — #{{ actualRange.last }}（{{ actualRange.count }} 个）</dd></div><div><dt>预计时长</dt><dd>{{ formatDuration(actualRange.actualEnd - actualRange.actualStart) }}</dd></div></dl>
+        </div>
+        <div v-else-if="!loading" class="empty-state"><span>⌁</span><h3>没有可用切片</h3><p>此清单可能无法下载或仍在直播更新。</p></div>
+      </section>
+    </div>
+    <section class="download-summary panel">
+      <div><span>输出文件</span><div class="filename"><input v-model="form.name" maxlength="100"><b>.{{ form.extension }}</b></div><small>{{ saveDir || '系统默认下载目录' }}</small></div>
+      <div class="summary-pills"><span>{{ selectedVariant?.height ? `${selectedVariant.height}P` : '原始画质' }}</span><span>{{ audioTracks.find(item => item.id === selectedAudioId)?.name || '内嵌音轨' }}</span><span>{{ selectedSubtitleIds.length }} 条字幕</span><span>{{ form.container.toUpperCase() }} 无转码</span></div>
+      <button class="button primary large" type="button" :disabled="loading || master?.live || !videoManifest || !advancedSupported || form.busy || !form.name.trim()" @click="createTask">{{ form.busy ? '正在创建任务…' : '开始下载' }}</button>
+    </section>
+  </section>
+</template>

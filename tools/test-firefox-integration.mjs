@@ -24,4 +24,7 @@ if (!release.includes('-FirefoxExtensionId $FirefoxExtensionId')) throw new Erro
 
 const uninstall = read('tools/uninstall-internal-test.ps1');
 if (!uninstall.includes('Software\\Mozilla\\NativeMessagingHosts\\com.streamfirefly.native') || !uninstall.includes('com.streamfirefly.native.firefox.json')) throw new Error('Internal uninstaller does not remove Firefox native host files');
+const packageFirefox = read('tools/package-firefox-extension.ps1');
+if (!packageFirefox.includes("$_.code -eq 'UNSAFE_VAR_ASSIGNMENT' -and $_.file -eq 'dist/assets/app.js'")) throw new Error('Firefox lint does not narrowly scope the Vue runtime warning');
+if (!packageFirefox.includes("'v-html|\\.innerHTML\\s*='")) throw new Error('Firefox lint warning exception has no source-level innerHTML rejection');
 console.log('Firefox manifest, packaging, native registration, and uninstall contracts passed');

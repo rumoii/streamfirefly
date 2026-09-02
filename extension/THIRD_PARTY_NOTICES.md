@@ -1,11 +1,24 @@
 # Third-party notices
 
+## Vue
+
+- Version: 3.5.21
+- Source: https://github.com/vuejs/core
+- License: MIT
+- Bundled output: `dist/assets/app.js`
+
+## Pinia
+
+- Version: 3.0.3
+- Source: https://github.com/vuejs/pinia
+- License: MIT
+- Bundled output: `dist/assets/app.js`
+
 ## hls.js
 
-- Version: 1.6.16
+- Version: 1.6.13
 - Source: https://github.com/video-dev/hls.js
 - License: Apache License 2.0
-- Bundled file: `lib/hls.min.js`
-- License text: `lib/hls.LICENSE.txt`
+- Bundled output: `dist/assets/hls.js`
 
-The bundled file is used only for HLS/M3U8 media preview. The upstream source and license text are available from the project repository and release package.
+The release bundle contains compiled runtime output only. Full license texts and upstream source links are available from the listed project repositories.

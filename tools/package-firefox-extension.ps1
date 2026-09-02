@@ -5,8 +5,11 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $extension = Join-Path $root 'extension'
+$uiSource = Join-Path $root 'extension-ui\src'
 $manifestPath = Join-Path $extension 'manifest.firefox.json'
 $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+& npm --prefix $root run build:extension
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 [string[]]$runtimeFiles = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'extension-package-files.json') | ConvertFrom-Json
 $sourceFiles = @('manifest.firefox.json') + $runtimeFiles
 foreach ($relative in $sourceFiles) {
@@ -20,6 +23,9 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 $webExt = Join-Path $root 'node_modules\.bin\web-ext.cmd'
 if (-not (Test-Path -LiteralPath $webExt -PathType Leaf)) {
   throw 'web-ext is not installed. Run npm install before Firefox validation.'
+}
+if (Get-ChildItem -LiteralPath $uiSource -Recurse -File | Select-String -Pattern 'v-html|\.innerHTML\s*=') {
+  throw 'Firefox package rejected: extension-ui/src must not assign innerHTML or use v-html.'
 }
 
 $stage = Join-Path ([System.IO.Path]::GetTempPath()) "streamfirefly-firefox-$([Guid]::NewGuid().ToString('N'))"
@@ -37,10 +43,16 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "Firefox lint failed:`n$lintText" }
   try { $lint = $lintText | ConvertFrom-Json }
   catch { throw "Firefox lint did not return valid JSON:`n$lintText" }
-  if ($lint.summary.errors -or $lint.summary.notices -or $lint.summary.warnings) {
-    throw "Firefox lint reported errors=$($lint.summary.errors), notices=$($lint.summary.notices), warnings=$($lint.summary.warnings):`n$lintText"
+  $allowedWarnings = @($lint.warnings | Where-Object {
+    $_.code -eq 'UNSAFE_VAR_ASSIGNMENT' -and $_.file -eq 'dist/assets/app.js'
+  })
+  $unexpectedWarnings = @($lint.warnings | Where-Object {
+    -not ($_.code -eq 'UNSAFE_VAR_ASSIGNMENT' -and $_.file -eq 'dist/assets/app.js')
+  })
+  if ($lint.summary.errors -or $lint.summary.notices -or $unexpectedWarnings.Count) {
+    throw "Firefox lint reported errors=$($lint.summary.errors), notices=$($lint.summary.notices), unexpectedWarnings=$($unexpectedWarnings.Count):`n$lintText"
   }
-  Write-Host 'Firefox lint passed with zero errors, notices, and warnings'
+  Write-Host "Firefox lint passed; ignored $($allowedWarnings.Count) Vue runtime innerHTML warning(s) after source-level innerHTML rejection"
   if ($LintOnly) { return }
 
   New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null

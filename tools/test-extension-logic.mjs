@@ -9,6 +9,14 @@ const listeners = {};
 const nativeListeners = {};
 const localValues = {};
 const sessionValues = {};
+const createdTabs = [];
+const tabUpdates = [];
+const windowUpdates = [];
+let nextTabId = 100;
+const tabsById = new Map([
+  [7, { id: 7, active: true, url: 'https://media.example/page', title: '媒体页面 A', lastAccessed: 2, windowId: 1 }],
+  [8, { id: 8, active: false, url: 'https://video.example/page', title: '媒体页面 B', lastAccessed: 1, windowId: 1 }]
+]);
 let fetchResponse = new Response('#EXTM3U\n#EXTINF:2,\nsegment.ts\n', { headers: { 'content-type': 'application/vnd.apple.mpegurl' } });
 const storageArea = values => ({
   async get(query) {
@@ -20,7 +28,7 @@ const storageArea = values => ({
   async remove(keys) { for (const key of Array.isArray(keys) ? keys : [keys]) delete values[key]; }
 });
 const api = {
-  action: { setBadgeText: async () => {} },
+  action: { setBadgeText: async () => {}, onClicked: { addListener: listener => { listeners.actionClicked = listener; } } },
   scripting: { executeScript: async () => {} },
   storage: { local: storageArea(localValues), session: storageArea(sessionValues), onChanged: { addListener: listener => { listeners.storageChanged = listener; } } },
   webRequest: {
@@ -36,19 +44,42 @@ const api = {
   declarativeNetRequest: { updateSessionRules: async rules => { listeners.previewRules = rules; } },
   runtime: {
     id: 'streamfirefly-test',
+    getURL: value => `chrome-extension://streamfirefly-test/${value}`,
+    sendMessage: async () => {},
     onMessage: { addListener: listener => { listeners.message = listener; } },
     connectNative: () => ({
       onMessage: { addListener: listener => { nativeListeners.message = listener; } },
       onDisconnect: { addListener: listener => { nativeListeners.disconnect = listener; } },
-      postMessage: message => queueMicrotask(() => nativeListeners.message({ version: 1, id: message.id, ok: true, protocolVersion: 3, supportedProtocolVersions: [2, 3], capabilities: ['inline-hls-v1', 'task-control-v1'] }))
+      postMessage: message => queueMicrotask(() => nativeListeners.message({ version: 1, id: message.id, ok: true, protocolVersion: 3, supportedProtocolVersions: [2, 3], capabilities: ['inline-hls-v1', 'task-control-v1', 'hls-selection-v1', 'task-output-group-v1'] }))
     })
   },
-  tabs: { query: async () => [{ id: 7, active: true, url: 'https://media.example/page', lastAccessed: 1 }], onRemoved: { addListener: listener => { listeners.removed = listener; } } }
+  tabs: {
+    query: async () => [...tabsById.values()].map(tab => ({ ...tab })),
+    create: async properties => {
+      const tab = { id: nextTabId++, windowId: properties.windowId ?? 1, status: 'complete', ...properties };
+      tabsById.set(tab.id, tab); createdTabs.push({ ...tab }); return { ...tab };
+    },
+    get: async id => {
+      const tab = tabsById.get(id);
+      if (!tab) throw new Error('tab_not_found');
+      return { ...tab };
+    },
+    update: async (id, properties) => {
+      const tab = tabsById.get(id);
+      if (!tab) throw new Error('tab_not_found');
+      Object.assign(tab, properties); tabUpdates.push({ id, properties: { ...properties } }); return { ...tab };
+    },
+    sendMessage: async () => {},
+    onRemoved: { addListener: listener => { listeners.removed = listener; } },
+    onUpdated: { addListener: listener => { listeners.updated = listener; } }
+  },
+  windows: { update: async (id, properties) => { windowUpdates.push({ id, properties: { ...properties } }); } }
 };
 const source = fs.readFileSync(path.join(root, 'extension', 'background.js'), 'utf8');
 vm.runInNewContext(source, { chrome: api, URL, Map, Set, Number, Object, Date, Promise, TextEncoder, TextDecoder, Headers, Uint8Array, crypto: webcrypto, structuredClone, fetch: async () => fetchResponse, setTimeout, clearTimeout, console });
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
+const flush = async () => { for (let index = 0; index < 6; index += 1) await settle(); };
 const send = (message, sender = {}) => new Promise((resolve, reject) => {
   try {
     const asynchronous = listeners.message(message, sender, resolve);
@@ -116,4 +147,44 @@ await settle();
 await Promise.all(Array.from({ length: 1005 }, (_, index) => send({ type: 'media.add', candidate: { url: `https://media.example/segment-${index}.m4s` } }, { tab: { id: 7 } })));
 candidates = await send({ type: 'media.candidates', tabId: 7 });
 if (candidates.length !== 1000 || candidates.some(item => item.url.endsWith('segment-0.m4s')) || !candidates.some(item => item.url.endsWith('segment-1004.m4s'))) throw new Error('Segment bucket cap did not retain the newest 1000 candidates');
+
+listeners.actionClicked({ ...tabsById.get(7) });
+await flush();
+let sessions = Object.values(sessionValues).filter(value => value?.sessionId);
+if (sessions.length !== 1 || createdTabs.length !== 1) throw new Error(`First source did not create one application session: ${JSON.stringify({ sessions, createdTabs })}`);
+const firstSession = sessions[0];
+const firstAppTabId = firstSession.appTabId;
+listeners.actionClicked({ ...tabsById.get(7) });
+await flush();
+if (createdTabs.length !== 1 || tabUpdates.at(-1)?.id !== firstAppTabId || windowUpdates.at(-1)?.id !== 1) throw new Error('Repeated source click did not focus the existing application tab');
+
+listeners.actionClicked({ ...tabsById.get(8) });
+await flush();
+sessions = Object.values(sessionValues).filter(value => value?.sessionId);
+if (sessions.length !== 2 || createdTabs.length !== 2 || new Set(sessions.map(value => value.sourceTabId)).size !== 2) throw new Error('Different source pages did not receive independent application sessions');
+
+const oldSourceContextId = firstSession.sourceContextId;
+listeners.beforeNavigate({ tabId: 7, frameId: 0, url: 'https://media.example/new-page' });
+await flush();
+let firstView = await send({ type: 'app.session.get', sessionId: firstSession.sessionId });
+if (!firstView.ok || firstView.session.sourceContextId === oldSourceContextId || firstView.candidates.length) throw new Error(`Source navigation did not rotate context and clear resources: ${JSON.stringify(firstView)}`);
+
+await send({ type: 'media.add', candidate: { url: 'https://media.example/final.mp4', mime: 'video/mp4' } }, { tab: { id: 7 } });
+tabsById.delete(7);
+listeners.removed(7);
+await flush();
+firstView = await send({ type: 'app.session.get', sessionId: firstSession.sessionId });
+if (!firstView.ok || !firstView.session.sourceClosed || firstView.session.sourceTabId !== null || !firstView.candidates.some(item => item.url.endsWith('/final.mp4'))) throw new Error(`Closed source snapshot was not retained: ${JSON.stringify(firstView)}`);
+
+tabsById.set(7, { id: 7, active: true, url: 'https://reused.example/page', title: '复用标签页', lastAccessed: 3, windowId: 1 });
+listeners.actionClicked({ ...tabsById.get(7) });
+await flush();
+sessions = Object.values(sessionValues).filter(value => value?.sessionId);
+const reusedSession = sessions.find(value => value.sourceTabId === 7 && !value.sourceClosed);
+if (!reusedSession || reusedSession.sessionId === firstSession.sessionId || createdTabs.length !== 3) throw new Error('Reused tab ID incorrectly focused the closed source session');
+
+tabsById.delete(firstAppTabId);
+listeners.removed(firstAppTabId);
+await flush();
+if (sessionValues[`streamfirefly-app-session-v1:${firstSession.sessionId}`]) throw new Error('Closing an application tab did not remove its session');
 console.log('Extension candidate state and classification tests passed');

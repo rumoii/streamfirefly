@@ -1,17 +1,16 @@
 {
   "manifest_version": 3,
   "name": "流萤 StreamFirefly",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "本地优先的网页媒体发现与下载工具",
   "icons": { "16": "icon16.png", "32": "icon32.png", "48": "icon48.png", "128": "icon128.png" },
-  "permissions": ["tabs", "webNavigation", "webRequest", "declarativeNetRequest", "storage", "scripting", "nativeMessaging", "sidePanel"],
+  "permissions": ["tabs", "webNavigation", "webRequest", "declarativeNetRequest", "storage", "scripting", "nativeMessaging"],
   "host_permissions": ["http://*/*", "https://*/*"],
   "background": { "service_worker": "background.js", "type": "module" },
   "action": {
     "default_title": "流萤 StreamFirefly",
     "default_icon": { "16": "icon16.png", "32": "icon32.png", "48": "icon48.png" }
   },
-  "side_panel": { "default_path": "popup.html" },
   "content_scripts": [
     {
       "matches": ["http://*/*", "https://*/*"],
@@ -20,5 +19,5 @@
       "all_frames": true
     }
   ],
-  "options_ui": { "page": "options.html", "open_in_tab": true }
+  "options_ui": { "page": "dist/app.html#/settings", "open_in_tab": true }
 }

@@ -1,6 +1,8 @@
 const api = globalThis.browser ?? globalThis.chrome;
 const STATE_VERSION = 1;
 const STATE_PREFIX = "media-candidates-v1:";
+const APP_SESSION_PREFIX = "streamfirefly-app-session-v1:";
+const APP_PAGE = "dist/app.html";
 const INLINE_MANIFEST_MAX_BYTES = 512 * 1024;
 const BUCKET_LIMITS = { core: 300, image: 200, segment: 1000 };
 const candidatesByTab = new Map();
@@ -24,6 +26,83 @@ api.storage?.onChanged?.addListener((changes, area) => {
 });
 
 function stateKey(tabId) { return `${STATE_PREFIX}${tabId}`; }
+function appSessionKey(sessionId) { return `${APP_SESSION_PREFIX}${sessionId}`; }
+function newId() { try { return crypto.randomUUID(); } catch (_) { return `${Date.now()}-${Math.random().toString(16).slice(2)}`; } }
+function supportedPage(url) { try { return ["http:", "https:"].includes(new URL(url).protocol); } catch (_) { return false; } }
+function pageTitleFor(tab) { try { return tab?.title || new URL(tab?.url || "").hostname || "未命名页面"; } catch (_) { return tab?.title || "未命名页面"; } }
+
+async function readAppSession(sessionId) {
+  if (!sessionId || !api.storage?.session) return null;
+  return (await api.storage.session.get(appSessionKey(sessionId)))[appSessionKey(sessionId)] || null;
+}
+
+async function writeAppSession(session) {
+  if (!session?.sessionId || !api.storage?.session) return;
+  await api.storage.session.set({ [appSessionKey(session.sessionId)]: session });
+}
+
+async function removeAppSession(sessionId) {
+  if (sessionId && api.storage?.session) await api.storage.session.remove(appSessionKey(sessionId));
+}
+
+async function allAppSessions() {
+  if (!api.storage?.session) return [];
+  const stored = await api.storage.session.get(null);
+  return Object.entries(stored).filter(([key]) => key.startsWith(APP_SESSION_PREFIX)).map(([, value]) => value).filter(Boolean);
+}
+
+async function updateSourceSessions(tabId, values) {
+  const sessions = await allAppSessions();
+  await Promise.all(sessions.filter(session => session.sourceTabId === tabId && !session.sourceClosed).map(session => writeAppSession({ ...session, ...values, updatedAt: Date.now() })));
+}
+
+async function openApplication(tab) {
+  if (!api.tabs?.query || !api.tabs?.create) return;
+  const appBase = api.runtime.getURL(APP_PAGE);
+  const [tabs, sessions] = await Promise.all([api.tabs.query({}), allAppSessions()]);
+  const bound = sessions.find(session => session.sourceTabId === tab.id && !session.sourceClosed);
+  const existing = bound ? tabs.find(item => item.id === bound.appTabId && item.url?.startsWith(appBase)) : null;
+  if (existing?.id != null) {
+    await api.tabs.update(existing.id, { active: true });
+    if (existing.windowId != null) await api.windows?.update?.(existing.windowId, { focused: true });
+    return;
+  }
+  const sessionId = newId();
+  const session = {
+    sessionId,
+    sourceContextId: newId(),
+    sourceTabId: Number.isInteger(tab?.id) ? tab.id : null,
+    appTabId: null,
+    pageUrl: tab?.url || "",
+    pageTitle: pageTitleFor(tab),
+    favIconUrl: tab?.favIconUrl || "",
+    sourceClosed: false,
+    supported: supportedPage(tab?.url),
+    paused: false,
+    snapshot: [],
+    updatedAt: Date.now()
+  };
+  await writeAppSession(session);
+  const created = await api.tabs.create({ url: `${appBase}?session=${encodeURIComponent(sessionId)}&source=${tab?.id ?? ""}#/resources`, active: true, windowId: tab?.windowId });
+  await writeAppSession({ ...session, appTabId: created.id ?? null });
+}
+
+async function appSessionView(sessionId) {
+  const session = await readAppSession(sessionId);
+  if (!session) return { ok: false, error: "app_session_not_found" };
+  if (session.sourceClosed || !Number.isInteger(session.sourceTabId)) return { ok: true, session, candidates: session.snapshot || [] };
+  try {
+    const [tab, state] = await Promise.all([api.tabs.get(session.sourceTabId), loadTabState(session.sourceTabId)]);
+    const current = { ...session, pageUrl: tab.url || session.pageUrl, pageTitle: pageTitleFor(tab), favIconUrl: tab.favIconUrl || session.favIconUrl, supported: supportedPage(tab.url), paused: Boolean(state.paused) };
+    await writeAppSession(current);
+    return { ok: true, session: current, candidates: [...state.candidates.values()] };
+  } catch (_) {
+    const state = candidatesByTab.get(session.sourceTabId);
+    const closed = { ...session, sourceClosed: true, paused: true, snapshot: state ? [...state.candidates.values()] : session.snapshot || [], updatedAt: Date.now() };
+    await writeAppSession(closed);
+    return { ok: true, session: closed, candidates: closed.snapshot };
+  }
+}
 function emptyState(tabId, pageUrl = "") { return { schemaVersion: STATE_VERSION, tabId, pageUrl, paused: false, lastTouchedAt: Date.now(), candidates: new Map() }; }
 function serializeState(state) { return { schemaVersion: STATE_VERSION, tabId: state.tabId, pageUrl: state.pageUrl, paused: Boolean(state.paused), lastTouchedAt: state.lastTouchedAt, candidates: [...state.candidates.values()] }; }
 
@@ -226,10 +305,13 @@ api.webRequest.onHeadersReceived.addListener(details => {
 }, { urls: ["http://*/*", "https://*/*"] }, ["responseHeaders"]);
 api.webRequest.onErrorOccurred.addListener(details => requestHeadersById.delete(details.requestId), { urls: ["http://*/*", "https://*/*"] });
 
-api.webNavigation?.onBeforeNavigate?.addListener(details => { if (details.frameId === 0) void clearTab(details.tabId, details.url); });
+api.webNavigation?.onBeforeNavigate?.addListener(details => {
+  if (details.frameId !== 0) return;
+  void updateSourceSessions(details.tabId, { sourceContextId: newId(), pageUrl: details.url, pageTitle: "正在加载…", favIconUrl: "", sourceClosed: false, supported: supportedPage(details.url), paused: false, snapshot: [] }).then(() => clearTab(details.tabId, details.url));
+});
 api.webNavigation?.onHistoryStateUpdated?.addListener(details => {
   if (details.frameId !== 0) return;
-  void clearTab(details.tabId, details.url).then(() => api.tabs.sendMessage?.(details.tabId, { type: "media.rescan" })?.catch?.(() => {}));
+  void updateSourceSessions(details.tabId, { sourceContextId: newId(), pageUrl: details.url, pageTitle: "正在加载…", favIconUrl: "", sourceClosed: false, supported: supportedPage(details.url), paused: false, snapshot: [] }).then(() => clearTab(details.tabId, details.url)).then(() => api.tabs.sendMessage?.(details.tabId, { type: "media.rescan" })?.catch?.(() => {}));
 });
 
 async function setSniffingPaused(tabId, paused) {
@@ -307,13 +389,26 @@ async function fetchMediaText(tabId, id, requestedUrl) {
   catch (error) { return { ok: false, error: error.message === "media_manifest_too_large" ? error.message : "media_fetch_failed" }; }
   return { ok: true, url: response.url || url.href, text };
 }
-api.tabs.onRemoved.addListener(tabId => { void clearTab(tabId, "", true); });
-
-api.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true }).catch?.(() => {});
-api.action?.onClicked?.addListener(tab => {
-  if (api.sidePanel?.open && Number.isInteger(tab?.windowId)) { api.sidePanel.open({ windowId: tab.windowId }).catch?.(() => {}); return; }
-  api.sidebarAction?.open?.().catch?.(() => {});
+api.tabs.onRemoved.addListener(tabId => {
+  void (async () => {
+    const sessions = await allAppSessions();
+    const ownedApp = sessions.find(session => session.appTabId === tabId);
+    if (ownedApp) {
+      await removeAppSession(ownedApp.sessionId);
+      return;
+    }
+    const state = candidatesByTab.get(tabId) || await loadTabState(tabId);
+    const snapshot = [...state.candidates.values()];
+    await updateSourceSessions(tabId, { sourceClosed: true, paused: true, sourceTabId: null, snapshot });
+    await clearTab(tabId, "", true);
+  })();
 });
+api.tabs.onUpdated?.addListener((tabId, changeInfo, tab) => {
+  if (!changeInfo.title && !changeInfo.url && !changeInfo.favIconUrl) return;
+  void updateSourceSessions(tabId, { pageUrl: tab.url || "", pageTitle: pageTitleFor(tab), favIconUrl: tab.favIconUrl || "", supported: supportedPage(tab.url) });
+});
+
+api.action?.onClicked?.addListener(tab => { void openApplication(tab); });
 
 function ensureNative() {
   if (native.port) return;
@@ -364,6 +459,20 @@ async function updatePreviewHeaders(payload = {}) {
 }
 
 api.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "app.session.get") {
+    appSessionView(message.sessionId).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+  if (message?.type === "app.source.focus") {
+    readAppSession(message.sessionId).then(async session => {
+      if (!session || !Number.isInteger(session.sourceTabId)) return { ok: false, error: "source_page_closed" };
+      await api.tabs.update(session.sourceTabId, { active: true });
+      const tab = await api.tabs.get(session.sourceTabId);
+      if (tab.windowId != null) await api.windows?.update?.(tab.windowId, { focused: true });
+      return { ok: true };
+    }).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
   if (message?.type === "media.candidates") {
     const tabId = message.tabId ?? sender.tab?.id;
     queueTab(tabId, async () => [...(await loadTabState(tabId)).candidates.values()]).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
@@ -405,6 +514,10 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   if (message?.type === "native.connect") { nativeInfo().then(sendResponse); return true; }
+  if (["task.create", "task.prepare"].includes(message?.type) && message.payload?.hlsPlan) {
+    nativeInfo().then(info => info.capabilities.includes("hls-selection-v1") && info.capabilities.includes("task-output-group-v1") ? nativeRequestPromise(message.type, message.payload).then(sendResponse) : sendResponse({ ok: false, error: "hls_selection_native_upgrade_required" }));
+    return true;
+  }
   if (["task.create", "task.prepare"].includes(message?.type) && message.payload?.inlineManifest) {
     nativeInfo().then(info => info.capabilities.includes("inline-hls-v1") ? nativeRequestPromise(message.type, message.payload).then(sendResponse) : sendResponse({ ok: false, error: "inline_hls_native_upgrade_required" }));
     return true;

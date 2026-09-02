@@ -18,7 +18,8 @@ if (!manifest.permissions?.includes('webNavigation')) throw new Error('Firefox w
 if (gecko?.id !== 'streamfirefly@example.invalid') throw new Error(`Unexpected Firefox extension ID: ${gecko?.id}`);
 if (Number.parseFloat(gecko?.strict_min_version) < 142) throw new Error('Firefox strict_min_version must be at least 142');
 if (JSON.stringify(gecko?.data_collection_permissions?.required) !== JSON.stringify(['none'])) throw new Error('Firefox data collection declaration must be required: ["none"]');
-if (manifest.version !== '0.8.0') throw new Error(`Unexpected Firefox extension version: ${manifest.version}`);
-if (manifest.sidebar_action?.default_panel !== 'popup.html') throw new Error('Firefox sidebar entry missing');
+if (manifest.version !== '0.9.0') throw new Error(`Unexpected Firefox extension version: ${manifest.version}`);
+if (manifest.sidebar_action) throw new Error('Obsolete Firefox sidebar entry is still present');
+if (manifest.options_ui?.page !== 'dist/app.html#/settings') throw new Error('Firefox Vue settings entry missing');
 if (missing.length) throw new Error(`Firefox package files missing: ${missing.join(', ')}`);
 console.log(`StreamFirefly Firefox extension ${manifest.version} valid (${required.length} runtime files)`);
