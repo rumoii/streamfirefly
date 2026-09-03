@@ -47,6 +47,7 @@ export interface TaskOutput {
 
 export interface DownloadTask {
   id: string;
+  url?: string;
   title: string;
   state: string;
   phase?: string;
@@ -55,10 +56,18 @@ export interface DownloadTask {
   total_bytes?: number | null;
   speed_bytes_per_second?: number;
   eta_seconds?: number | null;
+  segments_completed?: number;
+  segments_total?: number;
   output?: string | null;
   outputs?: TaskOutput[];
   message?: string | null;
   error?: string | null;
   source_context_id?: string | null;
   hls_selection?: boolean;
+  hls_plan_version?: number;
+  failed_segments?: number;
+  retry_count?: number;
+  checkpoint_state?: string | null;
+  resume_requirement?: "authorization_required" | "key_required" | "authorization_and_key_required" | null;
+  source_candidate_id?: string | null;
 }

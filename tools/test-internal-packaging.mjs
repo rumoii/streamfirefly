@@ -6,7 +6,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = relative => fs.readFileSync(path.join(root, relative), 'utf8');
 const requireText = (text, expected, label) => { if (!text.includes(expected)) throw new Error(`${label} is missing: ${expected}`); };
 
-const bundleVersion = '0.9.0-beta.1';
+const bundleVersion = '0.9.0-beta.2';
 const packageScript = read('tools/package-internal-test.ps1');
 const auditScript = read('tools/audit-internal-test.ps1');
 const nativeTest = read('tools/test-native.mjs');
@@ -15,8 +15,11 @@ const workflow = read('.github/workflows/package-internal.yml');
 
 requireText(packageScript, `[string]$BundleVersion = '${bundleVersion}'`, 'Internal package script');
 requireText(packageScript, 'Internal packages require a clean source tree', 'Internal package script');
+requireText(packageScript, '[switch]$AllowDirtySource', 'Internal package script');
+requireText(packageScript, '-AllowDirtySource:$AllowDirtySource', 'Internal package audit invocation');
 requireText(packageScript, '-ExpectedBundleVersion $BundleVersion -ExpectedSourceCommit $sourceCommit', 'Internal package audit invocation');
 requireText(auditScript, '$packageInfo.sourceDirty -ne $false', 'Internal package audit');
+requireText(auditScript, '-not $AllowDirtySource', 'Internal package audit');
 requireText(auditScript, '$packageInfo.sourceCommit -ne $ExpectedSourceCommit', 'Internal package audit');
 requireText(auditScript, '$packageInfo.version -ne $ExpectedBundleVersion', 'Internal package audit');
 requireText(nativeTest, 'process.env.STREAMFIREFLY_NATIVE_EXE', 'Native host test');

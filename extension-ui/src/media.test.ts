@@ -1,4 +1,4 @@
-import { chooseHlsContainer, defaultAudio, defaultVariant, deriveMediaPlaylist, filterCandidates, parseHls, segmentRangeForTime, sortCandidates } from "./media";
+import { chooseHlsContainer, defaultAudio, defaultVariant, deriveMediaPlaylist, filterCandidates, hlsEncryptionMethods, parseHls, segmentRangeForTime, sortCandidates, validateHlsKeyOverride } from "./media";
 import type { MediaCandidate } from "./types";
 
 const masterText = `#EXTM3U
@@ -35,6 +35,7 @@ test("converts time range to a safe derived playlist", () => {
   expect(derived.actualEnd).toBe(15);
   expect(derived.text).toContain("#EXT-X-MEDIA-SEQUENCE:21");
   expect(derived.text).toContain("https://media.example/v/key.bin");
+  expect(derived.text.indexOf("#EXT-X-KEY")).toBeLessThan(derived.text.indexOf("#EXT-X-MAP"));
   expect(derived.text).toContain("#EXT-X-DISCONTINUITY");
   expect(derived.text).not.toContain("1.m4s");
 });
@@ -64,4 +65,14 @@ test("chooses a compatible output container from codecs", () => {
   expect(chooseHlsContainer("avc1.640028,mp4a.40.2")).toBe("mp4");
   expect(chooseHlsContainer("hvc1.1.6.L120.90,mp4a.40.2")).toBe("mp4");
   expect(chooseHlsContainer("vp09.00.51.08,opus")).toBe("mkv");
+});
+
+test("summarizes encryption and validates manual AES-128 input", () => {
+  const manifest = parseHls(`#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI="key.bin"\n#EXTINF:5,\na.ts\n#EXT-X-ENDLIST`, "https://media.example/v/index.m3u8");
+  expect(hlsEncryptionMethods(manifest)).toEqual(["AES-128"]);
+  expect(validateHlsKeyOverride("hex", "00112233445566778899aabbccddeeff")).toBe("");
+  expect(validateHlsKeyOverride("hex", "1234")).toContain("32 位");
+  expect(validateHlsKeyOverride("base64", "MDEyMzQ1Njc4OWFiY2RlZg==")).toBe("");
+  expect(validateHlsKeyOverride("url", "file:///key.bin")).toContain("HTTP");
+  expect(validateHlsKeyOverride("url", "https://media.example/key", "0x00112233445566778899aabbccddeeff")).toBe("");
 });

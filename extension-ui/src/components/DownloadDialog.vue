@@ -27,11 +27,11 @@ async function prepareQuickHls() {
   if (!props.capabilities.includes("hls-selection-v1")) throw new Error("hls_selection_native_upgrade_required");
   const root = await fetchManifest(props.candidate!.url);
   const master = parseHls(root.text, root.url);
-  if (master.live) throw new Error("Beta 1 暂不支持直播下载，请使用解析页面查看清单");
+  if (master.live) throw new Error("Beta 2 暂不支持直播下载，请使用解析页面查看清单");
   const variant = defaultVariant(master.variants);
   const mediaResponse = variant ? await fetchManifest(variant.uri) : root;
   const media = parseHls(mediaResponse.text, mediaResponse.url);
-  if (media.live) throw new Error("Beta 1 暂不支持直播下载，请使用解析页面查看清单");
+  if (media.live) throw new Error("Beta 2 暂不支持直播下载，请使用解析页面查看清单");
   const selected = deriveMediaPlaylist(media, 0, media.segments.length - 1);
   const audioTrack = variant ? defaultAudio(master.tracks, variant.audioGroup) : null;
   let audioManifest = null;

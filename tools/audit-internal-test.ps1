@@ -2,7 +2,8 @@ param(
   [Parameter(Mandatory = $true)][string]$Archive,
   [Parameter(Mandatory = $true)][ValidateSet('x64', 'arm64')][string]$ExpectedArchitecture,
   [Parameter(Mandatory = $true)][ValidatePattern('^\d+\.\d+\.\d+-beta\.\d+$')][string]$ExpectedBundleVersion,
-  [Parameter(Mandatory = $true)][ValidatePattern('^[a-f0-9]{40}$')][string]$ExpectedSourceCommit
+  [Parameter(Mandatory = $true)][ValidatePattern('^[a-f0-9]{40}$')][string]$ExpectedSourceCommit,
+  [switch]$AllowDirtySource
 )
 $ErrorActionPreference = 'Stop'
 $archivePath = (Resolve-Path -LiteralPath $Archive).Path
@@ -59,7 +60,7 @@ try {
   if ($packageInfo.architecture -ne $ExpectedArchitecture) { throw "Package architecture metadata mismatch: $($packageInfo.architecture)" }
   if ($packageInfo.version -ne $ExpectedBundleVersion) { throw "Package version metadata mismatch: $($packageInfo.version)" }
   if ($packageInfo.sourceCommit -ne $ExpectedSourceCommit) { throw "Package source commit mismatch: $($packageInfo.sourceCommit)" }
-  if ($packageInfo.sourceDirty -ne $false -or @($packageInfo.sourceChanges).Count) { throw 'Package was built from a dirty source tree' }
+  if (-not $AllowDirtySource -and ($packageInfo.sourceDirty -ne $false -or @($packageInfo.sourceChanges).Count)) { throw 'Package was built from a dirty source tree' }
   foreach ($name in @('cargo', 'rustc', 'node', 'powershell')) {
     if ([string]::IsNullOrWhiteSpace($packageInfo.buildEnvironment.$name)) { throw "Package build environment is missing: $name" }
   }

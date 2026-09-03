@@ -89,6 +89,10 @@ const send = (message, sender = {}) => new Promise((resolve, reject) => {
 
 const nativeInfo = await send({ type: 'native.connect' });
 if (!nativeInfo.ok || !nativeInfo.capabilities.includes('inline-hls-v1') || !nativeInfo.capabilities.includes('task-control-v1')) throw new Error(`Native capability negotiation failed: ${JSON.stringify(nativeInfo)}`);
+const oldHostRejectedV2 = await send({ type: 'task.create', payload: { hlsPlan: { version: 2 } } });
+if (oldHostRejectedV2.ok || oldHostRejectedV2.error !== 'hls_selection_native_upgrade_required') throw new Error(`Old host accepted HLS v2: ${JSON.stringify(oldHostRejectedV2)}`);
+const oldHostAcceptedV1 = await send({ type: 'task.create', payload: { hlsPlan: { version: 1 } } });
+if (!oldHostAcceptedV1.ok) throw new Error(`Old host rejected compatible HLS v1: ${JSON.stringify(oldHostAcceptedV1)}`);
 
 listeners.beforeHeaders({ tabId: 7, url: 'https://media.example/a.mp4#fragment', requestId: '1', requestHeaders: [{ name: 'Referer', value: 'https://media.example/page' }, { name: 'Authorization', value: 'Bearer preview' }, { name: 'X-Secret', value: 'must-not-leak' }] });
 listeners.headers({ tabId: 7, url: 'https://media.example/a.mp4#fragment', requestId: '1', statusCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'video/mp4' }, { name: 'Content-Length', value: '1024' }, { name: 'Content-Disposition', value: 'attachment; filename=movie.mp4' }] });

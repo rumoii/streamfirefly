@@ -23,7 +23,7 @@ function navigate(value: string) { parserCandidate.value = null; route.value = v
 async function guard(action: () => Promise<any>, success?: string) { try { await action(); if (success) showToast(success); } catch (reason: any) { showToast(humanError(reason?.message)); } }
 async function updateSort(mode: string) { store.settings.candidateSort = mode; if (extensionApi()?.storage?.local) await extensionApi().storage.local.set({ candidateSort: mode }); }
 async function resetSettings() { const next = { saveDir: "", downloadThreads: 6, detectImages: false, advancedDeepSearch: false, candidateSort: store.settings.candidateSort }; await guard(() => store.saveSettings(next), "已恢复默认设置"); }
-function openParser(candidate: MediaCandidate) { if (candidate.type !== "hls") { showToast("Beta 1 暂未提供 DASH 轨道选择，将按完整清单下载。"); downloadCandidate.value = candidate; return; } parserCandidate.value = candidate; }
+function openParser(candidate: MediaCandidate) { if (candidate.type !== "hls") { showToast("Beta 2 暂未提供 DASH 轨道选择，将按完整清单下载。"); downloadCandidate.value = candidate; return; } parserCandidate.value = candidate; }
 function handleDelete(task: DownloadTask, deleteFile: boolean) { void guard(() => store.deleteTask(task, deleteFile), deleteFile ? "已删除任务和本地文件" : "已删除任务记录"); }
 
 onMounted(store.initialize);
@@ -40,7 +40,7 @@ onMounted(store.initialize);
       <Transition name="page" mode="out-in">
         <ResourcesView v-if="tab === 'resources'" key="resources" :candidates="store.candidates" :loading="store.loading" :sort-mode="store.settings.candidateSort" @download="downloadCandidate = $event" @parse="openParser" @remove="guard(() => store.removeCandidates($event), '已从列表移除资源')" @update-sort="updateSort" />
         <HlsParserView v-else-if="tab === 'parser' && parserCandidate && store.session" key="parser" :candidate="parserCandidate" :session="store.session" :capabilities="store.capabilities" :save-dir="store.settings.saveDir" :download-threads="store.settings.downloadThreads" @back="parserCandidate = null" @created="message => { showToast(message); navigate('downloads'); }" />
-        <DownloadsView v-else-if="tab === 'downloads'" key="downloads" :tasks="store.tasks" :source-tasks="store.sourceTasks" @control="(task, action) => guard(() => store.controlTask(task, action))" @delete="handleDelete" />
+        <DownloadsView v-else-if="tab === 'downloads'" key="downloads" :tasks="store.tasks" :source-tasks="store.sourceTasks" @control="(task, action, context) => guard(() => store.controlTask(task, action, context))" @delete="handleDelete" />
         <SettingsView v-else key="settings" :settings="store.settings" @save="settings => guard(() => store.saveSettings(settings), '设置已保存')" @reset="resetSettings" />
       </Transition>
     </main>

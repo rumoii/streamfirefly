@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import type { MediaCandidate, PageContext } from "../types";
-import { chooseHlsContainer, defaultAudio, defaultVariant, deriveMediaPlaylist, parseHls, segmentRangeForTime, type HlsManifest, type HlsTrack } from "../media";
+import { chooseHlsContainer, defaultAudio, defaultVariant, deriveMediaPlaylist, hlsEncryptionMethods, parseHls, segmentRangeForTime, validateHlsKeyOverride, type HlsKeyOverrideKind, type HlsManifest, type HlsTrack } from "../media";
 import { formatDuration } from "../format";
 import { sendMessage } from "../api";
 import { humanError } from "../store";
@@ -18,6 +18,8 @@ const selectedSubtitleIds = ref<string[]>([]);
 const rangeMode = ref<"all" | "time" | "segment">("all");
 const range = reactive({ startTime: 0, endTime: 0, first: 0, last: 0 });
 const form = reactive({ name: "", extension: "mp4", container: "mp4", busy: false });
+const keyMode = ref<"auto" | "manual">("auto");
+const keyForm = reactive<{ kind: HlsKeyOverrideKind; value: string; iv: string }>({ kind: "hex", value: "", iv: "" });
 const trackManifests = new Map<string, HlsManifest>();
 
 const variants = computed(() => master.value?.variants || []);
@@ -33,6 +35,16 @@ const actualRange = computed(() => {
   return { ...derived, count: derived.last - derived.first + 1 };
 });
 const advancedSupported = computed(() => props.capabilities.includes("hls-selection-v1") || props.session.sessionId === "preview");
+const segmentEngineSupported = computed(() => props.capabilities.includes("hls-segment-engine-v1") || props.session.sessionId === "preview");
+const keyOverrideSupported = computed(() => props.capabilities.includes("hls-key-override-v1") || props.session.sessionId === "preview");
+const encryptionMethods = computed(() => hlsEncryptionMethods(videoManifest.value));
+const unsupportedEncryption = computed(() => encryptionMethods.value.find(method => method !== "AES-128") || "");
+const keyError = computed(() => keyMode.value === "manual" ? validateHlsKeyOverride(keyForm.kind, keyForm.value, keyForm.iv) : "");
+
+function ensureSupportedEncryption(manifest: HlsManifest, label: string) {
+  const method = hlsEncryptionMethods(manifest).find(value => value !== "AES-128");
+  if (method) throw new Error(`${label}使用 ${method} 加密；流萤不会绕过 DRM。`);
+}
 
 async function fetchText(url: string): Promise<{ text: string; url: string }> {
   if (props.session.sessionId === "preview") return previewManifest(url);
@@ -103,33 +115,38 @@ async function initialize() {
 }
 
 function basePayload() {
-  return { url: props.candidate.url, title: props.candidate.title || props.candidate.pageTitle || "streamfirefly-media", mime: props.candidate.mime || "application/vnd.apple.mpegurl", referer: props.candidate.referer || props.candidate.pageUrl || null, requestHeaders: props.candidate.requestHeaders || {}, downloadThreads: props.downloadThreads, sourceContextId: props.session.sourceContextId };
+  return { url: props.candidate.url, candidateId: props.candidate.id, title: props.candidate.title || props.candidate.pageTitle || "streamfirefly-media", mime: props.candidate.mime || "application/vnd.apple.mpegurl", referer: props.candidate.referer || props.candidate.pageUrl || null, requestHeaders: props.candidate.requestHeaders || {}, downloadThreads: props.downloadThreads, sourceContextId: props.session.sourceContextId };
 }
 
 async function createTask() {
   if (!videoManifest.value || !actualRange.value || !advancedSupported.value) return;
+  if (unsupportedEncryption.value) { error.value = `暂不支持 ${unsupportedEncryption.value} 加密；流萤不会绕过 DRM。`; return; }
+  if (keyMode.value === "manual" && (!keyOverrideSupported.value || keyError.value)) { error.value = keyError.value || "当前本地助手不支持自定义密钥"; return; }
   form.busy = true; error.value = "";
   try {
     const media = deriveMediaPlaylist(videoManifest.value, actualRange.value.first, actualRange.value.last);
     const audio = audioTracks.value.find(item => item.id === selectedAudioId.value) || null;
     const audioManifest = audio ? await loadTrack(audio) : null;
+    if (audioManifest) ensureSupportedEncryption(audioManifest, "所选音轨");
     const audioDerived = audioManifest ? deriveMediaPlaylist(audioManifest, ...segmentRangeForTime(audioManifest, media.actualStart, media.actualEnd)) : null;
     const subtitles = [];
     for (const id of selectedSubtitleIds.value) {
       const track = subtitleTracks.value.find(item => item.id === id);
       if (!track) continue;
       const parsed = await loadTrack(track);
+      ensureSupportedEncryption(parsed, `字幕“${track.name}”`);
       const derived = deriveMediaPlaylist(parsed, ...segmentRangeForTime(parsed, media.actualStart, media.actualEnd));
       subtitles.push({ id: track.id, language: track.language || null, label: track.name, extension: "vtt", manifest: { format: "hls", baseUrl: derived.baseUrl, text: derived.text } });
     }
     const hlsPlan = {
-      version: 1,
+      version: segmentEngineSupported.value ? 2 : 1,
       duration: media.actualEnd - media.actualStart,
       container: form.container,
       range: { requestedStart: range.startTime, requestedEnd: range.endTime, actualStart: media.actualStart, actualEnd: media.actualEnd, firstSegment: media.first, lastSegment: media.last },
       videoManifest: { format: "hls", baseUrl: media.baseUrl, text: media.text },
       audioManifest: audioDerived ? { format: "hls", baseUrl: audioDerived.baseUrl, text: audioDerived.text } : null,
-      subtitles
+      subtitles,
+      keyOverride: segmentEngineSupported.value && keyMode.value === "manual" ? { kind: keyForm.kind, value: keyForm.value.trim(), iv: keyForm.iv.trim() || null } : null
     };
     const result: any = await sendMessage({ type: "task.create", payload: { ...basePayload(), fileName: form.name.trim(), saveDir: props.saveDir || null, hlsPlan } });
     if (!result?.ok) throw new Error(result?.error || "task_create_failed");
@@ -153,8 +170,9 @@ function previewManifest(url: string) {
   <section class="parser-page">
     <div class="subpage-heading"><button class="button subtle" type="button" @click="$emit('back')">← 返回资源</button><div><span class="tag">HLS</span><h2>媒体解析</h2><p>{{ candidate.pageTitle || candidate.title || candidate.url }}</p></div></div>
     <div v-if="error" class="status-banner error">{{ error }}</div>
-    <div v-if="master?.live" class="status-banner warning"><strong>检测到直播清单</strong><span>Beta 1 支持查看和预览；直播轮询、边下边存将在后续版本实现。</span></div>
+    <div v-if="master?.live" class="status-banner warning"><strong>检测到直播清单</strong><span>Beta 2 聚焦可靠点播下载；直播轮询、边下边存将在 Beta 3 实现。</span></div>
     <div v-if="!advancedSupported" class="status-banner warning"><strong>需要升级本地助手</strong><span>安装流萤 0.9.0 Native Host 后才能按选择下载 HLS。</span></div>
+    <div v-else-if="!segmentEngineSupported" class="status-banner warning"><strong>正在使用兼容下载模式</strong><span>升级至 Beta 2 本地助手后可使用切片重试、断点恢复和手动 AES-128 密钥。</span></div>
     <div class="parser-grid">
       <section class="panel parser-options">
         <div class="panel-title"><div><h3>画质与轨道</h3><p>选择最终保存的媒体内容</p></div></div>
@@ -179,10 +197,24 @@ function previewManifest(url: string) {
         <div v-else-if="!loading" class="empty-state"><span>⌁</span><h3>没有可用切片</h3><p>此清单可能无法下载或仍在直播更新。</p></div>
       </section>
     </div>
+    <details class="panel encryption-panel">
+      <summary><span><strong>加密与密钥</strong><small>{{ encryptionMethods.length ? `检测到 ${encryptionMethods.join('、')}` : '当前所选画质未检测到加密' }}</small></span><i>⌄</i></summary>
+      <div class="encryption-body">
+        <div v-if="unsupportedEncryption" class="status-banner error"><strong>不支持 {{ unsupportedEncryption }}</strong><span>仅支持标准 AES-128；SAMPLE-AES 与 DRM 只识别，不尝试绕过。</span></div>
+        <label class="choice-card compact"><input v-model="keyMode" type="radio" value="auto"><span><strong>自动使用清单密钥</strong><small>按照 #EXT-X-KEY 获取密钥，并在批量下载前验证首个加密切片。</small></span></label>
+        <label class="choice-card compact" :class="{ disabled: !keyOverrideSupported }"><input v-model="keyMode" type="radio" value="manual" :disabled="!keyOverrideSupported"><span><strong>手动指定 AES-128 密钥</strong><small>密钥仅保存在本次 Native Host 进程内，不写入任务记录或检查点。</small></span></label>
+        <div v-if="keyMode === 'manual'" class="key-form">
+          <label><span>密钥格式</span><select v-model="keyForm.kind" class="control"><option value="hex">Hex</option><option value="base64">Base64</option><option value="url">密钥 URL</option></select></label>
+          <label class="key-value"><span>{{ keyForm.kind === 'url' ? '密钥地址' : '密钥内容' }}</span><input v-model="keyForm.value" class="control" autocomplete="off" :placeholder="keyForm.kind === 'hex' ? '32 位十六进制' : keyForm.kind === 'base64' ? '解码后 16 字节' : 'https://example.com/key.bin'"></label>
+          <label><span>自定义 IV（可选）</span><input v-model="keyForm.iv" class="control" autocomplete="off" placeholder="32 位十六进制"></label>
+          <p v-if="keyError" class="inline-error">{{ keyError }}</p>
+        </div>
+      </div>
+    </details>
     <section class="download-summary panel">
       <div><span>输出文件</span><div class="filename"><input v-model="form.name" maxlength="100"><b>.{{ form.extension }}</b></div><small>{{ saveDir || '系统默认下载目录' }}</small></div>
       <div class="summary-pills"><span>{{ selectedVariant?.height ? `${selectedVariant.height}P` : '原始画质' }}</span><span>{{ audioTracks.find(item => item.id === selectedAudioId)?.name || '内嵌音轨' }}</span><span>{{ selectedSubtitleIds.length }} 条字幕</span><span>{{ form.container.toUpperCase() }} 无转码</span></div>
-      <button class="button primary large" type="button" :disabled="loading || master?.live || !videoManifest || !advancedSupported || form.busy || !form.name.trim()" @click="createTask">{{ form.busy ? '正在创建任务…' : '开始下载' }}</button>
+      <button class="button primary large" type="button" :disabled="loading || master?.live || !videoManifest || !advancedSupported || Boolean(unsupportedEncryption) || Boolean(keyError) || form.busy || !form.name.trim()" @click="createTask">{{ form.busy ? '正在创建任务…' : segmentEngineSupported ? '开始可靠下载' : '开始下载' }}</button>
     </section>
   </section>
 </template>

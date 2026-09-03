@@ -1,7 +1,8 @@
 param(
   [ValidatePattern('^\d+\.\d+\.\d+-beta\.\d+$')]
-  [string]$BundleVersion = '0.9.0-beta.1',
-  [string]$OutputDir = (Join-Path (Split-Path -Parent $PSScriptRoot) 'release')
+  [string]$BundleVersion = '0.9.0-beta.2',
+  [string]$OutputDir = (Join-Path (Split-Path -Parent $PSScriptRoot) 'release'),
+  [switch]$AllowDirtySource
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -10,7 +11,7 @@ $sourceBranch = (& git -C $root branch --show-current).Trim()
 if ([string]::IsNullOrWhiteSpace($sourceBranch) -and $env:GITHUB_REF_NAME) { $sourceBranch = $env:GITHUB_REF_NAME }
 $sourceStatus = @(& git -C $root status --porcelain)
 $sourceDirty = $sourceStatus.Count -gt 0
-if ($sourceDirty) { throw "Internal packages require a clean source tree: $($sourceStatus -join '; ')" }
+if ($sourceDirty -and -not $AllowDirtySource) { throw "Internal packages require a clean source tree unless -AllowDirtySource is explicitly used: $($sourceStatus -join '; ')" }
 $cargo = Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe'
 if (-not (Test-Path -LiteralPath $cargo -PathType Leaf)) { throw 'Rust Cargo was not found' }
 $rustc = Join-Path (Split-Path -Parent $cargo) 'rustc.exe'
@@ -82,7 +83,7 @@ foreach ($architecture in @('x64', 'arm64')) {
     if (Test-Path -LiteralPath $archive) { Remove-Item -LiteralPath $archive -Force }
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     [System.IO.Compression.ZipFile]::CreateFromDirectory($bundleRoot, $archive, [System.IO.Compression.CompressionLevel]::Optimal, $true)
-    & $PSScriptRoot\audit-internal-test.ps1 -Archive $archive -ExpectedArchitecture $architecture -ExpectedBundleVersion $BundleVersion -ExpectedSourceCommit $sourceCommit
+    & $PSScriptRoot\audit-internal-test.ps1 -Archive $archive -ExpectedArchitecture $architecture -ExpectedBundleVersion $BundleVersion -ExpectedSourceCommit $sourceCommit -AllowDirtySource:$AllowDirtySource
     $archives += $archive
   } finally {
     if (Test-Path -LiteralPath $tempBase) { Remove-Item -LiteralPath $tempBase -Recurse -Force }

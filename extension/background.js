@@ -515,7 +515,17 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message?.type === "native.connect") { nativeInfo().then(sendResponse); return true; }
   if (["task.create", "task.prepare"].includes(message?.type) && message.payload?.hlsPlan) {
-    nativeInfo().then(info => info.capabilities.includes("hls-selection-v1") && info.capabilities.includes("task-output-group-v1") ? nativeRequestPromise(message.type, message.payload).then(sendResponse) : sendResponse({ ok: false, error: "hls_selection_native_upgrade_required" }));
+    nativeInfo().then(info => {
+      const plan = message.payload.hlsPlan;
+      const baseSupported = info.capabilities.includes("hls-selection-v1") && info.capabilities.includes("task-output-group-v1");
+      const segmentEngineSupported = plan.version !== 2 || info.capabilities.includes("hls-segment-engine-v1");
+      const keyOverrideSupported = !plan.keyOverride || info.capabilities.includes("hls-key-override-v1");
+      if (!baseSupported || !segmentEngineSupported || !keyOverrideSupported) {
+        sendResponse({ ok: false, error: "hls_selection_native_upgrade_required" });
+        return;
+      }
+      nativeRequestPromise(message.type, message.payload).then(sendResponse);
+    });
     return true;
   }
   if (["task.create", "task.prepare"].includes(message?.type) && message.payload?.inlineManifest) {

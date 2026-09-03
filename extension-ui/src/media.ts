@@ -48,6 +48,24 @@ export interface HlsManifest {
   segments: HlsSegment[];
 }
 
+export type HlsKeyOverrideKind = "hex" | "base64" | "url";
+
+export function hlsEncryptionMethods(manifest: HlsManifest | null): string[] {
+  return [...new Set((manifest?.segments || []).map(segment => segment.key?.method).filter((value): value is string => Boolean(value && value !== "NONE")))];
+}
+
+export function validateHlsKeyOverride(kind: HlsKeyOverrideKind, value: string, iv = ""): string {
+  const normalized = value.trim();
+  if (!normalized) return "请输入密钥内容或密钥地址";
+  if (kind === "hex" && !/^(?:0x)?[0-9a-f]{32}$/i.test(normalized)) return "Hex 密钥必须是 32 位十六进制";
+  if (kind === "base64") {
+    try { if (atob(normalized).length !== 16) return "Base64 解码后必须是 16 字节"; } catch { return "Base64 密钥格式无效"; }
+  }
+  if (kind === "url" && !/^https?:\/\//i.test(normalized)) return "密钥地址必须使用 HTTP 或 HTTPS";
+  if (iv.trim() && !/^(?:0x)?[0-9a-f]{32}$/i.test(iv.trim())) return "IV 必须是 32 位十六进制";
+  return "";
+}
+
 function absolute(value: string, baseUrl: string): string {
   return new URL(value, baseUrl).href;
 }
@@ -150,7 +168,7 @@ export function segmentRangeForTime(manifest: HlsManifest, start: number, end: n
 function quote(value: string): string { return `"${value.replaceAll('"', "%22")}"`; }
 
 export function deriveMediaPlaylist(manifest: HlsManifest, first: number, last: number): { text: string; baseUrl: string; first: number; last: number; actualStart: number; actualEnd: number } {
-  if (manifest.live) throw new Error("Beta 1 暂不支持直播下载");
+  if (manifest.live) throw new Error("Beta 2 暂不支持直播下载");
   if (!manifest.segments.length) throw new Error("清单没有可下载切片");
   const from = Math.max(0, Math.min(first, manifest.segments.length - 1));
   const to = Math.max(from, Math.min(last, manifest.segments.length - 1));
@@ -160,15 +178,15 @@ export function deriveMediaPlaylist(manifest: HlsManifest, first: number, last: 
   let previousMap = "";
   for (const segment of selected) {
     if (segment.discontinuity) lines.push("#EXT-X-DISCONTINUITY");
-    const mapKey = segment.initMap ? `${segment.initMap.uri}|${segment.initMap.byteRange || ""}` : "";
-    if (segment.initMap && mapKey !== previousMap) {
-      lines.push(`#EXT-X-MAP:URI=${quote(segment.initMap.uri)}${segment.initMap.byteRange ? `,BYTERANGE=${quote(segment.initMap.byteRange)}` : ""}`);
-      previousMap = mapKey;
-    }
     const keyKey = segment.key ? `${segment.key.method}|${segment.key.uri || ""}|${segment.key.iv || ""}` : "";
     if (segment.key && keyKey !== previousKey) {
       lines.push(`#EXT-X-KEY:METHOD=${segment.key.method}${segment.key.uri ? `,URI=${quote(segment.key.uri)}` : ""}${segment.key.iv ? `,IV=${segment.key.iv}` : ""}`);
       previousKey = keyKey;
+    }
+    const mapKey = segment.initMap ? `${segment.initMap.uri}|${segment.initMap.byteRange || ""}` : "";
+    if (segment.initMap && mapKey !== previousMap) {
+      lines.push(`#EXT-X-MAP:URI=${quote(segment.initMap.uri)}${segment.initMap.byteRange ? `,BYTERANGE=${quote(segment.initMap.byteRange)}` : ""}`);
+      previousMap = mapKey;
     }
     if (segment.byteRange) lines.push(`#EXT-X-BYTERANGE:${segment.byteRange}`);
     lines.push(`#EXTINF:${segment.duration.toFixed(6)},${segment.title}`, segment.uri);

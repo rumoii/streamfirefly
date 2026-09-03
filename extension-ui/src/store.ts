@@ -47,7 +47,7 @@ export const useAppStore = defineStore("app", () => {
         session.value = { sessionId: "preview", sourceContextId: "preview-page", sourceTabId: 1, appTabId: 2, pageUrl: "https://media.example/demo", pageTitle: "示例媒体页面", favIconUrl: "", sourceClosed: false, supported: true, paused: false };
         candidates.value = previewCandidates();
         tasks.value = previewTasks();
-        capabilities.value = ["hls-selection-v1", "hls-subtitle-sidecar-v1", "task-output-group-v1"];
+        capabilities.value = ["hls-selection-v1", "hls-subtitle-sidecar-v1", "task-output-group-v1", "hls-segment-engine-v1", "hls-checkpoint-v1", "hls-aes128-v1", "hls-key-override-v1", "hls-reauthorize-v1"];
       } else {
         const native: any = await sendMessage({ type: "native.connect" });
         capabilities.value = native?.capabilities || [];
@@ -98,8 +98,15 @@ export const useAppStore = defineStore("app", () => {
     settings.value = normalized;
   }
 
-  async function controlTask(task: DownloadTask, action: string) {
-    const result: any = await sendMessage({ type: "task.control", payload: { id: task.id, action } });
+  async function controlTask(task: DownloadTask, action: string, suppliedContext: any = null) {
+    const resumeContext: any = suppliedContext ? { ...suppliedContext } : {};
+    if (task.resume_requirement?.includes("authorization")) {
+      const candidate = candidates.value.find(item => item.id === task.source_candidate_id) || candidates.value.find(item => item.url === task.url);
+      if (!candidate) throw new Error("hls_source_candidate_missing");
+      resumeContext.requestHeaders = candidate.requestHeaders || {};
+      resumeContext.referer = candidate.referer || candidate.pageUrl || null;
+    }
+    const result: any = await sendMessage({ type: "task.control", payload: { id: task.id, action, resumeContext: Object.keys(resumeContext).length ? resumeContext : null } });
     if (!result?.ok) throw new Error(result?.error || "task_control_failed");
     const index = tasks.value.findIndex(item => item.id === task.id);
     if (index >= 0 && result.task) tasks.value[index] = result.task;
@@ -133,9 +140,19 @@ export function humanError(value: string): string {
     app_session_not_found: "此流萤页面的会话已经失效，请从来源网页重新打开。",
     native_host_unavailable: "未连接到本地助手，请安装或重新启动流萤本地助手。",
     native_host_timeout: "本地助手响应超时，请重启后重试。",
-    hls_selection_native_upgrade_required: "本地助手版本过旧，请安装 0.9.0 版本后重试。",
-    inline_hls_native_upgrade_required: "本地助手版本过旧，请安装 0.9.0 版本后重试。",
+    hls_selection_native_upgrade_required: "本地助手版本过旧，请安装 0.9.0 Beta 2 后重试。",
+    inline_hls_native_upgrade_required: "本地助手版本过旧，请安装 0.9.0 Beta 2 后重试。",
     hls_plan_expired: "本地助手重启后无法恢复该 HLS 选择计划，请从资源页重新解析并创建任务。",
+    hls_authorization_required: "请回到仍保持登录的来源页面，重新播放资源后再授权继续。",
+    hls_key_required: "请重新输入 AES-128 密钥后继续。",
+    hls_source_candidate_missing: "当前流萤页面已找不到原资源，请回到来源网页重新播放并嗅探。",
+    hls_key_override_invalid: "自定义 AES-128 密钥或 IV 格式无效。",
+    hls_key_validation_failed: "AES-128 密钥未能解开首个媒体切片，请检查密钥和 IV。",
+    hls_map_iv_required: "该 HLS 的加密初始化片段缺少规范要求的显式 IV。",
+    hls_encryption_unsupported: "该 HLS 使用了暂不支持的加密方式；流萤不会绕过 DRM。",
+    hls_checkpoint_invalid: "HLS 检查点已损坏，请重新创建下载任务。",
+    hls_checkpoint_version_unsupported: "HLS 检查点版本不兼容，请升级本地助手或重新创建任务。",
+    hls_live_not_supported: "Beta 2 暂不支持直播 M3U8 下载。",
     path_not_writable: "保存目录不可写，请检查路径和权限。",
     source_page_closed: "来源页面已经关闭。"
   };
@@ -153,5 +170,5 @@ function previewCandidates(): MediaCandidate[] {
 }
 
 function previewTasks(): DownloadTask[] {
-  return [{ id: "preview-task", title: "示例视频", state: "running", phase: "merging", progress: 42, downloaded_bytes: 42_000_000, total_bytes: 100_000_000, speed_bytes_per_second: 5_200_000, eta_seconds: 11, output: "D:\\Downloads\\示例视频.mp4", source_context_id: "preview-page", outputs: [{ kind: "media", path: "D:\\Downloads\\示例视频.mp4", state: "running" }] }];
+  return [{ id: "preview-task", title: "示例视频", state: "running", phase: "downloading_segments", progress: 42, downloaded_bytes: 42_000_000, total_bytes: null, speed_bytes_per_second: 5_200_000, eta_seconds: 11, segments_completed: 126, segments_total: 300, failed_segments: 0, retry_count: 2, checkpoint_state: "active", output: "D:\\Downloads\\示例视频.mp4", source_context_id: "preview-page", outputs: [{ kind: "media", path: "D:\\Downloads\\示例视频.mp4", state: "running" }] } as DownloadTask];
 }

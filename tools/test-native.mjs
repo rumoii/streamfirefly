@@ -14,5 +14,6 @@ child.stdin.end();
 const [output] = await once(child.stdout, 'data');
 const size = output.readUInt32LE(0);
 const response = JSON.parse(output.subarray(4, 4 + size).toString('utf8'));
-if (!response.ok || response.id !== 'smoke' || response.hostVersion !== '0.9.0' || response.protocolVersion !== 3 || !response.supportedProtocolVersions?.includes(2) || !response.capabilities?.includes('inline-hls-v1') || !response.capabilities?.includes('task-control-v1') || !response.capabilities?.includes('hls-selection-v1') || !response.capabilities?.includes('hls-subtitle-sidecar-v1') || !response.capabilities?.includes('task-output-group-v1')) throw new Error(`Unexpected native response: ${JSON.stringify(response)}`);
+const requiredCapabilities = ['inline-hls-v1', 'task-control-v1', 'hls-selection-v1', 'hls-subtitle-sidecar-v1', 'task-output-group-v1', 'hls-segment-engine-v1', 'hls-checkpoint-v1', 'hls-aes128-v1', 'hls-key-override-v1', 'hls-reauthorize-v1'];
+if (!response.ok || response.id !== 'smoke' || response.hostVersion !== '0.9.0' || response.protocolVersion !== 3 || !response.supportedProtocolVersions?.includes(2) || requiredCapabilities.some(capability => !response.capabilities?.includes(capability))) throw new Error(`Unexpected native response: ${JSON.stringify(response)}`);
 console.log('Native protocol capability test passed');
