@@ -7,10 +7,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const exe = path.join(root, 'native-host', 'target', 'debug', 'streamfirefly-native.exe');
+const exe = process.env.STREAMFIREFLY_NATIVE_EXE || path.join(root, 'native-host', 'target', 'debug', 'streamfirefly-native.exe');
 const ffmpegDir = path.join(root, 'installer', 'build', 'x64');
 const ffmpeg = path.join(ffmpegDir, 'ffmpeg.exe');
-if (!fs.existsSync(exe)) throw new Error(`Native debug executable is missing: ${exe}`);
+if (!fs.existsSync(exe)) throw new Error(`Native executable is missing: ${exe}`);
 if (!fs.existsSync(ffmpeg)) throw new Error(`Bundled x64 FFmpeg fixture is missing: ${ffmpeg}`);
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'streamfirefly-hls-e2e-'));

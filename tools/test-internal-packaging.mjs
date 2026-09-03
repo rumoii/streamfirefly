@@ -10,6 +10,8 @@ const bundleVersion = '0.9.0-beta.2';
 const packageScript = read('tools/package-internal-test.ps1');
 const auditScript = read('tools/audit-internal-test.ps1');
 const nativeTest = read('tools/test-native.mjs');
+const nativeDownloadTest = read('tools/test-native-download.mjs');
+const nativeHlsTest = read('tools/test-native-hls.mjs');
 const readme = read('README-INTERNAL.md');
 const workflow = read('.github/workflows/package-internal.yml');
 
@@ -23,6 +25,8 @@ requireText(auditScript, '-not $AllowDirtySource', 'Internal package audit');
 requireText(auditScript, '$packageInfo.sourceCommit -ne $ExpectedSourceCommit', 'Internal package audit');
 requireText(auditScript, '$packageInfo.version -ne $ExpectedBundleVersion', 'Internal package audit');
 requireText(nativeTest, 'process.env.STREAMFIREFLY_NATIVE_EXE', 'Native host test');
+requireText(nativeDownloadTest, 'process.env.STREAMFIREFLY_NATIVE_EXE', 'Native download test');
+requireText(nativeHlsTest, 'process.env.STREAMFIREFLY_NATIVE_EXE', 'Native HLS test');
 requireText(readme, `StreamFirefly-${bundleVersion}-internal-x64.zip`, 'Internal test guide');
 requireText(readme, `StreamFirefly-${bundleVersion}-internal-arm64.zip`, 'Internal test guide');
 for (const expected of [

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const exe = path.join(root, 'native-host', 'target', 'debug', 'streamfirefly-native.exe');
+const exe = process.env.STREAMFIREFLY_NATIVE_EXE || path.join(root, 'native-host', 'target', 'debug', 'streamfirefly-native.exe');
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'streamfirefly-e2e-'));
 const payload = Buffer.alloc(5 * 1024 * 1024, 83);
 const unknownPayload = Buffer.alloc(2 * 1024 * 1024, 85);
