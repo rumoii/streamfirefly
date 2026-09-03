@@ -27,6 +27,7 @@ requireText(auditScript, '$packageInfo.version -ne $ExpectedBundleVersion', 'Int
 requireText(nativeTest, 'process.env.STREAMFIREFLY_NATIVE_EXE', 'Native host test');
 requireText(nativeDownloadTest, 'process.env.STREAMFIREFLY_NATIVE_EXE', 'Native download test');
 requireText(nativeHlsTest, 'process.env.STREAMFIREFLY_NATIVE_EXE', 'Native HLS test');
+requireText(nativeHlsTest, 'process.env.STREAMFIREFLY_FFMPEG_EXE', 'Native HLS FFmpeg fixture');
 requireText(readme, `StreamFirefly-${bundleVersion}-internal-x64.zip`, 'Internal test guide');
 requireText(readme, `StreamFirefly-${bundleVersion}-internal-arm64.zip`, 'Internal test guide');
 for (const expected of [
@@ -39,6 +40,7 @@ for (const expected of [
   `default: ${bundleVersion}`,
   'rustup target add x86_64-pc-windows-msvc aarch64-pc-windows-msvc',
   '.\\tools\\package-internal-test.ps1 -BundleVersion $env:BUNDLE_VERSION',
+  "$env:STREAMFIREFLY_FFMPEG_EXE = Join-Path $installDir 'ffmpeg.exe'",
   'release/StreamFirefly-${{ inputs.bundle_version }}-internal-x64.zip',
   'release/StreamFirefly-${{ inputs.bundle_version }}-internal-arm64.zip',
   'INTERNAL-SHA256SUMS.txt'

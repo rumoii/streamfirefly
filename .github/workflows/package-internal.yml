@@ -100,6 +100,7 @@ jobs:
             $installed = $true
             foreach ($path in $registryPaths) { if (-not (Test-Path -LiteralPath $path)) { throw "Native Messaging registration is missing: $path" } }
             $env:STREAMFIREFLY_NATIVE_EXE = Join-Path $installDir 'streamfirefly-native.exe'
+            $env:STREAMFIREFLY_FFMPEG_EXE = Join-Path $installDir 'ffmpeg.exe'
             npm run test:native
             if ($LASTEXITCODE -ne 0) { throw 'Packaged Native Host protocol test failed' }
             & (Join-Path $installDir 'ffmpeg.exe') -version | Select-Object -First 1
