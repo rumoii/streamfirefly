@@ -11,7 +11,7 @@ use std::{
 
 type Aes128CbcDec = cbc::Decryptor<Aes128>;
 
-pub const CHECKPOINT_VERSION: u8 = 1;
+pub const CHECKPOINT_VERSION: u8 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ByteRange {
@@ -67,6 +67,10 @@ pub struct TrackCheckpoint {
     pub duration: f64,
     pub maps: Vec<MapSpec>,
     pub segments: Vec<SegmentSpec>,
+    #[serde(default)]
+    pub end_list: bool,
+    #[serde(default)]
+    pub target_duration: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,6 +95,10 @@ pub struct PersistedPlan {
     pub video_manifest: PersistedManifest,
     pub audio_manifest: Option<PersistedManifest>,
     pub subtitles: Vec<PersistedSubtitlePlan>,
+    #[serde(default)]
+    pub live: bool,
+    #[serde(default)]
+    pub poll_interval_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -210,12 +218,15 @@ fn extension_from_url(uri: &str, fallback: &str) -> String {
     extension.to_ascii_lowercase()
 }
 
-pub fn parse_media_playlist(
+fn parse_media_playlist_inner(
     id: &str,
     kind: &str,
     language: Option<String>,
     label: Option<String>,
     manifest: &PersistedManifest,
+    allow_live: bool,
+    mut next_offsets: HashMap<String, u64>,
+    known_ranges: HashMap<(u64, String), ByteRange>,
 ) -> Result<TrackCheckpoint, String> {
     let lines: Vec<&str> = manifest
         .text
@@ -235,10 +246,10 @@ pub fn parse_media_playlist(
     let mut current_map: Option<String> = None;
     let mut discontinuity = false;
     let mut end_list = false;
+    let mut target_duration = None;
     let mut duration = 0.0_f64;
     let mut maps = Vec::new();
     let mut segments = Vec::new();
-    let mut next_offsets = HashMap::new();
     for line in lines {
         if let Some(value) = line.strip_prefix("#EXT-X-MEDIA-SEQUENCE:") {
             media_sequence = value.trim().parse().unwrap_or(0);
@@ -252,10 +263,18 @@ pub fn parse_media_playlist(
                     .ok_or_else(|| "hls_segment_duration_invalid".to_string())?,
             );
             pending_title = title.to_string();
+        } else if let Some(value) = line.strip_prefix("#EXT-X-TARGETDURATION:") {
+            target_duration = value.trim().parse::<f64>().ok();
         } else if let Some(value) = line.strip_prefix("#EXT-X-BYTERANGE:") {
             pending_range = Some(value.trim().to_string());
         } else if let Some(value) = line.strip_prefix("#EXT-X-KEY:") {
             let attributes = parse_attributes(value);
+            if attributes
+                .get("KEYFORMAT")
+                .is_some_and(|value| value != "identity")
+            {
+                return Err("hls_drm_unsupported".into());
+            }
             let method = attributes
                 .get("METHOD")
                 .map(String::as_str)
@@ -305,6 +324,8 @@ pub fn parse_media_playlist(
             current_map = Some(map_id);
         } else if line == "#EXT-X-DISCONTINUITY" {
             discontinuity = true;
+        } else if line.starts_with("#EXT-X-PART:") || line.starts_with("#EXT-X-PRELOAD-HINT:") {
+            return Err("hls_ll_part_unsupported".into());
         } else if line == "#EXT-X-ENDLIST" {
             end_list = true;
         } else if !line.starts_with('#') {
@@ -312,17 +333,27 @@ pub fn parse_media_playlist(
                 .take()
                 .ok_or_else(|| "hls_segment_duration_missing".to_string())?;
             let uri = absolute(line, &manifest.base_url)?;
+            let index = segments.len();
+            let sequence = media_sequence.saturating_add(index as u64);
             let byte_range = pending_range
                 .take()
-                .map(|value| parse_byte_range(&value, &uri, &mut next_offsets))
+                .map(|value| {
+                    if !value.contains('@') {
+                        if let Some(range) = known_ranges.get(&(sequence, uri.clone())).cloned() {
+                            next_offsets
+                                .insert(uri.clone(), range.start.saturating_add(range.length));
+                            return Ok(range);
+                        }
+                    }
+                    parse_byte_range(&value, &uri, &mut next_offsets)
+                })
                 .transpose()?;
-            let index = segments.len();
             let extension =
                 extension_from_url(&uri, if kind == "subtitle" { "vtt" } else { "bin" });
             segments.push(SegmentSpec {
                 id: format!("{id}:segment:{index}"),
                 index,
-                sequence: media_sequence.saturating_add(index as u64),
+                sequence,
                 uri,
                 duration: segment_duration,
                 title: std::mem::take(&mut pending_title),
@@ -340,7 +371,7 @@ pub fn parse_media_playlist(
             duration += segment_duration;
         }
     }
-    if !end_list {
+    if !allow_live && !end_list {
         return Err("hls_live_not_supported".into());
     }
     if segments.is_empty() {
@@ -354,7 +385,159 @@ pub fn parse_media_playlist(
         duration,
         maps,
         segments,
+        end_list,
+        target_duration,
     })
+}
+
+pub fn parse_media_playlist(
+    id: &str,
+    kind: &str,
+    language: Option<String>,
+    label: Option<String>,
+    manifest: &PersistedManifest,
+) -> Result<TrackCheckpoint, String> {
+    parse_media_playlist_inner(
+        id,
+        kind,
+        language,
+        label,
+        manifest,
+        false,
+        HashMap::new(),
+        HashMap::new(),
+    )
+}
+
+pub fn parse_live_media_playlist(
+    id: &str,
+    kind: &str,
+    language: Option<String>,
+    label: Option<String>,
+    manifest: &PersistedManifest,
+) -> Result<TrackCheckpoint, String> {
+    parse_media_playlist_inner(
+        id,
+        kind,
+        language,
+        label,
+        manifest,
+        true,
+        HashMap::new(),
+        HashMap::new(),
+    )
+}
+
+pub fn parse_live_media_playlist_after(
+    previous: &TrackCheckpoint,
+    manifest: &PersistedManifest,
+) -> Result<TrackCheckpoint, String> {
+    let mut offsets = HashMap::new();
+    let known_ranges = previous
+        .segments
+        .iter()
+        .filter_map(|item| {
+            item.byte_range
+                .clone()
+                .map(|range| ((item.sequence, item.uri.clone()), range))
+        })
+        .collect();
+    for (uri, range) in previous
+        .maps
+        .iter()
+        .filter_map(|item| item.byte_range.as_ref().map(|range| (&item.uri, range)))
+        .chain(
+            previous
+                .segments
+                .iter()
+                .filter_map(|item| item.byte_range.as_ref().map(|range| (&item.uri, range))),
+        )
+    {
+        offsets
+            .entry(uri.clone())
+            .and_modify(|value: &mut u64| {
+                *value = (*value).max(range.start.saturating_add(range.length))
+            })
+            .or_insert_with(|| range.start.saturating_add(range.length));
+    }
+    parse_media_playlist_inner(
+        &previous.id,
+        &previous.kind,
+        previous.language.clone(),
+        previous.label.clone(),
+        manifest,
+        true,
+        offsets,
+        known_ranges,
+    )
+}
+
+fn same_range(left: &Option<ByteRange>, right: &Option<ByteRange>) -> bool {
+    left == right
+}
+
+pub fn merge_live_window(
+    checkpoint: &mut TrackCheckpoint,
+    window: TrackCheckpoint,
+) -> Result<usize, String> {
+    if checkpoint.id != window.id || checkpoint.kind != window.kind {
+        return Err("hls_live_track_mismatch".into());
+    }
+    let mut map_ids = HashMap::new();
+    for map in window.maps {
+        let existing = checkpoint.maps.iter().find(|item| {
+            item.uri == map.uri
+                && same_range(&item.byte_range, &map.byte_range)
+                && item.key == map.key
+        });
+        let id = if let Some(existing) = existing {
+            existing.id.clone()
+        } else {
+            let index = checkpoint.maps.len();
+            let id = format!("{}:map:{index}", checkpoint.id);
+            checkpoint.maps.push(MapSpec {
+                id: id.clone(),
+                local_name: format!("maps/{index:04}.{}", extension_from_url(&map.uri, "mp4")),
+                ..map.clone()
+            });
+            id
+        };
+        map_ids.insert(map.id, id);
+    }
+    let mut added = 0;
+    for mut segment in window.segments {
+        let duplicate = checkpoint.segments.iter().any(|item| {
+            item.sequence == segment.sequence
+                && item.uri == segment.uri
+                && same_range(&item.byte_range, &segment.byte_range)
+        });
+        if duplicate {
+            continue;
+        }
+        let index = checkpoint.segments.len();
+        segment.id = format!("{}:segment:{index}", checkpoint.id);
+        segment.index = index;
+        segment.local_name = format!(
+            "segments/{index:06}.{}",
+            extension_from_url(
+                &segment.uri,
+                if checkpoint.kind == "subtitle" {
+                    "vtt"
+                } else {
+                    "bin"
+                }
+            )
+        );
+        segment.map_id = segment
+            .map_id
+            .and_then(|map_id| map_ids.get(&map_id).cloned());
+        checkpoint.duration += segment.duration;
+        checkpoint.segments.push(segment);
+        added += 1;
+    }
+    checkpoint.end_list = window.end_list;
+    checkpoint.target_duration = window.target_duration.or(checkpoint.target_duration);
+    Ok(added)
 }
 
 pub fn save_checkpoint(path: &Path, checkpoint: &HlsCheckpoint) -> Result<(), String> {
@@ -392,7 +575,7 @@ pub fn load_checkpoint(path: &Path) -> Result<HlsCheckpoint, String> {
         serde_json::from_slice::<HlsCheckpoint>(&bytes)
             .map_err(|_| "hls_checkpoint_invalid".to_string())
     };
-    let checkpoint = read(path).or_else(|primary_error| {
+    let mut checkpoint = read(path).or_else(|primary_error| {
         let backup = path.with_extension("bak");
         if backup.is_file() {
             read(&backup)
@@ -400,9 +583,10 @@ pub fn load_checkpoint(path: &Path) -> Result<HlsCheckpoint, String> {
             Err(primary_error)
         }
     })?;
-    if checkpoint.version != CHECKPOINT_VERSION {
+    if !matches!(checkpoint.version, 1 | CHECKPOINT_VERSION) {
         return Err("hls_checkpoint_version_unsupported".into());
     }
+    checkpoint.version = CHECKPOINT_VERSION;
     Ok(checkpoint)
 }
 
@@ -641,12 +825,18 @@ mod tests {
                 },
                 audio_manifest: None,
                 subtitles: Vec::new(),
+                live: false,
+                poll_interval_seconds: None,
             },
             tracks: Vec::new(),
         };
         save_checkpoint(&path, &checkpoint).unwrap();
         let loaded = load_checkpoint(&path).unwrap();
         assert_eq!(loaded.task_id, "round-trip");
+        let mut legacy = checkpoint.clone();
+        legacy.version = 1;
+        fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        assert_eq!(load_checkpoint(&path).unwrap().version, CHECKPOINT_VERSION);
         let mut invalid = checkpoint;
         invalid.version = CHECKPOINT_VERSION + 1;
         fs::write(&path, serde_json::to_vec(&invalid).unwrap()).unwrap();
@@ -682,5 +872,136 @@ mod tests {
         .unwrap();
         assert_eq!(track.segments.len(), 10_000);
         assert!(serde_json::to_vec(&track).unwrap().len() < 5 * 1024 * 1024);
+    }
+
+    #[test]
+    fn live_window_merges_by_sequence_url_and_range() {
+        let manifest = |sequence: u64, names: &[&str], end_list: bool| PersistedManifest {
+            base_url: "https://media.example/live/index.m3u8".into(),
+            text: format!(
+                "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXT-X-MEDIA-SEQUENCE:{sequence}\n{}{}",
+                names
+                    .iter()
+                    .map(|name| format!("#EXTINF:4,\n{name}\n"))
+                    .collect::<String>(),
+                if end_list { "#EXT-X-ENDLIST\n" } else { "" }
+            ),
+        };
+        let mut checkpoint = parse_live_media_playlist(
+            "video",
+            "video",
+            None,
+            None,
+            &manifest(100, &["100.ts", "101.ts"], false),
+        )
+        .unwrap();
+        let window = parse_live_media_playlist(
+            "video",
+            "video",
+            None,
+            None,
+            &manifest(101, &["101.ts", "102.ts"], true),
+        )
+        .unwrap();
+        assert_eq!(merge_live_window(&mut checkpoint, window).unwrap(), 1);
+        assert_eq!(checkpoint.segments.len(), 3);
+        assert_eq!(checkpoint.segments[2].sequence, 102);
+        assert!(checkpoint.end_list);
+        assert_eq!(checkpoint.duration, 12.0);
+    }
+
+    #[test]
+    fn live_window_keeps_same_url_with_different_ranges() {
+        let first = PersistedManifest {
+            base_url: "https://media.example/live/index.m3u8".into(),
+            text:
+                "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:7\n#EXTINF:2,\n#EXT-X-BYTERANGE:10@0\nmedia.mp4\n"
+                    .into(),
+        };
+        let second = PersistedManifest {
+            base_url: first.base_url.clone(),
+            text:
+                "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:7\n#EXTINF:2,\n#EXT-X-BYTERANGE:10@10\nmedia.mp4\n"
+                    .into(),
+        };
+        let mut checkpoint =
+            parse_live_media_playlist("video", "video", None, None, &first).unwrap();
+        let window = parse_live_media_playlist("video", "video", None, None, &second).unwrap();
+        assert_eq!(merge_live_window(&mut checkpoint, window).unwrap(), 1);
+        assert_eq!(checkpoint.segments.len(), 2);
+    }
+
+    #[test]
+    fn live_window_resolves_implicit_range_after_previous_window() {
+        let first = PersistedManifest {
+            base_url: "https://media.example/live/index.m3u8".into(),
+            text:
+                "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:7\n#EXTINF:2,\n#EXT-X-BYTERANGE:10@0\nmedia.mp4\n"
+                    .into(),
+        };
+        let second = PersistedManifest {
+            base_url: first.base_url.clone(),
+            text: "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:7\n#EXTINF:2,\n#EXT-X-BYTERANGE:10\nmedia.mp4\n#EXTINF:2,\n#EXT-X-BYTERANGE:10\nmedia.mp4\n"
+                .into(),
+        };
+        let mut checkpoint =
+            parse_live_media_playlist("video", "video", None, None, &first).unwrap();
+        let window = parse_live_media_playlist_after(&checkpoint, &second).unwrap();
+        assert_eq!(window.segments[0].byte_range.as_ref().unwrap().start, 0);
+        assert_eq!(window.segments[1].byte_range.as_ref().unwrap().start, 10);
+        merge_live_window(&mut checkpoint, window).unwrap();
+        assert_eq!(checkpoint.segments.len(), 2);
+    }
+
+    #[test]
+    fn live_window_preserves_rotated_keys() {
+        let first = PersistedManifest {
+            base_url: "https://media.example/live/index.m3u8".into(),
+            text: "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:1\n#EXT-X-KEY:METHOD=AES-128,URI=key-1.bin\n#EXTINF:2,\n1.ts\n".into(),
+        };
+        let second = PersistedManifest {
+            base_url: first.base_url.clone(),
+            text: "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:2\n#EXT-X-KEY:METHOD=AES-128,URI=key-2.bin\n#EXTINF:2,\n2.ts\n".into(),
+        };
+        let mut checkpoint =
+            parse_live_media_playlist("video", "video", None, None, &first).unwrap();
+        let window = parse_live_media_playlist_after(&checkpoint, &second).unwrap();
+        merge_live_window(&mut checkpoint, window).unwrap();
+        assert!(checkpoint.segments[0]
+            .key
+            .as_ref()
+            .unwrap()
+            .uri
+            .as_deref()
+            .unwrap()
+            .ends_with("key-1.bin"));
+        assert!(checkpoint.segments[1]
+            .key
+            .as_ref()
+            .unwrap()
+            .uri
+            .as_deref()
+            .unwrap()
+            .ends_with("key-2.bin"));
+    }
+
+    #[test]
+    fn identifies_unsupported_low_latency_parts_and_drm() {
+        let ll = PersistedManifest {
+            base_url: "https://media.example/live/index.m3u8".into(),
+            text: "#EXTM3U\n#EXT-X-PART:DURATION=0.2,URI=part.m4s\n".into(),
+        };
+        assert_eq!(
+            parse_live_media_playlist("video", "video", None, None, &ll).unwrap_err(),
+            "hls_ll_part_unsupported"
+        );
+        let drm = PersistedManifest {
+            base_url: ll.base_url,
+            text: "#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI=key.bin,KEYFORMAT=\"com.apple.streamingkeydelivery\"\n#EXTINF:2,\n1.ts\n".into(),
+        };
+        assert_eq!(
+            parse_live_media_playlist("video", "video", None, None, &drm).unwrap_err(),
+            "hls_drm_unsupported"
+        );
     }
 }

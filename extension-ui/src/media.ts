@@ -1,6 +1,6 @@
 import type { MediaCandidate } from "./types";
 
-export interface HlsKey { method: string; uri: string | null; iv: string | null }
+export interface HlsKey { method: string; uri: string | null; iv: string | null; keyFormat: string | null }
 export interface HlsMap { uri: string; byteRange: string | null }
 export interface HlsSegment {
   index: number;
@@ -46,6 +46,10 @@ export interface HlsManifest {
   variants: HlsVariant[];
   tracks: HlsTrack[];
   segments: HlsSegment[];
+  rawText: string;
+  baseUrl: string;
+  hasLowLatencyParts: boolean;
+  hasDrmKeyFormat: boolean;
 }
 
 export type HlsKeyOverrideKind = "hex" | "base64" | "url";
@@ -112,6 +116,8 @@ export function parseHls(text: string, baseUrl: string): HlsManifest {
   let targetDuration: number | null = null;
   let endList = false;
   let timeline = 0;
+  let hasLowLatencyParts = false;
+  let hasDrmKeyFormat = false;
   for (const line of lines) {
     if (line.startsWith("#EXT-X-STREAM-INF:")) { pendingVariant = parseAttributes(line.slice(line.indexOf(":") + 1)); continue; }
     if (line.startsWith("#EXT-X-MEDIA:")) {
@@ -123,7 +129,8 @@ export function parseHls(text: string, baseUrl: string): HlsManifest {
     if (line.startsWith("#EXT-X-BYTERANGE:")) { pendingByteRange = line.slice(line.indexOf(":") + 1); continue; }
     if (line.startsWith("#EXT-X-MEDIA-SEQUENCE:")) { mediaSequence = Number.parseInt(line.slice(line.indexOf(":") + 1), 10) || 0; continue; }
     if (line.startsWith("#EXT-X-TARGETDURATION:")) { targetDuration = Number.parseFloat(line.slice(line.indexOf(":") + 1)) || null; continue; }
-    if (line.startsWith("#EXT-X-KEY:")) { const item = parseAttributes(line.slice(line.indexOf(":") + 1)); currentKey = { method: item.METHOD || "NONE", uri: item.URI ? absolute(item.URI, baseUrl) : null, iv: item.IV || null }; continue; }
+    if (line.startsWith("#EXT-X-KEY:")) { const item = parseAttributes(line.slice(line.indexOf(":") + 1)); const keyFormat = item.KEYFORMAT || null; if (keyFormat && keyFormat !== "identity") hasDrmKeyFormat = true; currentKey = { method: item.METHOD || "NONE", uri: item.URI ? absolute(item.URI, baseUrl) : null, iv: item.IV || null, keyFormat }; continue; }
+    if (line.startsWith("#EXT-X-PART:") || line.startsWith("#EXT-X-PRELOAD-HINT:")) { hasLowLatencyParts = true; continue; }
     if (line.startsWith("#EXT-X-MAP:")) { const item = parseAttributes(line.slice(line.indexOf(":") + 1)); if (item.URI) initMap = { uri: absolute(item.URI, baseUrl), byteRange: item.BYTERANGE || null }; continue; }
     if (line === "#EXT-X-DISCONTINUITY") { discontinuity = true; continue; }
     if (line === "#EXT-X-ENDLIST") { endList = true; continue; }
@@ -139,7 +146,7 @@ export function parseHls(text: string, baseUrl: string): HlsManifest {
     timeline += duration;
     pendingDuration = null; pendingTitle = ""; pendingByteRange = null; discontinuity = false;
   }
-  return { kind: variants.length ? "master" : "media", live: !endList && !variants.length, targetDuration, duration: timeline, mediaSequence, variants, tracks, segments };
+  return { kind: variants.length ? "master" : "media", live: !endList && !variants.length, targetDuration, duration: timeline, mediaSequence, variants, tracks, segments, rawText: text, baseUrl, hasLowLatencyParts, hasDrmKeyFormat };
 }
 
 export function defaultVariant(items: HlsVariant[]): HlsVariant | null {
@@ -168,7 +175,7 @@ export function segmentRangeForTime(manifest: HlsManifest, start: number, end: n
 function quote(value: string): string { return `"${value.replaceAll('"', "%22")}"`; }
 
 export function deriveMediaPlaylist(manifest: HlsManifest, first: number, last: number): { text: string; baseUrl: string; first: number; last: number; actualStart: number; actualEnd: number } {
-  if (manifest.live) throw new Error("Beta 2 暂不支持直播下载");
+  if (manifest.live) throw new Error("直播清单请使用录制模式");
   if (!manifest.segments.length) throw new Error("清单没有可下载切片");
   const from = Math.max(0, Math.min(first, manifest.segments.length - 1));
   const to = Math.max(from, Math.min(last, manifest.segments.length - 1));

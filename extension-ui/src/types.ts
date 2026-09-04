@@ -69,5 +69,8 @@ export interface DownloadTask {
   retry_count?: number;
   checkpoint_state?: string | null;
   resume_requirement?: "authorization_required" | "key_required" | "authorization_and_key_required" | null;
+  live_recording?: boolean;
+  recorded_duration?: number;
+  last_media_sequence?: number | null;
   source_candidate_id?: string | null;
 }

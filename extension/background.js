@@ -519,8 +519,9 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const plan = message.payload.hlsPlan;
       const baseSupported = info.capabilities.includes("hls-selection-v1") && info.capabilities.includes("task-output-group-v1");
       const segmentEngineSupported = plan.version !== 2 || info.capabilities.includes("hls-segment-engine-v1");
+      const liveEngineSupported = plan.version !== 3 || info.capabilities.includes("hls-live-engine-v1");
       const keyOverrideSupported = !plan.keyOverride || info.capabilities.includes("hls-key-override-v1");
-      if (!baseSupported || !segmentEngineSupported || !keyOverrideSupported) {
+      if (!baseSupported || !segmentEngineSupported || !liveEngineSupported || !keyOverrideSupported) {
         sendResponse({ ok: false, error: "hls_selection_native_upgrade_required" });
         return;
       }

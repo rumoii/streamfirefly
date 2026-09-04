@@ -1,10 +1,11 @@
 mod hls;
 
 use hls::{
-    decrypt_aes128, load_checkpoint, local_playlist, media_header_valid, override_key_bytes,
-    parse_key_override, parse_manifest_iv, parse_media_playlist, save_checkpoint, ByteRange,
-    HlsCheckpoint, KeyOverride, KeyOverrideKind, KeySpec, PersistedManifest, PersistedPlan,
-    PersistedSubtitlePlan, CHECKPOINT_VERSION,
+    decrypt_aes128, load_checkpoint, local_playlist, media_header_valid, merge_live_window,
+    override_key_bytes, parse_key_override, parse_live_media_playlist,
+    parse_live_media_playlist_after, parse_manifest_iv, parse_media_playlist, save_checkpoint,
+    ByteRange, HlsCheckpoint, KeyOverride, KeyOverrideKind, KeySpec, PersistedManifest,
+    PersistedPlan, PersistedSubtitlePlan, CHECKPOINT_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -53,6 +54,8 @@ struct HlsPlan {
     audio_manifest: Option<InlineManifest>,
     subtitles: Vec<HlsSubtitlePlan>,
     key_override: Option<KeyOverride>,
+    live: bool,
+    poll_interval_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -126,6 +129,12 @@ struct Task {
     #[serde(default)]
     requires_key_override: bool,
     #[serde(default)]
+    live_recording: bool,
+    #[serde(default)]
+    recorded_duration: f64,
+    #[serde(default)]
+    last_media_sequence: Option<u64>,
+    #[serde(default)]
     source_candidate_id: Option<String>,
     #[serde(skip)]
     inline_manifest: Option<InlineManifest>,
@@ -154,6 +163,7 @@ struct Store {
     processes: Arc<Mutex<HashMap<String, Vec<Arc<Mutex<Child>>>>>>,
     cancellations: Arc<Mutex<HashMap<String, bool>>>,
     pauses: Arc<Mutex<HashSet<String>>>,
+    stops: Arc<Mutex<HashSet<String>>>,
     recovery_started: Arc<AtomicBool>,
 }
 type Writer = Arc<Mutex<io::BufWriter<io::Stdout>>>;
@@ -221,6 +231,8 @@ fn persisted_plan(value: &HlsPlan) -> PersistedPlan {
                 manifest: persisted_manifest(&subtitle.manifest),
             })
             .collect(),
+        live: value.live,
+        poll_interval_seconds: value.poll_interval_seconds,
     }
 }
 
@@ -254,12 +266,19 @@ fn runtime_plan_from_persisted(value: &PersistedPlan) -> HlsPlan {
             })
             .collect(),
         key_override: None,
+        live: value.live,
+        poll_interval_seconds: value.poll_interval_seconds,
     }
 }
 
 fn new_checkpoint(task_id: &str, plan: &HlsPlan) -> Result<HlsCheckpoint, String> {
     let persisted = persisted_plan(plan);
-    let mut tracks = vec![parse_media_playlist(
+    let parse = if plan.live {
+        parse_live_media_playlist
+    } else {
+        parse_media_playlist
+    };
+    let mut tracks = vec![parse(
         "video",
         "video",
         None,
@@ -267,7 +286,7 @@ fn new_checkpoint(task_id: &str, plan: &HlsPlan) -> Result<HlsCheckpoint, String
         &persisted.video_manifest,
     )?];
     if let Some(audio) = &persisted.audio_manifest {
-        tracks.push(parse_media_playlist(
+        tracks.push(parse(
             "audio",
             "audio",
             None,
@@ -276,7 +295,7 @@ fn new_checkpoint(task_id: &str, plan: &HlsPlan) -> Result<HlsCheckpoint, String
         )?);
     }
     for (index, subtitle) in persisted.subtitles.iter().enumerate() {
-        tracks.push(parse_media_playlist(
+        tracks.push(parse(
             &format!("subtitle-{index}"),
             "subtitle",
             subtitle.language.clone(),
@@ -348,6 +367,7 @@ fn load_store(path: &Path) -> Store {
                 | "retrying"
                 | "pausing"
                 | "cancelling"
+                | "stopping"
         ) {
             let recoverable_hls = task.hls_plan_version >= 2
                 && checkpoint_available(&checkpoint_path_for_state(path, &task.id));
@@ -401,6 +421,7 @@ fn load_store(path: &Path) -> Store {
         processes: Arc::new(Mutex::new(HashMap::new())),
         cancellations: Arc::new(Mutex::new(HashMap::new())),
         pauses: Arc::new(Mutex::new(HashSet::new())),
+        stops: Arc::new(Mutex::new(HashSet::new())),
         recovery_started: Arc::new(AtomicBool::new(false)),
     };
     save_store(&store);
@@ -636,15 +657,20 @@ fn hls_plan(payload: &Value) -> Result<Option<HlsPlan>, &'static str> {
     };
     let version = value["version"]
         .as_u64()
-        .filter(|version| matches!(*version, 1 | 2))
+        .filter(|version| matches!(*version, 1 | 2 | 3))
         .ok_or("hls_plan_version_unsupported")? as u8;
     if version == 1 && value.get("keyOverride").is_some_and(|item| !item.is_null()) {
         return Err("hls_plan_version_unsupported");
     }
+    let live = version == 3;
     let duration = value["duration"]
         .as_f64()
-        .filter(|value| value.is_finite() && *value > 0.0)
+        .filter(|value| value.is_finite() && (*value > 0.0 || live && *value >= 0.0))
         .ok_or("hls_plan_invalid")?;
+    let poll_interval_seconds = value
+        .get("pollIntervalSeconds")
+        .and_then(Value::as_u64)
+        .map(|value| value.clamp(1, 30));
     let container = value["container"]
         .as_str()
         .filter(|value| matches!(*value, "mp4" | "mkv"))
@@ -699,6 +725,8 @@ fn hls_plan(payload: &Value) -> Result<Option<HlsPlan>, &'static str> {
         audio_manifest,
         subtitles,
         key_override,
+        live,
+        poll_interval_seconds,
     }))
 }
 
@@ -1011,6 +1039,9 @@ fn create_task(store: &Store, payload: &Value) -> Result<Task, &'static str> {
         resume_requirement: None,
         requires_authorization,
         requires_key_override,
+        live_recording: hls_plan_version == 3,
+        recorded_duration: 0.0,
+        last_media_sequence: None,
         source_candidate_id: payload["candidateId"].as_str().map(str::to_string),
         inline_manifest,
         hls_plan,
@@ -1076,12 +1107,20 @@ fn clear_pause(store: &Store, id: &str) {
     store.pauses.lock().unwrap().remove(id);
 }
 
+fn clear_stop(store: &Store, id: &str) {
+    store.stops.lock().unwrap().remove(id);
+}
+
 fn pause_requested(store: &Store, id: &str) -> bool {
     store.pauses.lock().unwrap().contains(id)
 }
 
 fn cancel_requested(store: &Store, id: &str) -> bool {
     store.cancellations.lock().unwrap().contains_key(id)
+}
+
+fn stop_requested(store: &Store, id: &str) -> bool {
+    store.stops.lock().unwrap().contains(id)
 }
 
 fn mark_stopped(store: &Store, writer: &Writer, id: &str) {
@@ -1110,6 +1149,7 @@ fn mark_stopped(store: &Store, writer: &Writer, id: &str) {
     });
     clear_cancellation(store, id);
     clear_pause(store, id);
+    clear_stop(store, id);
 }
 
 fn stop_process(store: &Store, id: &str) {
@@ -1172,6 +1212,45 @@ fn task_control(store: &Store, writer: &Writer, payload: &Value) -> Result<Task,
         .cloned()
         .ok_or("task_not_found")?;
     match action {
+        "stop" => {
+            if !task.live_recording {
+                return Err("task_not_live");
+            }
+            if matches!(task.state.as_str(), "succeeded" | "partial") {
+                return Ok(sanitized_task(&task));
+            }
+            if !matches!(
+                task.state.as_str(),
+                "queued"
+                    | "starting"
+                    | "running"
+                    | "retrying"
+                    | "pausing"
+                    | "paused"
+                    | "interrupted"
+                    | "stopping"
+            ) {
+                return Err("task_not_stoppable");
+            }
+            store.stops.lock().unwrap().insert(id.into());
+            let needs_restart = matches!(task.state.as_str(), "paused" | "interrupted");
+            if needs_restart {
+                clear_pause(store, id);
+                clear_cancellation(store, id);
+            }
+            update(store, writer, id, |current| {
+                current.state = "stopping".into();
+                current.phase = "stopping".into();
+                current.message = Some("正在停止录制并保存已下载内容".into());
+            });
+            if needs_restart {
+                let checkpoint = load_checkpoint(&checkpoint_path_for_store(store, id))
+                    .map_err(|_| "hls_checkpoint_missing")?;
+                let mut resumed = task.clone();
+                resumed.hls_plan = Some(runtime_plan_from_persisted(&checkpoint.plan));
+                start_download(store.clone(), writer.clone(), resumed);
+            }
+        }
         "pause" => {
             if task.state == "paused" {
                 return Ok(sanitized_task(&task));
@@ -1212,6 +1291,7 @@ fn task_control(store: &Store, writer: &Writer, payload: &Value) -> Result<Task,
                 return Err("task_not_cancellable");
             }
             clear_pause(store, id);
+            clear_stop(store, id);
             store.cancellations.lock().unwrap().insert(id.into(), true);
             update(store, writer, id, |task| {
                 task.state = "cancelling".into();
@@ -1303,6 +1383,7 @@ fn task_control(store: &Store, writer: &Writer, payload: &Value) -> Result<Task,
             }
             clear_pause(store, id);
             clear_cancellation(store, id);
+            clear_stop(store, id);
             update(store, writer, id, move |task| {
                 if !resumed_headers.is_empty() {
                     if resumed_headers
@@ -2609,7 +2690,7 @@ fn start_hls_checkpoint_download(
                         current.error = Some(error.clone());
                         current.message = Some(
                             match error.as_str() {
-                                "hls_live_not_supported" => "Beta 2 暂不支持直播 HLS",
+                                "hls_live_not_supported" => "当前计划不支持直播 HLS",
                                 "hls_map_iv_required" => "加密初始化片段缺少显式 IV",
                                 "hls_encryption_unsupported" => "HLS 使用了暂不支持的加密方式",
                                 _ => "无法准备 HLS 切片检查点",
@@ -2658,6 +2739,27 @@ fn start_hls_checkpoint_download(
             current.message = Some("请重新输入自定义密钥后继续下载".into());
         });
         return;
+    }
+    let mut checkpoint = checkpoint;
+    if task.live_recording && !stop_requested(&store, &task.id) {
+        if let Err(error) = refresh_live_checkpoint(&store, &task, &mut checkpoint, &work_dir) {
+            let authorization = authorization_hls_error(&error);
+            update(&store, &writer, &task.id, |current| {
+                current.state = if authorization { "interrupted" } else { "failed" }.into();
+                current.phase = if authorization {
+                    "authorization_required"
+                } else {
+                    "failed"
+                }
+                .into();
+                current.error = Some(error.clone());
+                current.checkpoint_state = Some("recoverable".into());
+                current.resume_requirement =
+                    authorization.then(|| "authorization_required".into());
+                current.message = Some("无法读取最新直播清单，可重试继续录制".into());
+            });
+            return;
+        }
     }
     let checkpoint = Arc::new(Mutex::new(checkpoint));
     let jobs = {
@@ -2910,11 +3012,122 @@ fn start_hls_checkpoint_download(
         });
         return;
     }
+    if task.live_recording && !stop_requested(&store, &task.id) {
+        let poll_seconds = {
+            let checkpoint = checkpoint.lock().unwrap();
+            let video = checkpoint.tracks.iter().find(|track| track.kind == "video");
+            if video.is_some_and(|track| track.end_list) {
+                0
+            } else {
+                runtime_plan
+                    .poll_interval_seconds
+                    .or_else(|| {
+                        video
+                            .and_then(|track| track.target_duration)
+                            .map(|seconds| (seconds / 2.0).ceil() as u64)
+                    })
+                    .unwrap_or(3)
+                    .clamp(1, 30)
+            }
+        };
+        if poll_seconds > 0 {
+            let checkpoint_value = checkpoint.lock().unwrap().clone();
+            let video = checkpoint_value
+                .tracks
+                .iter()
+                .find(|track| track.kind == "video");
+            update(&store, &writer, &task.id, |current| {
+                current.state = "running".into();
+                current.phase = "recording".into();
+                current.progress = 0;
+                current.active_connections = 0;
+                current.eta_seconds = None;
+                current.recorded_duration = video.map(|track| track.duration).unwrap_or(0.0);
+                current.last_media_sequence = video
+                    .and_then(|track| track.segments.last())
+                    .map(|segment| segment.sequence);
+                current.message = Some("直播录制中，正在等待新的媒体切片".into());
+            });
+            for _ in 0..poll_seconds * 10 {
+                if cancel_requested(&store, &task.id) {
+                    mark_stopped(&store, &writer, &task.id);
+                    return;
+                }
+                if stop_requested(&store, &task.id) {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+            if !stop_requested(&store, &task.id) {
+                let refreshed = {
+                    let mut checkpoint = checkpoint.lock().unwrap();
+                    let result = refresh_live_checkpoint(&store, &task, &mut checkpoint, &work_dir);
+                    if result.is_ok() {
+                        let _ = save_checkpoint(&checkpoint_file, &checkpoint);
+                    }
+                    result
+                };
+                if let Err(error) = refreshed {
+                    let authorization = authorization_hls_error(&error);
+                    update(&store, &writer, &task.id, |current| {
+                        current.state = if authorization {
+                            "interrupted"
+                        } else {
+                            "failed"
+                        }
+                        .into();
+                        current.phase = if authorization {
+                            "authorization_required"
+                        } else {
+                            "failed"
+                        }
+                        .into();
+                        current.error = Some(error.clone());
+                        current.checkpoint_state = Some("recoverable".into());
+                        current.resume_requirement =
+                            authorization.then(|| "authorization_required".into());
+                        current.message = Some(if authorization {
+                            "直播授权已经失效，请从来源页面重新授权".into()
+                        } else {
+                            "直播清单刷新失败，可重试继续录制".into()
+                        });
+                    });
+                    return;
+                }
+            }
+            let next_task = store
+                .tasks
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|current| current.id == task.id)
+                .cloned()
+                .map(|mut current| {
+                    current.hls_plan = Some(runtime_plan.clone());
+                    current
+                })
+                .unwrap_or(task.clone());
+            thread::spawn(move || {
+                start_hls_checkpoint_download(store, writer, next_task, output, Some(runtime_plan))
+            });
+            return;
+        }
+    }
     let checkpoint_value = checkpoint.lock().unwrap().clone();
+    let final_video = checkpoint_value
+        .tracks
+        .iter()
+        .find(|track| track.kind == "video");
     update(&store, &writer, &task.id, |current| {
         current.phase = "merging".into();
         current.active_connections = 0;
         current.progress = 90;
+        if task.live_recording {
+            current.recorded_duration = final_video.map(|track| track.duration).unwrap_or(0.0);
+            current.last_media_sequence = final_video
+                .and_then(|track| track.segments.last())
+                .map(|segment| segment.sequence);
+        }
         current.message = Some("切片下载完成，正在合并".into());
     });
     match merge_hls_checkpoint(
@@ -2936,8 +3149,13 @@ fn start_hls_checkpoint_download(
                 current.checkpoint_state = Some("cleaned".into());
                 current.resume_requirement = None;
                 current.error = None;
-                current.message = Some("HLS 视频和所选字幕下载完成".into());
+                current.message = Some(if task.live_recording {
+                    "直播录制已停止并保存".into()
+                } else {
+                    "HLS 视频和所选字幕下载完成".into()
+                });
             });
+            clear_stop(&store, &task.id);
         }
         Ok(subtitle_failures) => update(&store, &writer, &task.id, |current| {
             current.state = "partial".into();
@@ -2960,6 +3178,100 @@ fn start_hls_checkpoint_download(
             current.message = Some("切片已保存，但 FFmpeg 合并失败".into());
         }),
     }
+}
+
+fn fetch_live_manifest(
+    store: &Store,
+    task: &Task,
+    url: &str,
+    destination: &Path,
+) -> Result<PersistedManifest, String> {
+    let abort = AtomicBool::new(false);
+    let mut retries = 0;
+    loop {
+        match hls_curl_once(store, task, url, None, destination, &abort) {
+            Ok(_) => break,
+            Err(error) if retryable_hls_error(&error) && retries < 3 => {
+                retries += 1;
+                if !wait_retry(
+                    store,
+                    &task.id,
+                    &abort,
+                    retry_after_seconds(&error).unwrap_or(retries),
+                ) {
+                    return Err("cancelled".into());
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    let text = fs::read_to_string(destination).map_err(|error| error.to_string())?;
+    let _ = fs::remove_file(destination);
+    Ok(PersistedManifest {
+        text,
+        base_url: url.to_string(),
+    })
+}
+
+fn refresh_live_checkpoint(
+    store: &Store,
+    task: &Task,
+    checkpoint: &mut HlsCheckpoint,
+    work_dir: &Path,
+) -> Result<usize, String> {
+    let sources: Vec<(usize, PersistedManifest)> = checkpoint
+        .tracks
+        .iter()
+        .enumerate()
+        .filter_map(|(index, track)| {
+            let manifest =
+                match track.kind.as_str() {
+                    "video" => Some(checkpoint.plan.video_manifest.clone()),
+                    "audio" => checkpoint.plan.audio_manifest.clone(),
+                    "subtitle" => checkpoint
+                        .plan
+                        .subtitles
+                        .iter()
+                        .nth(index.saturating_sub(
+                            1 + usize::from(checkpoint.plan.audio_manifest.is_some()),
+                        ))
+                        .map(|subtitle| subtitle.manifest.clone()),
+                    _ => None,
+                }?;
+            Some((index, manifest))
+        })
+        .collect();
+    let mut added = 0;
+    for (index, source) in sources {
+        let track = &checkpoint.tracks[index];
+        let manifest = fetch_live_manifest(
+            store,
+            task,
+            &source.base_url,
+            &work_dir.join(format!("playlist-{index}.m3u8")),
+        )?;
+        let window = parse_live_media_playlist_after(track, &manifest)?;
+        added += merge_live_window(&mut checkpoint.tracks[index], window)?;
+        match checkpoint.tracks[index].kind.as_str() {
+            "video" => checkpoint.plan.video_manifest = manifest,
+            "audio" => checkpoint.plan.audio_manifest = Some(manifest),
+            "subtitle" => {
+                let subtitle_index =
+                    index.saturating_sub(1 + usize::from(checkpoint.plan.audio_manifest.is_some()));
+                if let Some(subtitle) = checkpoint.plan.subtitles.get_mut(subtitle_index) {
+                    subtitle.manifest = manifest;
+                }
+            }
+            _ => {}
+        }
+    }
+    checkpoint.plan.duration = checkpoint
+        .tracks
+        .iter()
+        .find(|track| track.kind == "video")
+        .map(|track| track.duration)
+        .unwrap_or(0.0);
+    Ok(added)
 }
 
 fn bundled_tool(name: &str) -> PathBuf {
@@ -3345,6 +3657,11 @@ fn start_download(store: Store, writer: Writer, task: Task) {
         if let Some(parent) = Path::new(&output).parent() {
             let _ = fs::create_dir_all(parent);
         }
+        if task.hls_plan_version == 3 {
+            let plan = task.hls_plan.clone();
+            start_hls_checkpoint_download(store, writer, task, output, plan);
+            return;
+        }
         if task.hls_plan_version >= 2 {
             let plan = task.hls_plan.clone();
             start_hls_checkpoint_download(store, writer, task, output, plan);
@@ -3584,7 +3901,7 @@ fn main() -> io::Result<()> {
         let message_type = message["type"].as_str().unwrap_or("");
         let response = match message_type {
             "host.info" => {
-                json!({"version":1,"id":id,"ok":true,"protocolVersion":3,"supportedProtocolVersions":[2,3],"hostVersion":"0.9.0","capabilities":["inline-hls-v1","task-control-v1","task-pause-resume-v1","hls-selection-v1","hls-subtitle-sidecar-v1","task-output-group-v1","hls-segment-engine-v1","hls-checkpoint-v1","hls-aes128-v1","hls-key-override-v1","hls-reauthorize-v1"]})
+                json!({"version":1,"id":id,"ok":true,"protocolVersion":3,"supportedProtocolVersions":[2,3],"hostVersion":"0.9.0","capabilities":["inline-hls-v1","task-control-v1","task-pause-resume-v1","hls-selection-v1","hls-subtitle-sidecar-v1","task-output-group-v1","hls-segment-engine-v1","hls-checkpoint-v1","hls-aes128-v1","hls-key-override-v1","hls-reauthorize-v1","hls-live-engine-v1"]})
             }
             "task.create" => match create_task(&store, &message["payload"]) {
                 Ok(task) => {
@@ -3832,6 +4149,9 @@ mod tests {
             resume_requirement: None,
             requires_authorization: false,
             requires_key_override: false,
+            live_recording: false,
+            recorded_duration: 0.0,
+            last_media_sequence: None,
             source_candidate_id: None,
             inline_manifest: Some(InlineManifest {
                 text: "#EXTM3U\n".into(),
@@ -3872,7 +4192,7 @@ mod tests {
         assert_eq!(plan.subtitles.len(), 2);
 
         for (field, value, expected) in [
-            ("version", json!(3), "hls_plan_version_unsupported"),
+            ("version", json!(4), "hls_plan_version_unsupported"),
             ("duration", json!(0), "hls_plan_invalid"),
             ("container", json!("avi"), "hls_plan_invalid"),
         ] {
@@ -3880,6 +4200,14 @@ mod tests {
             invalid["hlsPlan"][field] = value;
             assert_eq!(hls_plan(&invalid).unwrap_err(), expected);
         }
+
+        let mut live = valid.clone();
+        live["hlsPlan"]["version"] = json!(3);
+        live["hlsPlan"]["duration"] = json!(0);
+        live["hlsPlan"]["pollIntervalSeconds"] = json!(2);
+        let live = hls_plan(&live).unwrap().unwrap();
+        assert!(live.live);
+        assert_eq!(live.poll_interval_seconds, Some(2));
 
         let mut excessive = valid;
         excessive["hlsPlan"]["subtitles"] = Value::Array(

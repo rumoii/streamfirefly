@@ -33,6 +33,7 @@ if (segments.length < 3) throw new Error(`Too few HLS fixture segments: ${segmen
 
 const key = Buffer.from('00112233445566778899aabbccddeeff', 'hex');
 const retryCounts = new Map();
+const liveRequests = new Map();
 let port;
 function ivFor(sequence) {
   const iv = Buffer.alloc(16);
@@ -52,8 +53,26 @@ function manifest(prefix, count = segments.length, sequence = 0, encrypted = fal
   lines.push('#EXT-X-ENDLIST');
   return `${lines.join('\n')}\n`;
 }
+function liveManifest(prefix, sequence, count = 2, endList = false) {
+  const lines = ['#EXTM3U', '#EXT-X-TARGETDURATION:1', `#EXT-X-MEDIA-SEQUENCE:${sequence}`];
+  for (let index = 0; index < count; index += 1) {
+    lines.push('#EXTINF:1,', `http://127.0.0.1:${port}/${prefix}/${segments[(sequence + index) % segments.length]}`);
+  }
+  if (endList) lines.push('#EXT-X-ENDLIST');
+  return `${lines.join('\n')}\n`;
+}
 
 const server = http.createServer((request, response) => {
+  const live = /^\/(auto-live|manual-live|restart-live)\.m3u8$/.exec(request.url || '');
+  if (live) {
+    const name = live[1];
+    const count = liveRequests.get(name) || 0;
+    liveRequests.set(name, count + 1);
+    const body = liveManifest(name === 'restart-live' ? 'slow' : 'plain', count, 2, name === 'auto-live' && count >= 2);
+    response.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl', 'content-length': Buffer.byteLength(body) });
+    response.end(body);
+    return;
+  }
   if (request.url === '/key.bin') {
     response.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': key.length });
     response.end(key);
@@ -131,6 +150,13 @@ function payload(name, text, extra = {}) {
     }
   };
 }
+function livePayload(name, text) {
+  const value = payload(name, text);
+  value.hlsPlan.version = 3;
+  value.hlsPlan.duration = 0;
+  value.hlsPlan.pollIntervalSeconds = 1;
+  return value;
+}
 function assertPlayable(file, label) {
   const result = spawnSync(ffmpeg, ['-nostdin', '-v', 'error', '-i', file, '-f', 'null', 'NUL'], { windowsHide: true });
   if (result.status !== 0) throw new Error(`${label} output is not playable: ${result.stderr?.toString() || result.status}`);
@@ -139,6 +165,38 @@ function assertPlayable(file, label) {
 let host = startHost();
 const info = await host.send('host.info');
 if (!info.ok || !info.capabilities.includes('hls-segment-engine-v1')) throw new Error(`HLS capability missing: ${JSON.stringify(info)}`);
+if (!info.capabilities.includes('hls-live-engine-v1')) throw new Error(`Live HLS capability missing: ${JSON.stringify(info)}`);
+
+const autoLive = await host.send('task.create', livePayload('auto-live', liveManifest('plain', 0)));
+const autoLiveTask = await waitFor(host, autoLive.task.id, item => item.state === 'succeeded', 'automatic live ENDLIST completion', 260);
+if (!autoLiveTask.live_recording || autoLiveTask.segments_completed < 4 || autoLiveTask.recorded_duration < 4) throw new Error(`Automatic live recording metadata failed: ${JSON.stringify(autoLiveTask)}`);
+assertPlayable(autoLiveTask.output, 'Automatic live HLS');
+
+const manualLive = await host.send('task.create', livePayload('manual-live', liveManifest('plain', 0)));
+await waitFor(host, manualLive.task.id, item => item.state === 'running' && item.segments_completed >= 3, 'manual live progress', 220);
+const livePause = await host.send('task.control', { id: manualLive.task.id, action: 'pause' });
+if (!livePause.ok || livePause.task.state !== 'paused') throw new Error(`Pausing live recording failed: ${JSON.stringify(livePause)}`);
+const livePausedSegments = livePause.task.segments_completed;
+await new Promise(resolve => setTimeout(resolve, 700));
+if ((await task(host, manualLive.task.id)).segments_completed !== livePausedSegments) throw new Error('Paused live recording continued downloading segments');
+const liveResume = await host.send('task.control', { id: manualLive.task.id, action: 'resume' });
+if (!liveResume.ok) throw new Error(`Resuming live recording failed: ${JSON.stringify(liveResume)}`);
+await waitFor(host, manualLive.task.id, item => item.state === 'running' && item.segments_completed > livePausedSegments, 'resumed live progress', 220);
+const stoppedLive = await host.send('task.control', { id: manualLive.task.id, action: 'stop' });
+if (!stoppedLive.ok) throw new Error(`Stopping live recording failed: ${JSON.stringify(stoppedLive)}`);
+const savedLive = await waitFor(host, manualLive.task.id, item => item.state === 'succeeded', 'manual live save', 180);
+assertPlayable(savedLive.output, 'Stopped live HLS');
+
+const restartLive = await host.send('task.create', livePayload('restart-live', liveManifest('slow', 0)));
+await waitFor(host, restartLive.task.id, item => item.state === 'running' && item.segments_completed >= 1, 'restartable live progress', 220);
+host.child.kill();
+await new Promise(resolve => host.child.once('exit', resolve));
+host = startHost();
+await host.send('host.info');
+await waitFor(host, restartLive.task.id, item => item.state === 'running' && item.attempt >= 2, 'automatic live recovery', 220);
+await host.send('task.control', { id: restartLive.task.id, action: 'stop' });
+const recoveredLive = await waitFor(host, restartLive.task.id, item => item.state === 'succeeded', 'recovered live save', 220);
+assertPlayable(recoveredLive.output, 'Recovered live HLS');
 
 const plain = await host.send('task.create', payload('plain', manifest('plain')));
 const plainTask = await waitFor(host, plain.task.id, item => item.state === 'succeeded', 'plain HLS completion');
@@ -217,4 +275,4 @@ assertPlayable(recovered.output, 'Recovered HLS');
 
 host.child.stdin.end();
 server.close();
-console.log('Native HLS segment, AES-128, retry, reauthorization, and restart recovery test passed');
+console.log('Native HLS VOD/live, AES-128, retry, pause/stop, and restart recovery test passed');

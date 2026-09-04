@@ -21,6 +21,8 @@ const form = reactive({ name: "", extension: "mp4", container: "mp4", busy: fals
 const keyMode = ref<"auto" | "manual">("auto");
 const keyForm = reactive<{ kind: HlsKeyOverrideKind; value: string; iv: string }>({ kind: "hex", value: "", iv: "" });
 const trackManifests = new Map<string, HlsManifest>();
+const liveSupported = computed(() => props.capabilities.includes("hls-live-engine-v1") || props.session.sessionId === "preview");
+const isLive = computed(() => Boolean(master.value?.live || videoManifest.value?.live));
 
 const variants = computed(() => master.value?.variants || []);
 const selectedVariant = computed(() => variants.value.find(item => item.id === selectedVariantId.value) || null);
@@ -28,7 +30,7 @@ const audioTracks = computed(() => (master.value?.tracks || []).filter(item => i
 const subtitleTracks = computed(() => (master.value?.tracks || []).filter(item => item.type === "SUBTITLES" && (!selectedVariant.value?.subtitlesGroup || item.groupId === selectedVariant.value.subtitlesGroup) && item.uri));
 const actualRange = computed(() => {
   const manifest = videoManifest.value;
-  if (!manifest?.segments.length) return null;
+  if (!manifest?.segments.length || manifest.live) return null;
   const first = rangeMode.value === "all" ? 0 : rangeMode.value === "time" ? segmentRangeForTime(manifest, range.startTime, range.endTime)[0] : range.first;
   const last = rangeMode.value === "all" ? manifest.segments.length - 1 : rangeMode.value === "time" ? segmentRangeForTime(manifest, range.startTime, range.endTime)[1] : range.last;
   const derived = deriveMediaPlaylist(manifest, first, last);
@@ -39,6 +41,7 @@ const segmentEngineSupported = computed(() => props.capabilities.includes("hls-s
 const keyOverrideSupported = computed(() => props.capabilities.includes("hls-key-override-v1") || props.session.sessionId === "preview");
 const encryptionMethods = computed(() => hlsEncryptionMethods(videoManifest.value));
 const unsupportedEncryption = computed(() => encryptionMethods.value.find(method => method !== "AES-128") || "");
+const unsupportedLiveFeature = computed(() => videoManifest.value?.hasDrmKeyFormat ? "此直播使用 DRM 密钥格式，流萤不会尝试绕过。" : videoManifest.value?.hasLowLatencyParts ? "此直播使用 LL-HLS Part，Beta 3 暂不支持录制。" : "");
 const keyError = computed(() => keyMode.value === "manual" ? validateHlsKeyOverride(keyForm.kind, keyForm.value, keyForm.iv) : "");
 
 function ensureSupportedEncryption(manifest: HlsManifest, label: string) {
@@ -100,7 +103,6 @@ async function initialize() {
   try {
     const response = props.candidate.inlineManifest ? { text: props.candidate.inlineManifest.text, url: props.candidate.inlineManifest.baseUrl || props.candidate.url } : await fetchText(props.candidate.url);
     master.value = parseHls(response.text, response.url);
-    if (master.value.live) return;
     if (master.value.kind === "master") {
       const preferred = defaultVariant(master.value.variants);
       selectedVariantId.value = preferred?.id || "";
@@ -119,28 +121,31 @@ function basePayload() {
 }
 
 async function createTask() {
-  if (!videoManifest.value || !actualRange.value || !advancedSupported.value) return;
+  if (!videoManifest.value || !advancedSupported.value) return;
+  if (isLive.value && !liveSupported.value) { error.value = "本地助手版本过旧，请安装 0.9.0 Beta 3 后录制直播。"; return; }
+  if (unsupportedLiveFeature.value) { error.value = unsupportedLiveFeature.value; return; }
   if (unsupportedEncryption.value) { error.value = `暂不支持 ${unsupportedEncryption.value} 加密；流萤不会绕过 DRM。`; return; }
   if (keyMode.value === "manual" && (!keyOverrideSupported.value || keyError.value)) { error.value = keyError.value || "当前本地助手不支持自定义密钥"; return; }
   form.busy = true; error.value = "";
   try {
-    const media = deriveMediaPlaylist(videoManifest.value, actualRange.value.first, actualRange.value.last);
+    const media = isLive.value ? { text: videoManifest.value.rawText || "", baseUrl: videoManifest.value.baseUrl, actualStart: 0, actualEnd: 0, first: 0, last: 0 } : deriveMediaPlaylist(videoManifest.value, actualRange.value!.first, actualRange.value!.last);
     const audio = audioTracks.value.find(item => item.id === selectedAudioId.value) || null;
     const audioManifest = audio ? await loadTrack(audio) : null;
     if (audioManifest) ensureSupportedEncryption(audioManifest, "所选音轨");
-    const audioDerived = audioManifest ? deriveMediaPlaylist(audioManifest, ...segmentRangeForTime(audioManifest, media.actualStart, media.actualEnd)) : null;
+    const audioDerived = audioManifest ? (isLive.value ? { text: audioManifest.rawText, baseUrl: audioManifest.baseUrl } : deriveMediaPlaylist(audioManifest, ...segmentRangeForTime(audioManifest, media.actualStart, media.actualEnd))) : null;
     const subtitles = [];
     for (const id of selectedSubtitleIds.value) {
       const track = subtitleTracks.value.find(item => item.id === id);
       if (!track) continue;
       const parsed = await loadTrack(track);
       ensureSupportedEncryption(parsed, `字幕“${track.name}”`);
-      const derived = deriveMediaPlaylist(parsed, ...segmentRangeForTime(parsed, media.actualStart, media.actualEnd));
+      const derived = isLive.value ? { text: parsed.rawText, baseUrl: parsed.baseUrl } : deriveMediaPlaylist(parsed, ...segmentRangeForTime(parsed, media.actualStart, media.actualEnd));
       subtitles.push({ id: track.id, language: track.language || null, label: track.name, extension: "vtt", manifest: { format: "hls", baseUrl: derived.baseUrl, text: derived.text } });
     }
     const hlsPlan = {
-      version: segmentEngineSupported.value ? 2 : 1,
+      version: isLive.value ? 3 : (segmentEngineSupported.value ? 2 : 1),
       duration: media.actualEnd - media.actualStart,
+      pollIntervalSeconds: isLive.value ? Math.max(1, Math.ceil(videoManifest.value.targetDuration || 3) / 2) : null,
       container: form.container,
       range: { requestedStart: range.startTime, requestedEnd: range.endTime, actualStart: media.actualStart, actualEnd: media.actualEnd, firstSegment: media.first, lastSegment: media.last },
       videoManifest: { format: "hls", baseUrl: media.baseUrl, text: media.text },
@@ -170,9 +175,10 @@ function previewManifest(url: string) {
   <section class="parser-page">
     <div class="subpage-heading"><button class="button subtle" type="button" @click="$emit('back')">← 返回资源</button><div><span class="tag">HLS</span><h2>媒体解析</h2><p>{{ candidate.pageTitle || candidate.title || candidate.url }}</p></div></div>
     <div v-if="error" class="status-banner error">{{ error }}</div>
-    <div v-if="master?.live" class="status-banner warning"><strong>检测到直播清单</strong><span>Beta 2 聚焦可靠点播下载；直播轮询、边下边存将在 Beta 3 实现。</span></div>
+    <div v-if="isLive" class="status-banner warning"><strong>检测到直播清单</strong><span>流萤会持续获取新增切片；结束时点击“停止并保存”，或等待直播清单自然结束。</span></div>
+    <div v-if="unsupportedLiveFeature" class="status-banner error"><strong>暂不支持录制</strong><span>{{ unsupportedLiveFeature }}</span></div>
     <div v-if="!advancedSupported" class="status-banner warning"><strong>需要升级本地助手</strong><span>安装流萤 0.9.0 Native Host 后才能按选择下载 HLS。</span></div>
-    <div v-else-if="!segmentEngineSupported" class="status-banner warning"><strong>正在使用兼容下载模式</strong><span>升级至 Beta 2 本地助手后可使用切片重试、断点恢复和手动 AES-128 密钥。</span></div>
+    <div v-else-if="!segmentEngineSupported" class="status-banner warning"><strong>正在使用兼容下载模式</strong><span>升级本地助手后可使用切片重试、断点恢复和手动 AES-128 密钥。</span></div>
     <div class="parser-grid">
       <section class="panel parser-options">
         <div class="panel-title"><div><h3>画质与轨道</h3><p>选择最终保存的媒体内容</p></div></div>
@@ -187,14 +193,15 @@ function previewManifest(url: string) {
 
       <section class="panel parser-range">
         <div class="panel-title"><div><h3>切片与时间范围</h3><p>范围按完整切片边界执行</p></div><span v-if="videoManifest" class="tag">{{ videoManifest.segments.length }} 个切片</span></div>
-        <div class="range-tabs"><button v-for="mode in [['all','全部'],['time','按时间'],['segment','按切片']]" :key="mode[0]" type="button" :class="{ active: rangeMode === mode[0] }" @click="rangeMode = mode[0] as any">{{ mode[1] }}</button></div>
-        <div v-if="videoManifest" class="range-body">
+        <div v-if="!isLive" class="range-tabs"><button v-for="mode in [['all','全部'],['time','按时间'],['segment','按切片']]" :key="mode[0]" type="button" :class="{ active: rangeMode === mode[0] }" @click="rangeMode = mode[0] as any">{{ mode[1] }}</button></div>
+        <div v-if="videoManifest && !isLive" class="range-body">
           <div class="timeline"><i v-for="segment in videoManifest.segments.slice(0, 160)" :key="segment.index" :class="{ selected: actualRange && segment.index >= actualRange.first && segment.index <= actualRange.last }" :style="{ flexGrow: Math.max(.2, segment.duration) }"></i></div>
           <div v-if="rangeMode === 'time'" class="range-inputs"><label><span>开始时间（秒）</span><input v-model.number="range.startTime" class="control" type="number" min="0" :max="videoManifest.duration" step="0.1"></label><label><span>结束时间（秒）</span><input v-model.number="range.endTime" class="control" type="number" :min="range.startTime" :max="videoManifest.duration" step="0.1"></label></div>
           <div v-if="rangeMode === 'segment'" class="range-inputs"><label><span>起始切片</span><input v-model.number="range.first" class="control" type="number" min="0" :max="videoManifest.segments.length - 1"></label><label><span>结束切片</span><input v-model.number="range.last" class="control" type="number" :min="range.first" :max="videoManifest.segments.length - 1"></label></div>
           <dl v-if="actualRange" class="range-summary"><div><dt>清单总时长</dt><dd>{{ formatDuration(videoManifest.duration) }}</dd></div><div><dt>实际下载范围</dt><dd>{{ formatDuration(actualRange.actualStart) }} — {{ formatDuration(actualRange.actualEnd) }}</dd></div><div><dt>实际切片</dt><dd>#{{ actualRange.first }} — #{{ actualRange.last }}（{{ actualRange.count }} 个）</dd></div><div><dt>预计时长</dt><dd>{{ formatDuration(actualRange.actualEnd - actualRange.actualStart) }}</dd></div></dl>
         </div>
-        <div v-else-if="!loading" class="empty-state"><span>⌁</span><h3>没有可用切片</h3><p>此清单可能无法下载或仍在直播更新。</p></div>
+        <div v-else-if="isLive" class="empty-state"><span>●</span><h3>直播录制模式</h3><p>当前窗口已有 {{ videoManifest?.segments.length || 0 }} 个切片；开始后会自动轮询并去重保存。</p></div>
+        <div v-else-if="!loading" class="empty-state"><span>⌁</span><h3>没有可用切片</h3><p>此清单没有可下载的完整媒体切片。</p></div>
       </section>
     </div>
     <details class="panel encryption-panel">
@@ -214,7 +221,7 @@ function previewManifest(url: string) {
     <section class="download-summary panel">
       <div><span>输出文件</span><div class="filename"><input v-model="form.name" maxlength="100"><b>.{{ form.extension }}</b></div><small>{{ saveDir || '系统默认下载目录' }}</small></div>
       <div class="summary-pills"><span>{{ selectedVariant?.height ? `${selectedVariant.height}P` : '原始画质' }}</span><span>{{ audioTracks.find(item => item.id === selectedAudioId)?.name || '内嵌音轨' }}</span><span>{{ selectedSubtitleIds.length }} 条字幕</span><span>{{ form.container.toUpperCase() }} 无转码</span></div>
-      <button class="button primary large" type="button" :disabled="loading || master?.live || !videoManifest || !advancedSupported || Boolean(unsupportedEncryption) || Boolean(keyError) || form.busy || !form.name.trim()" @click="createTask">{{ form.busy ? '正在创建任务…' : segmentEngineSupported ? '开始可靠下载' : '开始下载' }}</button>
+      <button class="button primary large" type="button" :disabled="loading || !videoManifest || !advancedSupported || (isLive && !liveSupported) || Boolean(unsupportedLiveFeature) || Boolean(unsupportedEncryption) || Boolean(keyError) || form.busy || !form.name.trim()" @click="createTask">{{ form.busy ? '正在创建任务…' : isLive ? '开始录制直播' : segmentEngineSupported ? '开始可靠下载' : '开始下载' }}</button>
     </section>
   </section>
 </template>

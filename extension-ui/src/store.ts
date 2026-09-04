@@ -47,7 +47,7 @@ export const useAppStore = defineStore("app", () => {
         session.value = { sessionId: "preview", sourceContextId: "preview-page", sourceTabId: 1, appTabId: 2, pageUrl: "https://media.example/demo", pageTitle: "示例媒体页面", favIconUrl: "", sourceClosed: false, supported: true, paused: false };
         candidates.value = previewCandidates();
         tasks.value = previewTasks();
-        capabilities.value = ["hls-selection-v1", "hls-subtitle-sidecar-v1", "task-output-group-v1", "hls-segment-engine-v1", "hls-checkpoint-v1", "hls-aes128-v1", "hls-key-override-v1", "hls-reauthorize-v1"];
+        capabilities.value = ["hls-selection-v1", "hls-subtitle-sidecar-v1", "task-output-group-v1", "hls-segment-engine-v1", "hls-checkpoint-v1", "hls-aes128-v1", "hls-key-override-v1", "hls-reauthorize-v1", "hls-live-engine-v1"];
       } else {
         const native: any = await sendMessage({ type: "native.connect" });
         capabilities.value = native?.capabilities || [];
@@ -140,8 +140,9 @@ export function humanError(value: string): string {
     app_session_not_found: "此流萤页面的会话已经失效，请从来源网页重新打开。",
     native_host_unavailable: "未连接到本地助手，请安装或重新启动流萤本地助手。",
     native_host_timeout: "本地助手响应超时，请重启后重试。",
-    hls_selection_native_upgrade_required: "本地助手版本过旧，请安装 0.9.0 Beta 2 后重试。",
-    inline_hls_native_upgrade_required: "本地助手版本过旧，请安装 0.9.0 Beta 2 后重试。",
+    hls_selection_native_upgrade_required: "本地助手版本过旧，请安装 0.9.0 Beta 3 后重试。",
+    inline_hls_native_upgrade_required: "本地助手版本过旧，请安装 0.9.0 Beta 3 后重试。",
+    hls_live_native_upgrade_required: "本地助手版本过旧，请安装 0.9.0 Beta 3 后录制直播。",
     hls_plan_expired: "本地助手重启后无法恢复该 HLS 选择计划，请从资源页重新解析并创建任务。",
     hls_authorization_required: "请回到仍保持登录的来源页面，重新播放资源后再授权继续。",
     hls_key_required: "请重新输入 AES-128 密钥后继续。",
@@ -152,7 +153,7 @@ export function humanError(value: string): string {
     hls_encryption_unsupported: "该 HLS 使用了暂不支持的加密方式；流萤不会绕过 DRM。",
     hls_checkpoint_invalid: "HLS 检查点已损坏，请重新创建下载任务。",
     hls_checkpoint_version_unsupported: "HLS 检查点版本不兼容，请升级本地助手或重新创建任务。",
-    hls_live_not_supported: "Beta 2 暂不支持直播 M3U8 下载。",
+    hls_live_not_supported: "当前版本暂不支持直播 M3U8 录制。",
     path_not_writable: "保存目录不可写，请检查路径和权限。",
     source_page_closed: "来源页面已经关闭。"
   };

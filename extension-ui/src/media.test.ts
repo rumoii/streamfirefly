@@ -76,3 +76,10 @@ test("summarizes encryption and validates manual AES-128 input", () => {
   expect(validateHlsKeyOverride("url", "file:///key.bin")).toContain("HTTP");
   expect(validateHlsKeyOverride("url", "https://media.example/key", "0x00112233445566778899aabbccddeeff")).toBe("");
 });
+
+test("identifies live LL-HLS parts and DRM key formats", () => {
+  const manifest = parseHls(`#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI="key",KEYFORMAT="com.apple.streamingkeydelivery"\n#EXT-X-PART:DURATION=0.2,URI="part.m4s"\n`, "https://media.example/live.m3u8");
+  expect(manifest.live).toBe(true);
+  expect(manifest.hasLowLatencyParts).toBe(true);
+  expect(manifest.hasDrmKeyFormat).toBe(true);
+});

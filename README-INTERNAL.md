@@ -1,4 +1,4 @@
-# StreamFirefly 0.9.0 Beta 2 内测指南
+# StreamFirefly 0.9.0 Beta 3 内测指南
 
 此版本仅用于受邀测试，不是 Chrome Web Store 正式发布版本。测试人员需要登录受邀的 GitHub 账号，从私有 Release 下载测试包。请勿转发安装包、Release 链接或测试数据。
 
@@ -8,9 +8,9 @@ StreamFirefly 不绕过 DRM。请只测试自己拥有版权或已获授权的�
 
 1. 接受 `rumoii/streamfirefly-internal-releases` 私有仓库的协作者邀请。
 2. 登录 GitHub，进入该仓库的 **Releases** 页面。
-3. 打开 `StreamFirefly 0.9.0 Beta 2 内测版`，下载与当前 Windows 架构匹配的压缩包：
-   - Intel 或 AMD Windows 电脑：`StreamFirefly-0.9.0-beta.2-internal-x64.zip`
-   - Windows ARM 电脑：`StreamFirefly-0.9.0-beta.2-internal-arm64.zip`
+3. 打开 `StreamFirefly 0.9.0 Beta 3 内测版`，下载与当前 Windows 架构匹配的压缩包：
+   - Intel 或 AMD Windows 电脑：`StreamFirefly-0.9.0-beta.3-internal-x64.zip`
+   - Windows ARM 电脑：`StreamFirefly-0.9.0-beta.3-internal-arm64.zip`
 4. 同时下载 `INTERNAL-SHA256SUMS.txt`，用于核对压缩包完整性。
 
 可以在 Windows 的“设置 → 系统 → 系统信息 → 系统类型”中查看架构。大多数 Intel、AMD 电脑使用 x64；仅骁龙等 Windows ARM 设备使用 ARM64。
@@ -22,7 +22,7 @@ StreamFirefly 不绕过 DRM。请只测试自己拥有版权或已获授权的�
 在下载目录打开 PowerShell，计算压缩包的 SHA-256：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 -LiteralPath '.\StreamFirefly-0.9.0-beta.2-internal-x64.zip'
+Get-FileHash -Algorithm SHA256 -LiteralPath '.\StreamFirefly-0.9.0-beta.3-internal-x64.zip'
 ```
 
 ARM64 测试人员将文件名替换为 ARM64 包。输出应与 `INTERNAL-SHA256SUMS.txt` 中对应记录一致；不一致时不要继续安装，请重新下载并反馈。
@@ -30,8 +30,8 @@ ARM64 测试人员将文件名替换为 ARM64 包。输出应与 `INTERNAL-SHA25
 为避免 Windows 保留互联网下载标记，先解除 ZIP 锁定，再完整解压：
 
 ```powershell
-Unblock-File -LiteralPath '.\StreamFirefly-0.9.0-beta.2-internal-x64.zip'
-Expand-Archive -LiteralPath '.\StreamFirefly-0.9.0-beta.2-internal-x64.zip' -DestinationPath '.\StreamFirefly-Test'
+Unblock-File -LiteralPath '.\StreamFirefly-0.9.0-beta.3-internal-x64.zip'
+Expand-Archive -LiteralPath '.\StreamFirefly-0.9.0-beta.3-internal-x64.zip' -DestinationPath '.\StreamFirefly-Test'
 ```
 
 不要直接在压缩包内运行脚本，也不要单独移动 `extension`、`native-host` 或 `tools` 文件夹。
@@ -111,7 +111,10 @@ Set-ExecutionPolicy -Scope Process Bypass
 - 测试标准 AES-128 HLS，分别验证清单自动密钥与 Hex、Base64、密钥 URL、自定义 IV；错误密钥应在首个媒体切片验证时停止，不应继续批量下载；
 - 下载中暂停并继续 HLS，确认已完成切片不会重下；下载中结束 Native Host 后重新连接，公开资源应从检查点自动恢复；
 - 对需要 Cookie 或 Authorization 的 HLS，在 Native Host 重启后回到原来源页面，点击“重新授权并继续”；任务文件和检查点中不应出现 Cookie、Authorization 或手动密钥；
-- SAMPLE-AES、DRM、直播和 LL-HLS 应明确提示暂不支持，而不是尝试绕过或录制。
+- 测试标准直播 HLS：任务应显示 LIVE、已录制时长、大小、切片数、重试数和最后媒体序列；暂停后不再新增切片，继续后从检查点恢复；
+- 点击“停止并保存”，确认已录制切片通过 FFmpeg 无转码合并成可播放文件；清单出现 `EXT-X-ENDLIST` 时应自动收尾；
+- 直播期间结束 Native Host 后重新连接，公开资源应自动继续；需要 Cookie、Authorization 或手动密钥的直播应要求重新授权或输入密钥；
+- SAMPLE-AES、DRM 和 LL-HLS Part 应明确提示暂不支持，而不是尝试绕过或下载。
 
 ### 3. 下载任务管理
 
