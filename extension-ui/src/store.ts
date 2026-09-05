@@ -5,6 +5,28 @@ import type { DownloadTask, MediaCandidate, PageContext } from "./types";
 
 const activeStates = new Set(["queued", "starting", "running", "retrying", "pausing", "cancelling"]);
 
+export interface AppSettings {
+  saveDir: string;
+  downloadThreads: number;
+  detectImages: boolean;
+  advancedDeepSearch: boolean;
+  candidateSort: string;
+}
+
+export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
+  saveDir: "",
+  downloadThreads: 6,
+  detectImages: false,
+  advancedDeepSearch: false,
+  candidateSort: "detected"
+});
+
+export async function readSettings(storage = extensionApi()?.storage?.local): Promise<AppSettings> {
+  if (!storage) return { ...DEFAULT_SETTINGS };
+  const stored = await storage.get(Object.keys(DEFAULT_SETTINGS));
+  return { ...DEFAULT_SETTINGS, ...stored };
+}
+
 export const useAppStore = defineStore("app", () => {
   const sessionId = sessionIdFromUrl();
   const session = ref<PageContext | null>(null);
@@ -14,7 +36,7 @@ export const useAppStore = defineStore("app", () => {
   const loading = ref(true);
   const error = ref("");
   const status = ref("");
-  const settings = ref({ saveDir: "", downloadThreads: 6, detectImages: false, advancedDeepSearch: false, candidateSort: "detected" });
+  const settings = ref<AppSettings>({ ...DEFAULT_SETTINGS });
   let timer: number | null = null;
 
   const sourceTasks = computed(() => tasks.value.filter(task => task.source_context_id && task.source_context_id === session.value?.sourceContextId));
@@ -33,11 +55,7 @@ export const useAppStore = defineStore("app", () => {
     tasks.value = result?.tasks ?? result?.payload?.tasks ?? [];
   }
 
-  async function loadSettings() {
-    const api = extensionApi();
-    if (!api?.storage?.local) return;
-    settings.value = await api.storage.local.get(settings.value);
-  }
+  async function loadSettings() { settings.value = await readSettings(); }
 
   async function initialize() {
     loading.value = true;
@@ -93,8 +111,8 @@ export const useAppStore = defineStore("app", () => {
       const result: any = await sendMessage({ type: "path.validate", payload: { path: next.saveDir.trim() } });
       if (!result?.ok) throw new Error(result?.error || "path_not_writable");
     }
-    const normalized = { ...next, saveDir: next.saveDir.trim(), downloadThreads: Math.max(1, Math.min(16, Number(next.downloadThreads) || 6)) };
-    await extensionApi().storage.local.set(normalized);
+    const normalized: AppSettings = { ...next, saveDir: next.saveDir.trim(), downloadThreads: Math.max(1, Math.min(16, Number(next.downloadThreads) || 6)) };
+    await extensionApi().storage.local.set({ ...normalized });
     settings.value = normalized;
   }
 

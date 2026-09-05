@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const extensionRoot = path.join(repositoryRoot, 'extension');
 const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'manifest.firefox.json'), 'utf8'));
+const background = fs.readFileSync(path.join(extensionRoot, 'background.js'), 'utf8');
 const required = JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'tools', 'extension-package-files.json'), 'utf8'));
 const missing = required.filter(file => !fs.existsSync(path.join(extensionRoot, file)));
 const gecko = manifest.browser_specific_settings?.gecko;
@@ -21,5 +22,6 @@ if (JSON.stringify(gecko?.data_collection_permissions?.required) !== JSON.string
 if (manifest.version !== '0.9.0') throw new Error(`Unexpected Firefox extension version: ${manifest.version}`);
 if (manifest.sidebar_action) throw new Error('Obsolete Firefox sidebar entry is still present');
 if (manifest.options_ui?.page !== 'dist/app.html#/settings') throw new Error('Firefox Vue settings entry missing');
+if (!background.includes('api.storage.local.get(Object.keys(DEFAULT_SETTINGS))')) throw new Error('Firefox settings must be loaded with a plain key array');
 if (missing.length) throw new Error(`Firefox package files missing: ${missing.join(', ')}`);
 console.log(`StreamFirefly Firefox extension ${manifest.version} valid (${required.length} runtime files)`);

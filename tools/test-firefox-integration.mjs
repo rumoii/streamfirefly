@@ -8,6 +8,9 @@ const manifest = JSON.parse(read('extension/manifest.firefox.json'));
 const extensionId = manifest.browser_specific_settings?.gecko?.id;
 if (extensionId !== 'streamfirefly@example.invalid') throw new Error(`Unexpected Firefox extension ID: ${extensionId}`);
 
+const background = read('extension/background.js');
+if (!background.includes('api.storage.local.get(Object.keys(DEFAULT_SETTINGS))')) throw new Error('Firefox-safe settings key-array load is missing');
+
 const register = read('tools/register-native-host.ps1');
 if (!register.includes("allowed_extensions = @($FirefoxExtensionId)")) throw new Error('Firefox native manifest does not use allowed_extensions');
 if (!register.includes('Software\\Mozilla\\NativeMessagingHosts\\com.streamfirefly.native')) throw new Error('Firefox native host registry path is missing');

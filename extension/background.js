@@ -12,11 +12,12 @@ const requestHeadersById = new Map();
 const recentRequestContexts = new Map();
 const previewRules = { id: 2147483000 };
 const native = { port: null, pending: new Map(), seq: 0, capabilities: new Set(), infoPromise: null };
-let settings = { detectImages: false, advancedDeepSearch: false };
+const DEFAULT_SETTINGS = Object.freeze({ detectImages: false, advancedDeepSearch: false });
+let settings = { ...DEFAULT_SETTINGS };
 let settingsReady = loadSettings();
 
 async function loadSettings() {
-  try { settings = await api.storage.local.get(settings); } catch (_) {}
+  try { settings = { ...DEFAULT_SETTINGS, ...await api.storage.local.get(Object.keys(DEFAULT_SETTINGS)) }; } catch (_) {}
   return settings;
 }
 
