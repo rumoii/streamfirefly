@@ -1,8 +1,6 @@
 const api = globalThis.browser ?? globalThis.chrome;
-const STATE_VERSION = 1;
-const STATE_PREFIX = "media-candidates-v1:";
-const APP_SESSION_PREFIX = "streamfirefly-app-session-v1:";
-const APP_PAGE = "dist/app.html";
+const STATE_VERSION = 2;
+const STATE_PREFIX = "media-candidates-v2:";
 const INLINE_MANIFEST_MAX_BYTES = 512 * 1024;
 const BUCKET_LIMITS = { core: 300, image: 200, segment: 1000 };
 const candidatesByTab = new Map();
@@ -10,8 +8,9 @@ const tabQueues = new Map();
 const persistTimers = new Map();
 const requestHeadersById = new Map();
 const recentRequestContexts = new Map();
-const previewRules = { id: 2147483000 };
+const previewRules = { nextId: 2147000000, byTab: new Map() };
 const native = { port: null, pending: new Map(), seq: 0, capabilities: new Set(), infoPromise: null };
+const workspaceTabsByWindow = new Map();
 const DEFAULT_SETTINGS = Object.freeze({ detectImages: false, advancedDeepSearch: false });
 let settings = { ...DEFAULT_SETTINGS };
 let settingsReady = loadSettings();
@@ -27,95 +26,80 @@ api.storage?.onChanged?.addListener((changes, area) => {
 });
 
 function stateKey(tabId) { return `${STATE_PREFIX}${tabId}`; }
-function appSessionKey(sessionId) { return `${APP_SESSION_PREFIX}${sessionId}`; }
 function newId() { try { return crypto.randomUUID(); } catch (_) { return `${Date.now()}-${Math.random().toString(16).slice(2)}`; } }
 function supportedPage(url) { try { return ["http:", "https:"].includes(new URL(url).protocol); } catch (_) { return false; } }
 function pageTitleFor(tab) { try { return tab?.title || new URL(tab?.url || "").hostname || "未命名页面"; } catch (_) { return tab?.title || "未命名页面"; } }
 
-async function readAppSession(sessionId) {
-  if (!sessionId || !api.storage?.session) return null;
-  return (await api.storage.session.get(appSessionKey(sessionId)))[appSessionKey(sessionId)] || null;
-}
-
-async function writeAppSession(session) {
-  if (!session?.sessionId || !api.storage?.session) return;
-  await api.storage.session.set({ [appSessionKey(session.sessionId)]: session });
-}
-
-async function removeAppSession(sessionId) {
-  if (sessionId && api.storage?.session) await api.storage.session.remove(appSessionKey(sessionId));
-}
-
-async function allAppSessions() {
-  if (!api.storage?.session) return [];
-  const stored = await api.storage.session.get(null);
-  return Object.entries(stored).filter(([key]) => key.startsWith(APP_SESSION_PREFIX)).map(([, value]) => value).filter(Boolean);
-}
-
-async function updateSourceSessions(tabId, values) {
-  const sessions = await allAppSessions();
-  await Promise.all(sessions.filter(session => session.sourceTabId === tabId && !session.sourceClosed).map(session => writeAppSession({ ...session, ...values, updatedAt: Date.now() })));
-}
-
-async function openApplication(tab) {
-  if (!api.tabs?.query || !api.tabs?.create) return;
-  const appBase = api.runtime.getURL(APP_PAGE);
-  const [tabs, sessions] = await Promise.all([api.tabs.query({}), allAppSessions()]);
-  const bound = sessions.find(session => session.sourceTabId === tab.id && !session.sourceClosed);
-  const existing = bound ? tabs.find(item => item.id === bound.appTabId && item.url?.startsWith(appBase)) : null;
-  if (existing?.id != null) {
-    await api.tabs.update(existing.id, { active: true });
-    if (existing.windowId != null) await api.windows?.update?.(existing.windowId, { focused: true });
-    return;
-  }
-  const sessionId = newId();
-  const session = {
-    sessionId,
-    sourceContextId: newId(),
-    sourceTabId: Number.isInteger(tab?.id) ? tab.id : null,
-    appTabId: null,
-    pageUrl: tab?.url || "",
-    pageTitle: pageTitleFor(tab),
-    favIconUrl: tab?.favIconUrl || "",
-    sourceClosed: false,
-    supported: supportedPage(tab?.url),
-    paused: false,
-    snapshot: [],
-    updatedAt: Date.now()
-  };
-  await writeAppSession(session);
-  const created = await api.tabs.create({ url: `${appBase}?session=${encodeURIComponent(sessionId)}&source=${tab?.id ?? ""}#/resources`, active: true, windowId: tab?.windowId });
-  await writeAppSession({ ...session, appTabId: created.id ?? null });
-}
-
-async function appSessionView(sessionId) {
-  const session = await readAppSession(sessionId);
-  if (!session) return { ok: false, error: "app_session_not_found" };
-  if (session.sourceClosed || !Number.isInteger(session.sourceTabId)) return { ok: true, session, candidates: session.snapshot || [] };
-  try {
-    const [tab, state] = await Promise.all([api.tabs.get(session.sourceTabId), loadTabState(session.sourceTabId)]);
-    const current = { ...session, pageUrl: tab.url || session.pageUrl, pageTitle: pageTitleFor(tab), favIconUrl: tab.favIconUrl || session.favIconUrl, supported: supportedPage(tab.url), paused: Boolean(state.paused) };
-    await writeAppSession(current);
-    return { ok: true, session: current, candidates: [...state.candidates.values()] };
-  } catch (_) {
-    const state = candidatesByTab.get(session.sourceTabId);
-    const closed = { ...session, sourceClosed: true, paused: true, snapshot: state ? [...state.candidates.values()] : session.snapshot || [], updatedAt: Date.now() };
-    await writeAppSession(closed);
-    return { ok: true, session: closed, candidates: closed.snapshot };
-  }
-}
-function emptyState(tabId, pageUrl = "") { return { schemaVersion: STATE_VERSION, tabId, pageUrl, paused: false, lastTouchedAt: Date.now(), candidates: new Map() }; }
-function serializeState(state) { return { schemaVersion: STATE_VERSION, tabId: state.tabId, pageUrl: state.pageUrl, paused: Boolean(state.paused), lastTouchedAt: state.lastTouchedAt, candidates: [...state.candidates.values()] }; }
+function emptyState(tabId, pageUrl = "") { return { schemaVersion: STATE_VERSION, tabId, sourceContextId: newId(), pageUrl, paused: false, lastTouchedAt: Date.now(), candidates: new Map() }; }
+function serializeState(state) { return { schemaVersion: STATE_VERSION, tabId: state.tabId, sourceContextId: state.sourceContextId, pageUrl: state.pageUrl, paused: Boolean(state.paused), lastTouchedAt: state.lastTouchedAt, candidates: [...state.candidates.values()] }; }
 
 async function loadTabState(tabId) {
   if (candidatesByTab.has(tabId)) return candidatesByTab.get(tabId);
   let stored;
   try { stored = (await api.storage.session.get(stateKey(tabId)))[stateKey(tabId)]; } catch (_) {}
-  const state = stored?.schemaVersion === STATE_VERSION && Array.isArray(stored.candidates)
+  const state = stored?.schemaVersion === STATE_VERSION && typeof stored.sourceContextId === "string" && stored.sourceContextId && Array.isArray(stored.candidates)
     ? { ...stored, tabId, paused: Boolean(stored.paused), candidates: new Map(stored.candidates.filter(item => item?.id && item?.url).map(item => [item.id, item])) }
     : emptyState(tabId);
   candidatesByTab.set(tabId, state);
   return state;
+}
+
+async function uiContextForTab(tab) {
+  const sourceTabId = Number.isInteger(tab?.id) ? tab.id : -1;
+  const pageUrl = tab?.url || "";
+  const supported = sourceTabId >= 0 && supportedPage(pageUrl);
+  if (!supported) {
+    return { sourceTabId, sourceContextId: "", pageUrl, pageTitle: pageTitleFor(tab), favIconUrl: tab?.favIconUrl || "", supported: false, paused: false, candidates: [] };
+  }
+  let state = await loadTabState(sourceTabId);
+  if (!state.pageUrl) {
+    state.pageUrl = pageUrl;
+    await persistState(state);
+  } else if (state.pageUrl !== pageUrl) {
+    await clearTab(sourceTabId, pageUrl);
+    state = await loadTabState(sourceTabId);
+  }
+  return { sourceTabId, sourceContextId: state.sourceContextId, pageUrl, pageTitle: pageTitleFor(tab), favIconUrl: tab?.favIconUrl || "", supported: true, paused: Boolean(state.paused), candidates: [...state.candidates.values()] };
+}
+
+async function resolveUiTab(sender, senderOnly = false, windowId = null) {
+  if (Number.isInteger(sender?.tab?.id)) return sender.tab;
+  if (senderOnly || !api.tabs?.query) return null;
+  const query = Number.isInteger(windowId) ? { active: true, windowId } : { active: true, currentWindow: true };
+  const tabs = await api.tabs.query(query);
+  return tabs[0] || null;
+}
+
+function notifyUiContext(tabId, windowId) {
+  api.runtime.sendMessage({ type: "ui.context.changed", tabId, windowId }).catch?.(() => {});
+}
+
+async function unmountWorkspace(tabId) {
+  if (!Number.isInteger(tabId)) return;
+  try { await api.tabs.sendMessage(tabId, { type: "workspace.unmount" }); } catch (_) {}
+  await clearPreviewHeadersForTab(tabId);
+  for (const [windowId, ownedTabId] of workspaceTabsByWindow) if (ownedTabId === tabId) workspaceTabsByWindow.delete(windowId);
+}
+
+async function openWorkspace(tab, view = "resources", candidateId = "") {
+  if (!Number.isInteger(tab?.id) || !supportedPage(tab.url)) return { ok: false, error: "workspace_page_unsupported" };
+  const windowId = tab.windowId;
+  const tabs = await api.tabs.query({ windowId });
+  await Promise.all(tabs.filter(item => item.id !== tab.id).map(item => unmountWorkspace(item.id)));
+  try {
+    await api.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] }, files: ["dist/workspace.js"] });
+    await api.tabs.sendMessage(tab.id, { type: "workspace.navigate", view, candidateId });
+    if (Number.isInteger(windowId)) workspaceTabsByWindow.set(windowId, tab.id);
+    return { ok: true, tabId: tab.id };
+  } catch (_) {
+    return { ok: false, error: "workspace_injection_failed" };
+  }
+}
+
+if (api.sidePanel?.setPanelBehavior) {
+  api.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch?.(() => {});
+} else if (api.sidebarAction?.open) {
+  api.action?.onClicked?.addListener(() => { api.sidebarAction.open().catch?.(() => {}); });
 }
 
 function queueTab(tabId, operation) {
@@ -308,11 +292,11 @@ api.webRequest.onErrorOccurred.addListener(details => requestHeadersById.delete(
 
 api.webNavigation?.onBeforeNavigate?.addListener(details => {
   if (details.frameId !== 0) return;
-  void updateSourceSessions(details.tabId, { sourceContextId: newId(), pageUrl: details.url, pageTitle: "正在加载…", favIconUrl: "", sourceClosed: false, supported: supportedPage(details.url), paused: false, snapshot: [] }).then(() => clearTab(details.tabId, details.url));
+  void unmountWorkspace(details.tabId).then(() => clearTab(details.tabId, details.url)).then(() => notifyUiContext(details.tabId));
 });
 api.webNavigation?.onHistoryStateUpdated?.addListener(details => {
   if (details.frameId !== 0) return;
-  void updateSourceSessions(details.tabId, { sourceContextId: newId(), pageUrl: details.url, pageTitle: "正在加载…", favIconUrl: "", sourceClosed: false, supported: supportedPage(details.url), paused: false, snapshot: [] }).then(() => clearTab(details.tabId, details.url)).then(() => api.tabs.sendMessage?.(details.tabId, { type: "media.rescan" })?.catch?.(() => {}));
+  void unmountWorkspace(details.tabId).then(() => clearTab(details.tabId, details.url)).then(() => api.tabs.sendMessage?.(details.tabId, { type: "media.rescan" })?.catch?.(() => {})).then(() => notifyUiContext(details.tabId));
 });
 
 async function setSniffingPaused(tabId, paused) {
@@ -391,25 +375,13 @@ async function fetchMediaText(tabId, id, requestedUrl) {
   return { ok: true, url: response.url || url.href, text };
 }
 api.tabs.onRemoved.addListener(tabId => {
-  void (async () => {
-    const sessions = await allAppSessions();
-    const ownedApp = sessions.find(session => session.appTabId === tabId);
-    if (ownedApp) {
-      await removeAppSession(ownedApp.sessionId);
-      return;
-    }
-    const state = candidatesByTab.get(tabId) || await loadTabState(tabId);
-    const snapshot = [...state.candidates.values()];
-    await updateSourceSessions(tabId, { sourceClosed: true, paused: true, sourceTabId: null, snapshot });
-    await clearTab(tabId, "", true);
-  })();
+  void unmountWorkspace(tabId).then(() => clearTab(tabId, "", true)).then(() => notifyUiContext(tabId));
 });
 api.tabs.onUpdated?.addListener((tabId, changeInfo, tab) => {
   if (!changeInfo.title && !changeInfo.url && !changeInfo.favIconUrl) return;
-  void updateSourceSessions(tabId, { pageUrl: tab.url || "", pageTitle: pageTitleFor(tab), favIconUrl: tab.favIconUrl || "", supported: supportedPage(tab.url) });
+  notifyUiContext(tabId, tab?.windowId);
 });
-
-api.action?.onClicked?.addListener(tab => { void openApplication(tab); });
+api.tabs.onActivated?.addListener(activeInfo => { notifyUiContext(activeInfo.tabId, activeInfo.windowId); });
 
 function ensureNative() {
   if (native.port) return;
@@ -448,58 +420,79 @@ async function nativeInfo() {
   return native.infoPromise;
 }
 
-async function updatePreviewHeaders(payload = {}) {
+async function clearPreviewHeadersForTab(tabId) {
+  const ruleId = previewRules.byTab.get(tabId);
+  if (!ruleId || !api.declarativeNetRequest?.updateSessionRules) return;
+  previewRules.byTab.delete(tabId);
+  await api.declarativeNetRequest.updateSessionRules({ removeRuleIds: [ruleId] });
+}
+
+async function updatePreviewHeaders(payload = {}, sender = {}) {
   if (!api.declarativeNetRequest?.updateSessionRules) return { ok: false, error: "preview_headers_unavailable" };
+  const tabId = sender.tab?.id;
+  if (!Number.isInteger(tabId)) return { ok: false, error: "preview_source_tab_required" };
   const headers = Object.fromEntries(Object.entries(payload.headers || {}).filter(([key, value]) => ["referer", "origin", "authorization", "cookie", "user-agent"].includes(key.toLowerCase()) && typeof value === "string" && value));
-  const removeRuleIds = [previewRules.id];
-  if (payload.action === "clear" || !payload.url || !Object.keys(headers).length) { await api.declarativeNetRequest.updateSessionRules({ removeRuleIds }); return { ok: true }; }
+  await clearPreviewHeadersForTab(tabId);
+  if (payload.action === "clear" || !payload.url || !Object.keys(headers).length) return { ok: true };
   let urlFilter; try { urlFilter = new URL(payload.url).origin; } catch (_) { return { ok: false, error: "preview_url_invalid" }; }
   const requestHeaders = Object.entries(headers).map(([header, value]) => ({ header: header.replace(/^(.)/, match => match.toUpperCase()), operation: "set", value }));
-  await api.declarativeNetRequest.updateSessionRules({ removeRuleIds, addRules: [{ id: previewRules.id, priority: 1, action: { type: "modifyHeaders", requestHeaders }, condition: { urlFilter, resourceTypes: ["media", "xmlhttprequest", "image"], initiatorDomains: [api.runtime.id] } }] });
+  const ruleId = previewRules.nextId++;
+  previewRules.byTab.set(tabId, ruleId);
+  await api.declarativeNetRequest.updateSessionRules({ removeRuleIds: [], addRules: [{ id: ruleId, priority: 1, action: { type: "modifyHeaders", requestHeaders }, condition: { urlFilter, resourceTypes: ["media", "xmlhttprequest", "image"], tabIds: [tabId] } }] });
   return { ok: true };
 }
 
+async function taskPayloadForSender(payload = {}, sender = {}) {
+  if (!Number.isInteger(sender.tab?.id)) return payload;
+  const state = await loadTabState(sender.tab.id);
+  return { ...payload, sourceTabId: sender.tab.id, sourceContextId: state.sourceContextId };
+}
+
 api.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message?.type === "app.session.get") {
-    appSessionView(message.sessionId).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
+  if (message?.type === "ui.context.get") {
+    resolveUiTab(sender, message.scope === "sender", message.windowId).then(tab => tab ? uiContextForTab(tab) : null).then(context => context ? sendResponse({ ok: true, context }) : sendResponse({ ok: false, error: "source_tab_unavailable" })).catch(error => sendResponse({ ok: false, error: error.message }));
     return true;
   }
-  if (message?.type === "app.source.focus") {
-    readAppSession(message.sessionId).then(async session => {
-      if (!session || !Number.isInteger(session.sourceTabId)) return { ok: false, error: "source_page_closed" };
-      await api.tabs.update(session.sourceTabId, { active: true });
-      const tab = await api.tabs.get(session.sourceTabId);
-      if (tab.windowId != null) await api.windows?.update?.(tab.windowId, { focused: true });
-      return { ok: true };
-    }).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
+  if (message?.type === "workspace.open") {
+    resolveUiTab(sender, false, message.windowId).then(tab => openWorkspace(tab, ["resources", "downloads", "settings", "parser"].includes(message.view) ? message.view : "resources", typeof message.candidateId === "string" ? message.candidateId : "")).then(sendResponse).catch(() => sendResponse({ ok: false, error: "workspace_injection_failed" }));
     return true;
+  }
+  if (message?.type === "workspace.close") {
+    if (!Number.isInteger(sender?.tab?.id)) { sendResponse({ ok: false, error: "workspace_sender_required" }); return false; }
+    unmountWorkspace(sender.tab.id).then(() => sendResponse({ ok: true })).catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+  if (message?.type === "workspace.ready") {
+    if (Number.isInteger(sender?.tab?.windowId) && Number.isInteger(sender?.tab?.id)) workspaceTabsByWindow.set(sender.tab.windowId, sender.tab.id);
+    sendResponse({ ok: true });
+    return false;
   }
   if (message?.type === "media.candidates") {
-    const tabId = message.tabId ?? sender.tab?.id;
+    const tabId = sender.tab?.id ?? message.tabId;
     queueTab(tabId, async () => [...(await loadTabState(tabId)).candidates.values()]).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
     return true;
   }
   if (message?.type === "media.sniffing.get") {
-    const tabId = message.tabId ?? sender.tab?.id;
+    const tabId = sender.tab?.id ?? message.tabId;
     loadTabState(tabId).then(state => sendResponse({ ok: true, paused: Boolean(state.paused) })).catch(error => sendResponse({ ok: false, error: error.message }));
     return true;
   }
   if (message?.type === "media.sniffing.set") {
-    const tabId = message.tabId ?? sender.tab?.id;
+    const tabId = sender.tab?.id ?? message.tabId;
     setSniffingPaused(tabId, message.payload?.paused).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
     return true;
   }
   if (message?.type === "media.remove") {
-    const tabId = message.tabId ?? sender.tab?.id;
+    const tabId = sender.tab?.id ?? message.tabId;
     removeCandidates(tabId, message.payload?.ids).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
     return true;
   }
   if (message?.type === "media.candidate.get") {
-    candidateFor(message.tabId, message.id).then(candidate => sendResponse({ ok: true, candidate })).catch(error => sendResponse({ ok: false, error: error.message }));
+    candidateFor(sender.tab?.id ?? message.tabId, message.id).then(candidate => sendResponse({ ok: true, candidate })).catch(error => sendResponse({ ok: false, error: error.message }));
     return true;
   }
   if (message?.type === "media.fetchText") {
-    fetchMediaText(message.tabId, message.id, message.url).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
+    fetchMediaText(sender.tab?.id ?? message.tabId, message.id, message.url).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
     return true;
   }
   if (message?.type === "media.add") { addCandidate(sender.tab?.id, { ...message.candidate, source: message.candidate?.source || "dom" }).then(ok => sendResponse({ ok })).catch(error => sendResponse({ ok: false, error: error.message })); return true; }
@@ -515,27 +508,27 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   if (message?.type === "native.connect") { nativeInfo().then(sendResponse); return true; }
-  if (["task.create", "task.prepare"].includes(message?.type) && message.payload?.hlsPlan) {
-    nativeInfo().then(info => {
-      const plan = message.payload.hlsPlan;
-      const baseSupported = info.capabilities.includes("hls-selection-v1") && info.capabilities.includes("task-output-group-v1");
-      const segmentEngineSupported = plan.version !== 2 || info.capabilities.includes("hls-segment-engine-v1");
-      const liveEngineSupported = plan.version !== 3 || info.capabilities.includes("hls-live-engine-v1");
-      const keyOverrideSupported = !plan.keyOverride || info.capabilities.includes("hls-key-override-v1");
-      if (!baseSupported || !segmentEngineSupported || !liveEngineSupported || !keyOverrideSupported) {
-        sendResponse({ ok: false, error: "hls_selection_native_upgrade_required" });
-        return;
+  if (["task.create", "task.prepare"].includes(message?.type)) {
+    taskPayloadForSender(message.payload || {}, sender).then(async payload => {
+      if (payload.hlsPlan) {
+        const info = await nativeInfo();
+        const plan = payload.hlsPlan;
+        const baseSupported = info.capabilities.includes("hls-selection-v1") && info.capabilities.includes("task-output-group-v1");
+        const segmentEngineSupported = plan.version !== 2 || info.capabilities.includes("hls-segment-engine-v1");
+        const liveEngineSupported = plan.version !== 3 || info.capabilities.includes("hls-live-engine-v1");
+        const keyOverrideSupported = !plan.keyOverride || info.capabilities.includes("hls-key-override-v1");
+        if (!baseSupported || !segmentEngineSupported || !liveEngineSupported || !keyOverrideSupported) return { ok: false, error: "hls_selection_native_upgrade_required" };
       }
-      nativeRequestPromise(message.type, message.payload).then(sendResponse);
-    });
+      if (payload.inlineManifest) {
+        const info = await nativeInfo();
+        if (!info.capabilities.includes("inline-hls-v1")) return { ok: false, error: "inline_hls_native_upgrade_required" };
+      }
+      return nativeRequestPromise(message.type, payload);
+    }).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
     return true;
   }
-  if (["task.create", "task.prepare"].includes(message?.type) && message.payload?.inlineManifest) {
-    nativeInfo().then(info => info.capabilities.includes("inline-hls-v1") ? nativeRequestPromise(message.type, message.payload).then(sendResponse) : sendResponse({ ok: false, error: "inline_hls_native_upgrade_required" }));
-    return true;
-  }
-  if (["task.create", "task.prepare", "task.list", "task.delete", "task.control", "path.validate"].includes(message?.type)) { nativeRequestPromise(message.type, message.payload || {}).then(sendResponse); return true; }
-  if (message?.type === "preview.headers.apply") { updatePreviewHeaders({ ...message.payload, action: "apply" }).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message })); return true; }
-  if (message?.type === "preview.headers.clear") { updatePreviewHeaders({ action: "clear" }).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message })); return true; }
+  if (["task.list", "task.delete", "task.control", "path.validate"].includes(message?.type)) { nativeRequestPromise(message.type, message.payload || {}).then(sendResponse); return true; }
+  if (message?.type === "preview.headers.apply") { updatePreviewHeaders({ ...message.payload, action: "apply" }, sender).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message })); return true; }
+  if (message?.type === "preview.headers.clear") { updatePreviewHeaders({ action: "clear" }, sender).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message })); return true; }
   return false;
 });

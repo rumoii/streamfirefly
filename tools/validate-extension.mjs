@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'extension');
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
+const background = fs.readFileSync(path.join(root, 'background.js'), 'utf8');
 const required = JSON.parse(fs.readFileSync(path.join(root, '..', 'tools', 'extension-package-files.json'), 'utf8'));
 const missing = required.filter(file => !fs.existsSync(path.join(root, file)));
 if (manifest.manifest_version !== 3) throw new Error('manifest_version must be 3');
@@ -12,7 +13,12 @@ if (!manifest.permissions?.includes('nativeMessaging')) throw new Error('nativeM
 if (!manifest.permissions?.includes('declarativeNetRequest')) throw new Error('declarativeNetRequest permission missing');
 if (!manifest.permissions?.includes('webNavigation')) throw new Error('webNavigation permission missing');
 if (manifest.version !== '0.9.0') throw new Error(`unexpected extension version: ${manifest.version}`);
-if (manifest.permissions?.includes('sidePanel') || manifest.side_panel) throw new Error('Obsolete Chrome side panel entry is still present');
-if (manifest.options_ui?.page !== 'dist/app.html#/settings') throw new Error('Vue settings entry missing');
+if (!manifest.permissions?.includes('sidePanel')) throw new Error('Chrome sidePanel permission missing');
+if (manifest.side_panel?.default_path !== 'dist/app.html?surface=sidebar#/resources') throw new Error('Chrome side panel entry missing');
+if (manifest.options_ui?.page !== 'dist/app.html?surface=options#/settings') throw new Error('Vue settings entry missing');
+if (/\btabs\.create\s*\(/.test(background)) throw new Error('Toolbar entry must not create an application tab');
+if (/AppSession|app\.session\.|appTabId/.test(background)) throw new Error('Obsolete application session lifecycle is still present');
+if (!background.includes('openPanelOnActionClick: true')) throw new Error('Chrome action is not bound to native side panel behavior');
+if (!background.includes('files: ["dist/workspace.js"]')) throw new Error('On-demand workspace injection is missing');
 if (missing.length) throw new Error(`missing files: ${missing.join(', ')}`);
 console.log(`StreamFirefly extension ${manifest.version} valid (${required.length} required files)`);

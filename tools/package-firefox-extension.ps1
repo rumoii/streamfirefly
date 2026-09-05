@@ -44,10 +44,10 @@ try {
   try { $lint = $lintText | ConvertFrom-Json }
   catch { throw "Firefox lint did not return valid JSON:`n$lintText" }
   $allowedWarnings = @($lint.warnings | Where-Object {
-    $_.code -eq 'UNSAFE_VAR_ASSIGNMENT' -and $_.file -eq 'dist/assets/app.js'
+    $_.code -eq 'UNSAFE_VAR_ASSIGNMENT' -and (@('dist/assets/app.js', 'dist/workspace.js') -contains $_.file)
   })
   $unexpectedWarnings = @($lint.warnings | Where-Object {
-    -not ($_.code -eq 'UNSAFE_VAR_ASSIGNMENT' -and $_.file -eq 'dist/assets/app.js')
+    -not ($_.code -eq 'UNSAFE_VAR_ASSIGNMENT' -and (@('dist/assets/app.js', 'dist/workspace.js') -contains $_.file))
   })
   if ($lint.summary.errors -or $lint.summary.notices -or $unexpectedWarnings.Count) {
     throw "Firefox lint reported errors=$($lint.summary.errors), notices=$($lint.summary.notices), unexpectedWarnings=$($unexpectedWarnings.Count):`n$lintText"

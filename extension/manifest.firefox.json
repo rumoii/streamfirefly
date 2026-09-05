@@ -8,8 +8,9 @@
   "host_permissions": ["http://*/*", "https://*/*"],
   "background": { "scripts": ["background.js"] },
   "action": { "default_title": "流萤 StreamFirefly", "default_icon": { "48": "icon48.png" } },
+  "sidebar_action": { "default_title": "流萤 StreamFirefly", "default_panel": "dist/app.html?surface=sidebar#/resources", "default_icon": { "48": "icon48.png" }, "open_at_install": false },
   "content_scripts": [{ "matches": ["http://*/*", "https://*/*"], "js": ["content.js"], "run_at": "document_start", "all_frames": true }],
-  "options_ui": { "page": "dist/app.html#/settings", "open_in_tab": true },
+  "options_ui": { "page": "dist/app.html?surface=options#/settings", "open_in_tab": true },
   "browser_specific_settings": {
     "gecko": {
       "id": "streamfirefly@example.invalid",

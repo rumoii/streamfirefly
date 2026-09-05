@@ -1,9 +1,9 @@
 import { computed, onBeforeUnmount, ref } from "vue";
 import { defineStore } from "pinia";
-import { extensionApi, sendMessage, sessionIdFromUrl } from "./api";
-import type { DownloadTask, MediaCandidate, PageContext } from "./types";
+import { currentWindowId, extensionApi, sendMessage, surfaceFromUrl, type UiSurface } from "./api";
+import type { DownloadTask, MediaCandidate, UiContext } from "./types";
 
-const activeStates = new Set(["queued", "starting", "running", "retrying", "pausing", "cancelling"]);
+const activeStates = new Set(["queued", "starting", "running", "retrying", "pausing", "cancelling", "stopping"]);
 
 export interface AppSettings {
   saveDir: string;
@@ -28,8 +28,8 @@ export async function readSettings(storage = extensionApi()?.storage?.local): Pr
 }
 
 export const useAppStore = defineStore("app", () => {
-  const sessionId = sessionIdFromUrl();
-  const session = ref<PageContext | null>(null);
+  const surface = ref<UiSurface>(surfaceFromUrl());
+  const context = ref<UiContext | null>(null);
   const candidates = ref<MediaCandidate[]>([]);
   const tasks = ref<DownloadTask[]>([]);
   const capabilities = ref<string[]>([]);
@@ -38,16 +38,20 @@ export const useAppStore = defineStore("app", () => {
   const status = ref("");
   const settings = ref<AppSettings>({ ...DEFAULT_SETTINGS });
   let timer: number | null = null;
+  let listening = false;
+  let sidebarWindowId: number | null = null;
 
-  const sourceTasks = computed(() => tasks.value.filter(task => task.source_context_id && task.source_context_id === session.value?.sourceContextId));
+  const sourceTasks = computed(() => tasks.value.filter(task => task.source_context_id && task.source_context_id === context.value?.sourceContextId));
   const activeTasks = computed(() => tasks.value.filter(task => activeStates.has(task.state)));
 
-  async function loadSession() {
-    const result: any = await sendMessage({ type: "app.session.get", sessionId });
-    if (!result?.ok) throw new Error(result?.error || "app_session_not_found");
-    session.value = result.session;
-    candidates.value = Array.isArray(result.candidates) ? result.candidates : [];
-    document.title = `流萤 · ${session.value?.pageTitle || "网页媒体"}`;
+  async function loadContext() {
+    if (surface.value === "options") { context.value = null; candidates.value = []; return; }
+    if (surface.value === "sidebar" && sidebarWindowId == null) sidebarWindowId = await currentWindowId();
+    const result: any = await sendMessage({ type: "ui.context.get", scope: surface.value === "workspace" ? "sender" : "active", windowId: sidebarWindowId });
+    if (!result?.ok) throw new Error(result?.error || "source_tab_unavailable");
+    context.value = result.context;
+    candidates.value = Array.isArray(result.context?.candidates) ? result.context.candidates : [];
+    document.title = `流萤 · ${context.value?.pageTitle || "网页媒体"}`;
   }
 
   async function loadTasks() {
@@ -57,26 +61,27 @@ export const useAppStore = defineStore("app", () => {
 
   async function loadSettings() { settings.value = await readSettings(); }
 
-  async function initialize() {
+  async function initialize(nextSurface: UiSurface = surfaceFromUrl()) {
+    surface.value = nextSurface;
     loading.value = true;
     error.value = "";
     try {
       if (!extensionApi()?.runtime?.sendMessage) {
-        session.value = { sessionId: "preview", sourceContextId: "preview-page", sourceTabId: 1, appTabId: 2, pageUrl: "https://media.example/demo", pageTitle: "示例媒体页面", favIconUrl: "", sourceClosed: false, supported: true, paused: false };
-        candidates.value = previewCandidates();
+        context.value = { sourceContextId: "preview-page", sourceTabId: 1, pageUrl: "https://media.example/demo", pageTitle: "示例媒体页面", favIconUrl: "", supported: true, paused: false, candidates: previewCandidates() };
+        candidates.value = context.value.candidates;
         tasks.value = previewTasks();
         capabilities.value = ["hls-selection-v1", "hls-subtitle-sidecar-v1", "task-output-group-v1", "hls-segment-engine-v1", "hls-checkpoint-v1", "hls-aes128-v1", "hls-key-override-v1", "hls-reauthorize-v1", "hls-live-engine-v1"];
       } else {
-        const native: any = await sendMessage({ type: "native.connect" });
-        capabilities.value = native?.capabilities || [];
-        const settingsOnly = !new URLSearchParams(location.search).has("session") && location.hash.includes("settings");
-        if (settingsOnly) {
-          session.value = null;
-          await Promise.all([loadTasks(), loadSettings()]);
-        } else await Promise.all([loadSession(), loadTasks(), loadSettings()]);
+        const operations: Promise<unknown>[] = [loadSettings()];
+        if (surface.value !== "options") {
+          const native: any = await sendMessage({ type: "native.connect" });
+          capabilities.value = native?.capabilities || [];
+          operations.push(loadContext(), loadTasks());
+        }
+        await Promise.all(operations);
         const api = extensionApi();
-        api.runtime.onMessage.addListener(onRuntimeMessage);
-        if (!settingsOnly) timer = window.setInterval(() => { void refresh(); }, 1000);
+        if (!listening) { api.runtime.onMessage.addListener(onRuntimeMessage); listening = true; }
+        if (surface.value !== "options" && timer == null) timer = window.setInterval(() => { void refresh(); }, 1000);
       }
     } catch (reason: any) {
       error.value = humanError(reason?.message || String(reason));
@@ -86,22 +91,31 @@ export const useAppStore = defineStore("app", () => {
   }
 
   async function refresh() {
-    if (!extensionApi()?.runtime?.sendMessage) return;
-    try { await Promise.all([loadSession(), loadTasks()]); } catch (_) {}
+    if (!extensionApi()?.runtime?.sendMessage || surface.value === "options") return;
+    try { await Promise.all([loadContext(), loadTasks()]); } catch (_) {}
   }
 
   async function toggleSniffing() {
-    if (!session.value || session.value.sourceClosed || !Number.isInteger(session.value.sourceTabId)) return;
-    const result: any = await sendMessage({ type: "media.sniffing.set", tabId: session.value.sourceTabId, payload: { paused: !session.value.paused } });
+    if (!context.value?.supported || !Number.isInteger(context.value.sourceTabId)) return;
+    const result: any = await sendMessage({ type: "media.sniffing.set", tabId: context.value.sourceTabId, payload: { paused: !context.value.paused } });
     if (!result?.ok) throw new Error(result?.error || "sniffing_update_failed");
-    session.value.paused = Boolean(result.paused);
+    context.value.paused = Boolean(result.paused);
   }
 
-  async function focusSource() { await sendMessage({ type: "app.source.focus", sessionId }); }
+  async function openWorkspace(view = "resources", candidateId = "") {
+    if (!context.value?.supported) throw new Error("workspace_page_unsupported");
+    const result: any = await sendMessage({ type: "workspace.open", view, candidateId, windowId: sidebarWindowId });
+    if (!result?.ok) throw new Error(result?.error || "workspace_injection_failed");
+  }
+
+  async function closeWorkspace() {
+    const result: any = await sendMessage({ type: "workspace.close" });
+    if (!result?.ok) throw new Error(result?.error || "workspace_close_failed");
+  }
 
   async function removeCandidates(ids: string[]) {
-    if (!session.value?.sourceTabId) return;
-    const result: any = await sendMessage({ type: "media.remove", tabId: session.value.sourceTabId, payload: { ids } });
+    if (!context.value?.supported) return;
+    const result: any = await sendMessage({ type: "media.remove", tabId: context.value.sourceTabId, payload: { ids } });
     if (!result?.ok) throw new Error(result?.error || "media_remove_failed");
     candidates.value = candidates.value.filter(item => !ids.includes(item.id));
   }
@@ -137,6 +151,7 @@ export const useAppStore = defineStore("app", () => {
   }
 
   function onRuntimeMessage(message: any) {
+    if (message?.type === "ui.context.changed" && surface.value === "sidebar" && (message.windowId == null || sidebarWindowId == null || message.windowId === sidebarWindowId)) void loadContext().catch(() => {});
     if (message?.type === "task.deleted" && message.id) tasks.value = tasks.value.filter(item => item.id !== message.id);
     if (message?.type === "task.progress" && message.task) {
       const index = tasks.value.findIndex(item => item.id === message.task.id);
@@ -145,17 +160,20 @@ export const useAppStore = defineStore("app", () => {
   }
 
   onBeforeUnmount(() => {
-    if (timer != null) clearInterval(timer);
-    extensionApi()?.runtime?.onMessage?.removeListener?.(onRuntimeMessage);
+    if (timer != null) { clearInterval(timer); timer = null; }
+    if (listening) { extensionApi()?.runtime?.onMessage?.removeListener?.(onRuntimeMessage); listening = false; }
     void sendMessage({ type: "preview.headers.clear" }).catch(() => {});
   });
 
-  return { sessionId, session, candidates, tasks, capabilities, loading, error, status, settings, sourceTasks, activeTasks, initialize, refresh, toggleSniffing, focusSource, removeCandidates, saveSettings, controlTask, deleteTask };
+  return { surface, context, candidates, tasks, capabilities, loading, error, status, settings, sourceTasks, activeTasks, initialize, refresh, toggleSniffing, openWorkspace, closeWorkspace, removeCandidates, saveSettings, controlTask, deleteTask };
 });
 
 export function humanError(value: string): string {
   const labels: Record<string, string> = {
-    app_session_not_found: "此流萤页面的会话已经失效，请从来源网页重新打开。",
+    source_tab_unavailable: "当前窗口没有可用的来源标签页。",
+    workspace_page_unsupported: "当前页面属于浏览器内部或受限页面，不能展开工作区。",
+    workspace_injection_failed: "无法在当前页面展开工作区，请检查页面权限后重试。",
+    workspace_close_failed: "工作区未能正常收起，请刷新页面后重试。",
     native_host_unavailable: "未连接到本地助手，请安装或重新启动流萤本地助手。",
     native_host_timeout: "本地助手响应超时，请重启后重试。",
     hls_selection_native_upgrade_required: "本地助手版本过旧，请安装 0.9.0 Beta 3 后重试。",
@@ -164,7 +182,7 @@ export function humanError(value: string): string {
     hls_plan_expired: "本地助手重启后无法恢复该 HLS 选择计划，请从资源页重新解析并创建任务。",
     hls_authorization_required: "请回到仍保持登录的来源页面，重新播放资源后再授权继续。",
     hls_key_required: "请重新输入 AES-128 密钥后继续。",
-    hls_source_candidate_missing: "当前流萤页面已找不到原资源，请回到来源网页重新播放并嗅探。",
+    hls_source_candidate_missing: "当前页面已找不到原资源，请重新播放并嗅探。",
     hls_key_override_invalid: "自定义 AES-128 密钥或 IV 格式无效。",
     hls_key_validation_failed: "AES-128 密钥未能解开首个媒体切片，请检查密钥和 IV。",
     hls_map_iv_required: "该 HLS 的加密初始化片段缺少规范要求的显式 IV。",
@@ -172,8 +190,7 @@ export function humanError(value: string): string {
     hls_checkpoint_invalid: "HLS 检查点已损坏，请重新创建下载任务。",
     hls_checkpoint_version_unsupported: "HLS 检查点版本不兼容，请升级本地助手或重新创建任务。",
     hls_live_not_supported: "当前版本暂不支持直播 M3U8 录制。",
-    path_not_writable: "保存目录不可写，请检查路径和权限。",
-    source_page_closed: "来源页面已经关闭。"
+    path_not_writable: "保存目录不可写，请检查路径和权限。"
   };
   return labels[value] || value || "未知错误";
 }

@@ -35,7 +35,19 @@
     if (event.source !== window || event.data?.source !== "streamfirefly" || event.data.type !== "media") return;
     api.runtime.sendMessage({ type: "media.add", candidate: event.data.candidate }).catch?.(() => {});
   });
-  api.runtime.onMessage?.addListener(message => { if (message?.type === "media.rescan") { seen.clear(); scan(); } });
+  api.runtime.onMessage?.addListener(message => {
+    if (message?.type === "media.rescan") { seen.clear(); scan(); return { ok: true }; }
+    if (window !== window.top) return false;
+    if (message?.type === "workspace.unmount") {
+      window.dispatchEvent(new CustomEvent("streamfirefly-workspace-unmount"));
+      return { ok: true };
+    }
+    if (message?.type === "workspace.navigate") {
+      window.dispatchEvent(new CustomEvent("streamfirefly-workspace-navigate", { detail: { view: message.view, candidateId: message.candidateId || "" } }));
+      return { ok: true };
+    }
+    return false;
+  });
   api.runtime.sendMessage({ type: "probe.install" }).catch?.(() => {});
   new MutationObserver(scan).observe(document.documentElement, { childList: true, subtree: true });
   scan();

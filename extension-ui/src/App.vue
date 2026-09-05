@@ -1,50 +1,53 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { extensionApi } from "./api";
+import { extensionApi, surfaceFromUrl } from "./api";
 import { useAppStore, humanError } from "./store";
-import type { DownloadTask, MediaCandidate } from "./types";
+import type { MediaCandidate } from "./types";
 import AppHeader from "./components/AppHeader.vue";
 import ResourcesView from "./components/ResourcesView.vue";
-import DownloadsView from "./components/DownloadsView.vue";
 import SettingsView from "./components/SettingsView.vue";
 import DownloadDialog from "./components/DownloadDialog.vue";
-import HlsParserView from "./components/HlsParserView.vue";
+import TaskOverview from "./components/TaskOverview.vue";
 
 const store = useAppStore();
-const route = ref(location.hash.includes("settings") ? "settings" : "resources");
-const parserCandidate = ref<MediaCandidate | null>(null);
+const surface = surfaceFromUrl();
+const isOptions = computed(() => surface === "options");
 const downloadCandidate = ref<MediaCandidate | null>(null);
 const toast = ref("");
 let toastTimer = 0;
-const tab = computed(() => parserCandidate.value ? "parser" : route.value);
 
 function showToast(message: string) { toast.value = message; clearTimeout(toastTimer); toastTimer = window.setTimeout(() => toast.value = "", 3500); }
-function navigate(value: string) { parserCandidate.value = null; route.value = value; location.hash = `/${value}`; }
 async function guard(action: () => Promise<any>, success?: string) { try { await action(); if (success) showToast(success); } catch (reason: any) { showToast(humanError(reason?.message)); } }
 async function updateSort(mode: string) { store.settings.candidateSort = mode; if (extensionApi()?.storage?.local) await extensionApi().storage.local.set({ candidateSort: mode }); }
 async function resetSettings() { const next = { saveDir: "", downloadThreads: 6, detectImages: false, advancedDeepSearch: false, candidateSort: store.settings.candidateSort }; await guard(() => store.saveSettings(next), "已恢复默认设置"); }
-function openParser(candidate: MediaCandidate) { if (candidate.type !== "hls") { showToast("当前版本暂未提供 DASH 轨道选择，将按完整清单下载。"); downloadCandidate.value = candidate; return; } parserCandidate.value = candidate; }
-function handleDelete(task: DownloadTask, deleteFile: boolean) { void guard(() => store.deleteTask(task, deleteFile), deleteFile ? "已删除任务和本地文件" : "已删除任务记录"); }
+function openParser(candidate: MediaCandidate) { void guard(() => store.openWorkspace(candidate.type === "hls" ? "parser" : "resources", candidate.id)); }
 
-onMounted(store.initialize);
+onMounted(() => store.initialize(surface));
 </script>
 
 <template>
-  <div class="app-shell">
-    <AppHeader :session="store.session" :loading="store.loading" @refresh="store.refresh" @toggle-sniffing="guard(store.toggleSniffing)" @focus-source="guard(store.focusSource)" />
-    <nav class="primary-nav" aria-label="流萤功能"><div class="primary-nav-inner"><button :class="{ active: tab === 'resources' || tab === 'parser' }" @click="navigate('resources')"><span>资源</span><b>{{ store.candidates.filter(item => item.type !== 'segment').length }}</b></button><button :class="{ active: tab === 'downloads' }" @click="navigate('downloads')"><span>下载</span><b v-if="store.activeTasks.length" class="active-count">{{ store.activeTasks.length }}</b></button><button :class="{ active: tab === 'settings' }" @click="navigate('settings')"><span>设置</span></button></div></nav>
-    <main class="app-content" :class="{ 'parser-content': tab === 'parser' }">
+  <div v-if="isOptions" class="app-shell options-shell">
+    <AppHeader :context="null" :loading="store.loading" @refresh="store.refresh" @toggle-sniffing="store.toggleSniffing" />
+    <main class="app-content"><SettingsView :settings="store.settings" @save="settings => guard(() => store.saveSettings(settings), '设置已保存')" @reset="resetSettings" /></main>
+  </div>
+  <div v-else class="app-shell sidebar-shell">
+    <AppHeader :context="store.context" :loading="store.loading" compact @refresh="store.refresh" @toggle-sniffing="guard(store.toggleSniffing)" />
+    <main class="sidebar-content">
       <div v-if="store.error" class="status-banner error">{{ store.error }}</div>
-      <div v-if="store.session?.sourceClosed" class="status-banner warning"><strong>来源页面已关闭</strong><span>已发现资源和当前页面任务会保留到此流萤页关闭，但不会继续嗅探新资源。</span></div>
-      <div v-else-if="store.session && !store.session.supported && tab !== 'settings'" class="status-banner warning"><strong>当前页面不支持嗅探</strong><span>浏览器内部页面、扩展页面和本地受限页面无法读取媒体请求。</span></div>
-      <Transition name="page" mode="out-in">
-        <ResourcesView v-if="tab === 'resources'" key="resources" :candidates="store.candidates" :loading="store.loading" :sort-mode="store.settings.candidateSort" @download="downloadCandidate = $event" @parse="openParser" @remove="guard(() => store.removeCandidates($event), '已从列表移除资源')" @update-sort="updateSort" />
-        <HlsParserView v-else-if="tab === 'parser' && parserCandidate && store.session" key="parser" :candidate="parserCandidate" :session="store.session" :capabilities="store.capabilities" :save-dir="store.settings.saveDir" :download-threads="store.settings.downloadThreads" @back="parserCandidate = null" @created="message => { showToast(message); navigate('downloads'); }" />
-        <DownloadsView v-else-if="tab === 'downloads'" key="downloads" :tasks="store.tasks" :source-tasks="store.sourceTasks" @control="(task, action, context) => guard(() => store.controlTask(task, action, context))" @delete="handleDelete" />
-        <SettingsView v-else key="settings" :settings="store.settings" @save="settings => guard(() => store.saveSettings(settings), '设置已保存')" @reset="resetSettings" />
-      </Transition>
+      <div v-else-if="store.context && !store.context.supported" class="restricted-state">
+        <span>⌁</span><h2>当前页面不支持嗅探</h2><p>浏览器内部页面、扩展页面和本地受限页面不能读取媒体请求，也不能展开工作区。</p>
+      </div>
+      <template v-else>
+        <div class="sidebar-source-summary"><strong>{{ store.candidates.filter(item => item.type !== 'segment').length }}</strong><span>个媒体资源</span><i></i><strong>{{ store.activeTasks.length }}</strong><span>个活动任务</span></div>
+        <ResourcesView :candidates="store.candidates" :loading="store.loading" :sort-mode="store.settings.candidateSort" compact @download="downloadCandidate = $event" @parse="openParser" @remove="guard(() => store.removeCandidates($event), '已从列表移除资源')" @update-sort="updateSort" />
+        <TaskOverview :source-tasks="store.sourceTasks" :active-tasks="store.activeTasks" />
+      </template>
     </main>
-    <DownloadDialog :candidate="downloadCandidate" :save-dir="store.settings.saveDir" :download-threads="store.settings.downloadThreads" :source-context-id="store.session?.sourceContextId || null" :source-tab-id="store.session?.sourceTabId || null" :capabilities="store.capabilities" @close="downloadCandidate = null" @created="message => { showToast(message); navigate('downloads'); }" />
+    <footer class="sidebar-actions">
+      <button class="button primary" type="button" :disabled="!store.context?.supported" @click="guard(() => store.openWorkspace('resources'))">展开工作区</button>
+      <button class="button subtle" type="button" :disabled="!store.context?.supported" @click="guard(() => store.openWorkspace('settings'))">设置</button>
+    </footer>
+    <DownloadDialog :candidate="downloadCandidate" :save-dir="store.settings.saveDir" :download-threads="store.settings.downloadThreads" :source-context-id="store.context?.sourceContextId || null" :source-tab-id="store.context?.sourceTabId ?? null" :capabilities="store.capabilities" @close="downloadCandidate = null" @created="message => { showToast(message); downloadCandidate = null; }" />
     <Transition name="toast"><div v-if="toast" class="toast" role="status">{{ toast }}</div></Transition>
   </div>
 </template>

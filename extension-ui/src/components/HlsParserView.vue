@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
-import type { MediaCandidate, PageContext } from "../types";
+import type { MediaCandidate, UiContext } from "../types";
 import { chooseHlsContainer, defaultAudio, defaultVariant, deriveMediaPlaylist, hlsEncryptionMethods, parseHls, segmentRangeForTime, validateHlsKeyOverride, type HlsKeyOverrideKind, type HlsManifest, type HlsTrack } from "../media";
 import { formatDuration } from "../format";
-import { sendMessage } from "../api";
+import { extensionApi, sendMessage } from "../api";
 import { humanError } from "../store";
 
-const props = defineProps<{ candidate: MediaCandidate; session: PageContext; capabilities: string[]; saveDir: string; downloadThreads: number }>();
+const props = defineProps<{ candidate: MediaCandidate; context: UiContext; capabilities: string[]; saveDir: string; downloadThreads: number }>();
 const emit = defineEmits<{ back: []; created: [message: string] }>();
 const loading = ref(true);
 const error = ref("");
@@ -21,7 +21,7 @@ const form = reactive({ name: "", extension: "mp4", container: "mp4", busy: fals
 const keyMode = ref<"auto" | "manual">("auto");
 const keyForm = reactive<{ kind: HlsKeyOverrideKind; value: string; iv: string }>({ kind: "hex", value: "", iv: "" });
 const trackManifests = new Map<string, HlsManifest>();
-const liveSupported = computed(() => props.capabilities.includes("hls-live-engine-v1") || props.session.sessionId === "preview");
+const liveSupported = computed(() => props.capabilities.includes("hls-live-engine-v1") || !extensionApi()?.runtime?.sendMessage);
 const isLive = computed(() => Boolean(master.value?.live || videoManifest.value?.live));
 
 const variants = computed(() => master.value?.variants || []);
@@ -36,9 +36,9 @@ const actualRange = computed(() => {
   const derived = deriveMediaPlaylist(manifest, first, last);
   return { ...derived, count: derived.last - derived.first + 1 };
 });
-const advancedSupported = computed(() => props.capabilities.includes("hls-selection-v1") || props.session.sessionId === "preview");
-const segmentEngineSupported = computed(() => props.capabilities.includes("hls-segment-engine-v1") || props.session.sessionId === "preview");
-const keyOverrideSupported = computed(() => props.capabilities.includes("hls-key-override-v1") || props.session.sessionId === "preview");
+const advancedSupported = computed(() => props.capabilities.includes("hls-selection-v1"));
+const segmentEngineSupported = computed(() => props.capabilities.includes("hls-segment-engine-v1"));
+const keyOverrideSupported = computed(() => props.capabilities.includes("hls-key-override-v1"));
 const encryptionMethods = computed(() => hlsEncryptionMethods(videoManifest.value));
 const unsupportedEncryption = computed(() => encryptionMethods.value.find(method => method !== "AES-128") || "");
 const unsupportedLiveFeature = computed(() => videoManifest.value?.hasDrmKeyFormat ? "此直播使用 DRM 密钥格式，流萤不会尝试绕过。" : videoManifest.value?.hasLowLatencyParts ? "此直播使用 LL-HLS Part，Beta 3 暂不支持录制。" : "");
@@ -50,8 +50,8 @@ function ensureSupportedEncryption(manifest: HlsManifest, label: string) {
 }
 
 async function fetchText(url: string): Promise<{ text: string; url: string }> {
-  if (props.session.sessionId === "preview") return previewManifest(url);
-  const result: any = await sendMessage({ type: "media.fetchText", tabId: props.session.sourceTabId, id: props.candidate.id, url });
+  if (!extensionApi()?.runtime?.sendMessage) return previewManifest(url);
+  const result: any = await sendMessage({ type: "media.fetchText", tabId: props.context.sourceTabId, id: props.candidate.id, url });
   if (!result?.ok) throw new Error(result?.error || "media_fetch_failed");
   return { text: result.text, url: result.url || url };
 }
@@ -117,7 +117,7 @@ async function initialize() {
 }
 
 function basePayload() {
-  return { url: props.candidate.url, candidateId: props.candidate.id, title: props.candidate.title || props.candidate.pageTitle || "streamfirefly-media", mime: props.candidate.mime || "application/vnd.apple.mpegurl", referer: props.candidate.referer || props.candidate.pageUrl || null, requestHeaders: props.candidate.requestHeaders || {}, downloadThreads: props.downloadThreads, sourceContextId: props.session.sourceContextId };
+  return { url: props.candidate.url, candidateId: props.candidate.id, title: props.candidate.title || props.candidate.pageTitle || "streamfirefly-media", mime: props.candidate.mime || "application/vnd.apple.mpegurl", referer: props.candidate.referer || props.candidate.pageUrl || null, requestHeaders: props.candidate.requestHeaders || {}, downloadThreads: props.downloadThreads, sourceContextId: props.context.sourceContextId };
 }
 
 async function createTask() {

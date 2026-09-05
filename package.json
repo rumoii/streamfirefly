@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.9.0",
   "scripts": {
-    "build:extension": "vite build",
+    "build:extension": "vite build && vite build --config vite.workspace.config.ts",
     "typecheck": "vue-tsc --noEmit",
     "test:ui": "vitest run",
     "validate:extension": "npm run build:extension && node tools/validate-extension.mjs && node tools/validate-firefox-extension.mjs",
@@ -13,7 +13,8 @@
     "package:firefox": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/package-firefox-extension.ps1",
     "test:firefox": "node tools/test-browser-extension.mjs --browser firefox",
     "test:chrome": "node tools/test-browser-extension.mjs --browser chrome",
-    "test:browsers": "npm run test:chrome && npm run test:firefox"
+    "test:edge": "node tools/test-browser-extension.mjs --browser edge",
+    "test:browsers": "npm run test:chrome && npm run test:edge && npm run test:firefox"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "6.0.1",

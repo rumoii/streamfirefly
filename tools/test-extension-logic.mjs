@@ -7,21 +7,29 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const listeners = {};
 const nativeListeners = {};
+const nativePosted = [];
 const localValues = {};
 const sessionValues = {};
 const createdTabs = [];
 const tabUpdates = [];
 const windowUpdates = [];
+const localGetQueries = [];
+const executedScripts = [];
+const tabMessages = [];
+let sidePanelBehavior = null;
 let nextTabId = 100;
 const tabsById = new Map([
   [7, { id: 7, active: true, url: 'https://media.example/page', title: '媒体页面 A', lastAccessed: 2, windowId: 1 }],
-  [8, { id: 8, active: false, url: 'https://video.example/page', title: '媒体页面 B', lastAccessed: 1, windowId: 1 }]
+  [8, { id: 8, active: false, url: 'https://video.example/page', title: '媒体页面 B', lastAccessed: 1, windowId: 1 }],
+  [9, { id: 9, active: false, url: 'chrome://extensions', title: '扩展程序', lastAccessed: 0, windowId: 1 }]
 ]);
 let fetchResponse = new Response('#EXTM3U\n#EXTINF:2,\nsegment.ts\n', { headers: { 'content-type': 'application/vnd.apple.mpegurl' } });
-const storageArea = values => ({
+const storageArea = (values, queries = null) => ({
   async get(query) {
+    queries?.push(structuredClone(query));
     if (query == null) return { ...values };
     if (typeof query === 'string') return { [query]: values[query] };
+    if (Array.isArray(query)) return Object.fromEntries(query.filter(key => key in values).map(key => [key, values[key]]));
     return Object.fromEntries(Object.entries(query).map(([key, fallback]) => [key, values[key] ?? fallback]));
   },
   async set(update) { Object.assign(values, structuredClone(update)); },
@@ -29,8 +37,9 @@ const storageArea = values => ({
 });
 const api = {
   action: { setBadgeText: async () => {}, onClicked: { addListener: listener => { listeners.actionClicked = listener; } } },
-  scripting: { executeScript: async () => {} },
-  storage: { local: storageArea(localValues), session: storageArea(sessionValues), onChanged: { addListener: listener => { listeners.storageChanged = listener; } } },
+  sidePanel: { setPanelBehavior: async value => { sidePanelBehavior = value; } },
+  scripting: { executeScript: async value => { executedScripts.push(structuredClone(value)); return []; } },
+  storage: { local: storageArea(localValues, localGetQueries), session: storageArea(sessionValues), onChanged: { addListener: listener => { listeners.storageChanged = listener; } } },
   webRequest: {
     OnBeforeSendHeadersOptions: { EXTRA_HEADERS: 'extraHeaders' },
     onBeforeSendHeaders: { addListener: listener => { listeners.beforeHeaders = listener; } },
@@ -50,11 +59,11 @@ const api = {
     connectNative: () => ({
       onMessage: { addListener: listener => { nativeListeners.message = listener; } },
       onDisconnect: { addListener: listener => { nativeListeners.disconnect = listener; } },
-      postMessage: message => queueMicrotask(() => nativeListeners.message({ version: 1, id: message.id, ok: true, protocolVersion: 3, supportedProtocolVersions: [2, 3], capabilities: ['inline-hls-v1', 'task-control-v1', 'hls-selection-v1', 'task-output-group-v1'] }))
+      postMessage: message => { nativePosted.push(structuredClone(message)); queueMicrotask(() => nativeListeners.message({ version: 1, id: message.id, ok: true, protocolVersion: 3, supportedProtocolVersions: [2, 3], capabilities: ['inline-hls-v1', 'task-control-v1', 'hls-selection-v1', 'task-output-group-v1'] })); }
     })
   },
   tabs: {
-    query: async () => [...tabsById.values()].map(tab => ({ ...tab })),
+    query: async query => [...tabsById.values()].filter(tab => query?.windowId == null || tab.windowId === query.windowId).filter(tab => !query?.active || tab.active).map(tab => ({ ...tab })),
     create: async properties => {
       const tab = { id: nextTabId++, windowId: properties.windowId ?? 1, status: 'complete', ...properties };
       tabsById.set(tab.id, tab); createdTabs.push({ ...tab }); return { ...tab };
@@ -69,9 +78,10 @@ const api = {
       if (!tab) throw new Error('tab_not_found');
       Object.assign(tab, properties); tabUpdates.push({ id, properties: { ...properties } }); return { ...tab };
     },
-    sendMessage: async () => {},
+    sendMessage: async (id, message) => { tabMessages.push({ id, message: structuredClone(message) }); return { ok: true }; },
     onRemoved: { addListener: listener => { listeners.removed = listener; } },
-    onUpdated: { addListener: listener => { listeners.updated = listener; } }
+    onUpdated: { addListener: listener => { listeners.updated = listener; } },
+    onActivated: { addListener: listener => { listeners.activated = listener; } }
   },
   windows: { update: async (id, properties) => { windowUpdates.push({ id, properties: { ...properties } }); } }
 };
@@ -132,13 +142,14 @@ fetchResponse = new Response('too large', { headers: { 'content-length': String(
 const oversizedManifest = await send({ type: 'media.fetchText', tabId: 7, id: video.id, url: 'https://media.example/large.m3u8' });
 if (oversizedManifest.ok || oversizedManifest.error !== 'media_manifest_too_large') throw new Error(`Oversized manifest was not rejected: ${JSON.stringify(oversizedManifest)}`);
 
-await send({ type: 'preview.headers.apply', payload: { url: video.url, headers: video.requestHeaders } });
-if (listeners.previewRules?.addRules?.[0]?.condition?.initiatorDomains?.[0] !== 'streamfirefly-test') throw new Error(`Preview rule was not scoped to the extension: ${JSON.stringify(listeners.previewRules)}`);
+await send({ type: 'preview.headers.apply', payload: { url: video.url, headers: video.requestHeaders } }, { tab: { id: 7 } });
+if (listeners.previewRules?.addRules?.[0]?.condition?.tabIds?.[0] !== 7) throw new Error(`Preview rule was not scoped to the source tab: ${JSON.stringify(listeners.previewRules)}`);
 if (listeners.previewRules?.addRules?.[0]?.condition?.urlFilter !== 'https://media.example') throw new Error(`Preview rule was not scoped to the media origin: ${JSON.stringify(listeners.previewRules)}`);
-await send({ type: 'preview.headers.clear' });
+await send({ type: 'preview.headers.clear' }, { tab: { id: 7 } });
 if (listeners.previewRules?.addRules) throw new Error(`Preview clear unexpectedly added a rule: ${JSON.stringify(listeners.previewRules)}`);
 
-listeners.history({ tabId: 7, frameId: 0, url: 'https://media.example/next' });
+tabsById.get(7).url = 'https://media.example/next';
+listeners.history({ tabId: 7, frameId: 0, url: tabsById.get(7).url });
 await settle();
 candidates = await send({ type: 'media.candidates', tabId: 7 });
 if (candidates.length) throw new Error('SPA navigation did not clear candidates');
@@ -147,50 +158,66 @@ listeners.storageChanged({ detectImages: { newValue: true } }, 'local');
 await send({ type: 'media.add', candidate: { url: 'https://media.example/enabled.jpg', mime: 'image/jpeg' } }, { tab: { id: 7 } });
 candidates = await send({ type: 'media.candidates', tabId: 7 });
 if (candidates.length !== 1 || candidates[0].type !== 'image') throw new Error('Image detection setting was not applied');
-listeners.history({ tabId: 7, frameId: 0, url: 'https://media.example/segments' });
+tabsById.get(7).url = 'https://media.example/segments';
+listeners.history({ tabId: 7, frameId: 0, url: tabsById.get(7).url });
 await settle();
 
 await Promise.all(Array.from({ length: 1005 }, (_, index) => send({ type: 'media.add', candidate: { url: `https://media.example/segment-${index}.m4s` } }, { tab: { id: 7 } })));
 candidates = await send({ type: 'media.candidates', tabId: 7 });
 if (candidates.length !== 1000 || candidates.some(item => item.url.endsWith('segment-0.m4s')) || !candidates.some(item => item.url.endsWith('segment-1004.m4s'))) throw new Error('Segment bucket cap did not retain the newest 1000 candidates');
 
-listeners.actionClicked({ ...tabsById.get(7) });
 await flush();
-let sessions = Object.values(sessionValues).filter(value => value?.sessionId);
-if (sessions.length !== 1 || createdTabs.length !== 1) throw new Error(`First source did not create one application session: ${JSON.stringify({ sessions, createdTabs })}`);
-const firstSession = sessions[0];
-const firstAppTabId = firstSession.appTabId;
-listeners.actionClicked({ ...tabsById.get(7) });
-await flush();
-if (createdTabs.length !== 1 || tabUpdates.at(-1)?.id !== firstAppTabId || windowUpdates.at(-1)?.id !== 1) throw new Error('Repeated source click did not focus the existing application tab');
+if (JSON.stringify(sidePanelBehavior) !== JSON.stringify({ openPanelOnActionClick: true })) throw new Error(`Chrome action was not bound to the native side panel: ${JSON.stringify(sidePanelBehavior)}`);
+if (listeners.actionClicked) throw new Error('Chrome action retained a custom click handler instead of native side panel behavior');
+if (!Array.isArray(localGetQueries[0]) || localGetQueries[0].some(value => typeof value !== 'string')) throw new Error(`Settings were not loaded with a plain key array: ${JSON.stringify(localGetQueries[0])}`);
 
-listeners.actionClicked({ ...tabsById.get(8) });
-await flush();
-sessions = Object.values(sessionValues).filter(value => value?.sessionId);
-if (sessions.length !== 2 || createdTabs.length !== 2 || new Set(sessions.map(value => value.sourceTabId)).size !== 2) throw new Error('Different source pages did not receive independent application sessions');
+let activeView = await send({ type: 'ui.context.get', scope: 'active' });
+if (!activeView.ok || activeView.context.sourceTabId !== 7 || !activeView.context.sourceContextId || activeView.context.candidates.length !== 1000) throw new Error(`Active UI context was not assembled from tab state: ${JSON.stringify(activeView)}`);
+const oldSourceContextId = activeView.context.sourceContextId;
 
-const oldSourceContextId = firstSession.sourceContextId;
-listeners.beforeNavigate({ tabId: 7, frameId: 0, url: 'https://media.example/new-page' });
+tabsById.get(7).active = false;
+tabsById.get(9).active = true;
+const restricted = await send({ type: 'ui.context.get', scope: 'active' });
+if (!restricted.ok || restricted.context.supported || restricted.context.candidates.length || restricted.context.sourceContextId) throw new Error(`Restricted page received an active media context: ${JSON.stringify(restricted)}`);
+const rejectedWorkspace = await send({ type: 'workspace.open', view: 'settings' });
+if (rejectedWorkspace.ok || rejectedWorkspace.error !== 'workspace_page_unsupported') throw new Error(`Restricted page accepted workspace injection: ${JSON.stringify(rejectedWorkspace)}`);
+
+tabsById.get(9).active = false;
+tabsById.get(7).active = true;
+const firstWorkspace = await send({ type: 'workspace.open', view: 'resources' });
+if (!firstWorkspace.ok || executedScripts.at(-1)?.target?.tabId !== 7 || executedScripts.at(-1)?.files?.[0] !== 'dist/workspace.js') throw new Error(`Workspace was not injected into the active source tab: ${JSON.stringify({ firstWorkspace, executedScripts })}`);
+if (createdTabs.length) throw new Error(`Workspace entry created a browser tab: ${JSON.stringify(createdTabs)}`);
+if (!tabMessages.some(entry => entry.id === 8 && entry.message.type === 'workspace.unmount')) throw new Error('Opening a workspace did not clean other tabs in the window');
+
+tabsById.get(7).active = false;
+tabsById.get(8).active = true;
+const messagesBeforeSecondOpen = tabMessages.length;
+const secondWorkspace = await send({ type: 'workspace.open', view: 'settings' });
+if (!secondWorkspace.ok || !tabMessages.slice(messagesBeforeSecondOpen).some(entry => entry.id === 7 && entry.message.type === 'workspace.unmount')) throw new Error('Opening a second tab workspace did not unload the previous tab workspace');
+const messagesBeforeRepeat = tabMessages.length;
+const repeatedWorkspace = await send({ type: 'workspace.open', view: 'downloads' });
+if (!repeatedWorkspace.ok || tabMessages.slice(messagesBeforeRepeat).some(entry => entry.id === 8 && entry.message.type === 'workspace.unmount')) throw new Error('Repeated workspace open discarded state on its own tab');
+
+const senderView = await send({ type: 'ui.context.get', scope: 'sender' }, { tab: { ...tabsById.get(8) } });
+if (!senderView.ok || senderView.context.sourceTabId !== 8) throw new Error(`Workspace context did not use its sender tab: ${JSON.stringify(senderView)}`);
+await send({ type: 'task.create', payload: { url: 'https://video.example/file.mp4', sourceTabId: 7, sourceContextId: 'forged' } }, { tab: { ...tabsById.get(8) } });
+const workspaceTask = nativePosted.at(-1)?.payload;
+if (workspaceTask?.sourceTabId !== 8 || workspaceTask?.sourceContextId !== senderView.context.sourceContextId) throw new Error(`Workspace task escaped its sender context: ${JSON.stringify(workspaceTask)}`);
+const firstClose = await send({ type: 'workspace.close' }, { tab: { ...tabsById.get(8) } });
+const secondClose = await send({ type: 'workspace.close' }, { tab: { ...tabsById.get(8) } });
+if (!firstClose.ok || !secondClose.ok || tabMessages.filter(entry => entry.id === 8 && entry.message.type === 'workspace.unmount').length < 2) throw new Error('Repeated workspace disposal was not idempotent');
+
+tabsById.get(8).active = false;
+tabsById.get(7).active = true;
+tabsById.get(7).url = 'https://media.example/new-page';
+listeners.beforeNavigate({ tabId: 7, frameId: 0, url: tabsById.get(7).url });
 await flush();
-let firstView = await send({ type: 'app.session.get', sessionId: firstSession.sessionId });
-if (!firstView.ok || firstView.session.sourceContextId === oldSourceContextId || firstView.candidates.length) throw new Error(`Source navigation did not rotate context and clear resources: ${JSON.stringify(firstView)}`);
+activeView = await send({ type: 'ui.context.get', scope: 'active' });
+if (!activeView.ok || activeView.context.sourceContextId === oldSourceContextId || activeView.context.candidates.length) throw new Error(`Source navigation did not rotate context and clear resources: ${JSON.stringify(activeView)}`);
 
 await send({ type: 'media.add', candidate: { url: 'https://media.example/final.mp4', mime: 'video/mp4' } }, { tab: { id: 7 } });
 tabsById.delete(7);
 listeners.removed(7);
 await flush();
-firstView = await send({ type: 'app.session.get', sessionId: firstSession.sessionId });
-if (!firstView.ok || !firstView.session.sourceClosed || firstView.session.sourceTabId !== null || !firstView.candidates.some(item => item.url.endsWith('/final.mp4'))) throw new Error(`Closed source snapshot was not retained: ${JSON.stringify(firstView)}`);
-
-tabsById.set(7, { id: 7, active: true, url: 'https://reused.example/page', title: '复用标签页', lastAccessed: 3, windowId: 1 });
-listeners.actionClicked({ ...tabsById.get(7) });
-await flush();
-sessions = Object.values(sessionValues).filter(value => value?.sessionId);
-const reusedSession = sessions.find(value => value.sourceTabId === 7 && !value.sourceClosed);
-if (!reusedSession || reusedSession.sessionId === firstSession.sessionId || createdTabs.length !== 3) throw new Error('Reused tab ID incorrectly focused the closed source session');
-
-tabsById.delete(firstAppTabId);
-listeners.removed(firstAppTabId);
-await flush();
-if (sessionValues[`streamfirefly-app-session-v1:${firstSession.sessionId}`]) throw new Error('Closing an application tab did not remove its session');
-console.log('Extension candidate state and classification tests passed');
+if (sessionValues['media-candidates-v2:7']) throw new Error('Closing a source tab did not remove its ephemeral media state');
+console.log('Extension candidate state, UI context, and workspace lifecycle tests passed');

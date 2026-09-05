@@ -7,6 +7,7 @@
   "dist/assets/app.js",
   "dist/assets/hls.js",
   "dist/assets/app.css",
+  "dist/workspace.js",
   "icon16.png",
   "icon32.png",
   "icon48.png",

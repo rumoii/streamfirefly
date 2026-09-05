@@ -8,7 +8,7 @@ Status: proposed
 
 ## Proposal
 
-- 主界面方案由 `2026-09-02-full-app-session-and-hls-task-groups.md` 取代。本记录继续负责 Native Messaging v3 和后续录制数据通道。
+- 主界面方案由 `2026-09-05-native-sidebar-and-page-workspace.md` 负责。本记录继续负责 Native Messaging v3 和后续录制数据通道。
 - Native Host 使用协议 v3，同时声明支持 v2；旧消息保持原语义，新能力必须通过 `capabilities` 协商。
 - Native Host 是下载任务状态的唯一权威，支持暂停、继续、取消和重试。扩展界面只根据任务事件和 `task.list` 收敛状态。
 - 任务文件不持久化 Cookie、Authorization 或密钥。需要登录态才能继续的任务，在进程重启后保持中断并要求用户从来源页面重新发起。
@@ -17,7 +17,7 @@ Status: proposed
 
 ## Alternatives considered
 
-- 主界面入口与布局的替代方案由新的完整应用页决定记录维护。
+- 主界面入口与布局的替代方案由原生侧栏与网页内工作区决定记录维护。
 - 通过 Native Messaging JSON 传输所有录制字节：存在消息大小、复制开销、背压和 MV3 Service Worker 生命周期风险。
 - 直接引入 CutUI：当前扩展没有 Vue 构建体系，且私有组件库授权不适合作为未来开源依赖；只采用其视觉与交互原则。
 

@@ -23,17 +23,15 @@ export interface MediaCandidate {
   inlineManifest?: { format: string; baseUrl: string; text: string } | null;
 }
 
-export interface PageContext {
-  sessionId: string;
+export interface UiContext {
   sourceContextId: string;
-  sourceTabId: number | null;
-  appTabId: number | null;
+  sourceTabId: number;
   pageUrl: string;
   pageTitle: string;
-  favIconUrl?: string;
-  sourceClosed: boolean;
+  favIconUrl: string;
   supported: boolean;
   paused: boolean;
+  candidates: MediaCandidate[];
 }
 
 export interface TaskOutput {

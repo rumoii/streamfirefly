@@ -136,3 +136,46 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
   .settings-section { grid-template-columns: 1fr; gap: 18px; }.settings-card { padding: 18px; }.task-detail { padding-left: 15px; }.task-summary { grid-template-columns: 34px minmax(0,1fr) 44px; }.task-summary .row-arrow { display: none; }.downloads-title { align-items: flex-start; flex-direction: column; }.subpage-heading { align-items: flex-start; }.subpage-heading > .button { padding: 0 9px; }.range-summary,.range-inputs { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) { *,*::before,*::after { scroll-behavior: auto !important; animation-duration: .001ms !important; transition-duration: .001ms !important; } }
+
+.sidebar-shell { min-height: 100vh; padding-bottom: 66px; background: #f5f7fb; }
+.sidebar-shell .app-header { min-height: 112px; padding: 8px 10px; }
+.sidebar-shell .app-header-inner { min-height: 96px; grid-template-columns: minmax(0,1fr) auto; gap: 7px; }
+.sidebar-shell .brand-block { min-width: 0; }
+.sidebar-shell .brand-logo { width: 32px; height: 32px; }
+.sidebar-shell .brand-block p { display: none; }
+.sidebar-shell .source-chip { display: flex; grid-column: 1 / -1; grid-row: 2; width: 100%; }
+.sidebar-shell .header-actions { grid-column: 2; grid-row: 1; }
+.sidebar-shell .header-actions .button { display: inline-flex; }
+.sidebar-content { display: grid; gap: 10px; padding: 10px; }
+.sidebar-source-summary { min-height: 38px; display: flex; align-items: baseline; gap: 5px; padding: 8px 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 10px; background: #fff; font-size: 10px; }
+.sidebar-source-summary strong { color: var(--primary-dark); font-size: 17px; }
+.sidebar-source-summary i { width: 1px; height: 17px; margin: 0 5px; align-self: center; background: var(--line); }
+.sidebar-actions { position: fixed; z-index: 45; left: 0; right: 0; bottom: 0; min-height: 58px; display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding: 9px 10px; border-top: 1px solid var(--line); background: rgba(255,255,255,.97); box-shadow: 0 -5px 18px rgba(37,58,85,.06); }
+.sidebar-actions .button { min-height: 38px; }
+.compact .resource-list-panel { max-height: none; }
+.compact .toolbar-grid { grid-template-columns: 1fr 1fr; }
+.compact .toolbar-grid .search, .compact .range-controls { grid-column: 1 / -1; }
+.compact .sort-hint { display: none; }
+.compact .batch-bar { flex-wrap: wrap; padding-top: 7px; padding-bottom: 7px; }
+.compact .batch-bar > div { margin-left: 0; }
+.compact .resource-scroll { max-height: 44vh; }
+.compact .resource-summary { grid-template-columns: 20px 44px minmax(0,1fr); }
+.compact .card-actions { grid-column: 2 / -1; justify-content: flex-end; flex-wrap: wrap; }
+.compact .panel-title-actions .live-dot { display: none; }
+.task-overview { overflow: hidden; }
+.overview-list { display: grid; padding: 7px 10px 10px; }
+.overview-list article { min-width: 0; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 5px 8px; padding: 8px 2px; border-bottom: 1px solid #edf1f5; }
+.overview-list article:last-child { border-bottom: 0; }
+.overview-list strong, .overview-list small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.overview-list strong { font-size: 11px; }.overview-list small { margin-top: 3px; color: var(--muted); font-size: 9px; }
+.overview-list article > span { color: var(--primary-dark); font-size: 11px; font-weight: 700; }
+.overview-list article > i { grid-column: 1 / -1; height: 4px; overflow: hidden; border-radius: 3px; background: #e9eeec; }
+.overview-list article > i > b { display: block; height: 100%; border-radius: inherit; background: var(--primary); }
+.overview-empty { padding: 18px; color: var(--muted); text-align: center; font-size: 11px; }
+.restricted-state { min-height: 300px; display: grid; place-content: center; justify-items: center; padding: 24px; text-align: center; color: var(--muted); }
+.restricted-state > span { width: 52px; height: 52px; display: grid; place-items: center; border-radius: 16px; color: #6f8196; background: #e7edf4; font-size: 24px; }
+.restricted-state h2 { margin: 14px 0 7px; color: #42546a; font-size: 16px; }
+.restricted-state p { max-width: 300px; margin: 0; font-size: 11px; line-height: 1.7; }
+.workspace-shell { min-height: 100vh; max-height: 100vh; overflow: auto; color: #26364a; background: #f5f7fb; font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif; }
+.workspace-close { position: fixed; z-index: 35; top: 72px; right: 18px; min-width: 60px; }
+.options-shell .app-content { padding-top: 24px; }

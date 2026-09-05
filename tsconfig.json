@@ -12,5 +12,5 @@
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "types": ["vitest/globals"]
   },
-  "include": ["extension-ui/src/**/*.ts", "extension-ui/src/**/*.vue", "vite.config.ts"]
+  "include": ["extension-ui/src/**/*.ts", "extension-ui/src/**/*.vue", "vite.config.ts", "vite.workspace.config.ts"]
 }

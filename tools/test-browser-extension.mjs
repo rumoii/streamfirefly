@@ -13,7 +13,7 @@ const option = name => { const index = cliArgs.indexOf(name); return index >= 0 
 const browserName = option('--browser') || 'firefox';
 
 const resultPath = option('--result');
-if (!['firefox', 'chrome'].includes(browserName)) throw new Error(`Unsupported browser: ${browserName}`);
+if (!['firefox', 'chrome', 'edge'].includes(browserName)) throw new Error(`Unsupported browser: ${browserName}`);
 
 
 
@@ -32,6 +32,7 @@ function reporterSource(origin) {
   const origin = ${JSON.stringify(origin)};
   const deadline = Date.now() + 25000;
   let probeResult;
+  let workspaceReady = false;
   const pause = delay => new Promise(resolve => setTimeout(resolve, delay));
   const waitFor = async (operation, label) => {
     let lastError;
@@ -49,6 +50,7 @@ function reporterSource(origin) {
   const postResult = payload => fetch(origin + '/report', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
   const postEvent = stage => fetch(origin + '/event', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stage }) }).catch(() => {});
   testApi.runtime.onMessage.addListener((message, sender) => {
+    if (message?.type === 'workspace.ready') { workspaceReady = sender.tab?.id || true; return false; }
     if (message?.type !== 'test.probe.result') return false;
     probeResult = { result: message.result, tabId: sender.tab?.id, error: message.error || null };
     return false;
@@ -104,6 +106,27 @@ function reporterSource(origin) {
     const postManifest = first.find(item => item.inlineManifest && item.source === 'fetch-body');
     if (!postManifest.inlineManifest.text.includes(origin + '/media/post-segment.ts') || !postManifest.inlineManifest.text.includes('URI="' + origin + '/api/key.bin"')) throw new Error('POST HLS manifest URLs were not normalized');
 
+    const tabsBeforeWorkspace = (await testApi.tabs.query({ windowId: tab.windowId })).length;
+    const workspaceResult = await openWorkspace(await testApi.tabs.get(tab.id), 'resources');
+    if (!workspaceResult.ok) throw new Error('workspace injection failed: ' + workspaceResult.error);
+    await waitFor(() => workspaceReady === tab.id, 'workspace bundle did not report readiness');
+    const workspaceMounted = await waitFor(async () => {
+      const result = await testApi.scripting.executeScript({ target: { tabId: tab.id }, func: () => {
+        const host = document.getElementById('streamfirefly-workspace-host');
+        return host?.shadowRoot ? { count: document.querySelectorAll('#streamfirefly-workspace-host').length, text: host.shadowRoot.textContent || '', error: host.shadowRoot.querySelector('.status-banner.error')?.textContent || '' } : null;
+      } });
+      return result[0]?.result || null;
+    }, 'workspace did not mount in an open Shadow DOM');
+    if (workspaceMounted.count !== 1 || !workspaceMounted.text.includes('流萤') || workspaceMounted.error) throw new Error('workspace mounted with an invalid Vue UI state: ' + JSON.stringify(workspaceMounted));
+    const repeatedWorkspace = await openWorkspace(await testApi.tabs.get(tab.id), 'settings');
+    if (!repeatedWorkspace.ok) throw new Error('repeated workspace open failed: ' + repeatedWorkspace.error);
+    const tabsAfterWorkspace = (await testApi.tabs.query({ windowId: tab.windowId })).length;
+    if (tabsAfterWorkspace !== tabsBeforeWorkspace) throw new Error('workspace opening created a browser tab');
+    await testApi.tabs.sendMessage(tab.id, { type: 'workspace.unmount' });
+    await testApi.tabs.sendMessage(tab.id, { type: 'workspace.unmount' });
+    await waitFor(async () => (await testApi.scripting.executeScript({ target: { tabId: tab.id }, func: () => !document.getElementById('streamfirefly-workspace-host') }))[0]?.result, 'workspace did not unmount idempotently');
+    await openWorkspace(await testApi.tabs.get(tab.id), 'resources');
+
     await testApi.scripting.executeScript({
       target: { tabId: tab.id },
       world: 'MAIN',
@@ -119,7 +142,8 @@ function reporterSource(origin) {
       const items = await candidatesFor(tab.id);
       return has(items, '/media/spa.mp4') && !has(items, '/media/direct.mp4') ? items : null;
     }, 'SPA navigation did not clear old candidates and rescan the page');
-    await postResult({ ok: true, browser: ${JSON.stringify(browserName)}, first, afterSpa });
+    await waitFor(async () => (await testApi.scripting.executeScript({ target: { tabId: tab.id }, func: () => !document.getElementById('streamfirefly-workspace-host') }))[0]?.result, 'SPA navigation did not unload the workspace');
+    await postResult({ ok: true, browser: ${JSON.stringify(browserName)}, first, afterSpa, workspace: { mounted: true, duplicateCount: workspaceMounted.count, tabCountUnchanged: tabsAfterWorkspace === tabsBeforeWorkspace, navigationCleanup: true } });
   })().catch(async error => {
     try { await postResult({ ok: false, browser: ${JSON.stringify(browserName)}, error: error?.message || String(error), stack: error?.stack || null }); } catch (_) {}
   });
@@ -197,12 +221,15 @@ function startFixtureServer() {
 }
 
 function browserBinary(name) {
-  const configured = process.env[name === 'firefox' ? 'FIREFOX_BINARY' : 'CHROME_BINARY'];
+  const environmentName = name === 'firefox' ? 'FIREFOX_BINARY' : name === 'edge' ? 'EDGE_BINARY' : 'CHROME_BINARY';
+  const configured = process.env[environmentName];
   const candidates = configured ? [configured] : name === 'firefox'
     ? ['C:\\Program Files\\Mozilla Firefox\\firefox.exe', 'C:\\Program Files (x86)\\Mozilla Firefox\\firefox.exe']
-    : ['C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe'];
+    : name === 'edge'
+      ? ['C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe', 'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe']
+      : ['C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe'];
   const found = candidates.find(candidate => fs.existsSync(candidate));
-  if (!found) throw new Error(`${name} binary was not found; set ${name === 'firefox' ? 'FIREFOX_BINARY' : 'CHROME_BINARY'}`);
+  if (!found) throw new Error(`${name} binary was not found; set ${environmentName}`);
   return found;
 }
 
@@ -249,7 +276,7 @@ async function run() {
     const common = [webExt, 'run', '--source-dir', stage, '--no-reload', '--no-input', '--start-url', 'about:blank', '--profile-create-if-missing', '--keep-profile-changes'];
     const browserArgs = browserName === 'firefox'
       ? ['--firefox', browserBinary('firefox'), '--firefox-profile', profile, '--args=-headless', '--args=-no-remote']
-      : ['--target', 'chromium', '--chromium-binary', browserBinary('chrome'), '--chromium-profile', profile, '--args=--no-first-run', '--args=--window-position=-32000,-32000', '--args=--window-size=800,600'];
+      : ['--target', 'chromium', '--chromium-binary', browserBinary(browserName), '--chromium-profile', profile, '--args=--no-first-run', '--args=--window-position=-32000,-32000', '--args=--window-size=800,600'];
     child = spawn(process.execPath, [...common, ...browserArgs], { cwd: repositoryRoot, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     const append = chunk => { output = (output + chunk.toString()).slice(-16000); };
     child.stdout.on('data', append); child.stderr.on('data', append);

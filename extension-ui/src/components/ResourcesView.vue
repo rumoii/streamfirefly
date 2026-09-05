@@ -6,7 +6,7 @@ import { filterCandidates, sortCandidates } from "../media";
 import { formatBytes, formatDuration, sourceLabel, typeLabel } from "../format";
 import { sendMessage } from "../api";
 
-const props = defineProps<{ candidates: MediaCandidate[]; loading: boolean; sortMode: string }>();
+const props = defineProps<{ candidates: MediaCandidate[]; loading: boolean; sortMode: string; compact?: boolean }>();
 const emit = defineEmits<{ download: [candidate: MediaCandidate]; parse: [candidate: MediaCandidate]; remove: [ids: string[]]; updateSort: [mode: string] }>();
 const selectedIds = ref(new Set<string>());
 const expandedId = ref("");
@@ -96,7 +96,7 @@ onBeforeUnmount(() => { void stopPreview(); });
 </script>
 
 <template>
-  <section class="resource-layout expandable-resources">
+  <section class="resource-layout expandable-resources" :class="{ compact }">
     <div class="resource-list-panel panel">
       <div class="panel-title">
         <div><h2>发现资源</h2><p>{{ resourceCandidates.length }} 个媒体资源<span v-if="segments.length"> · {{ segments.length }} 个分片已收起</span></p></div>
@@ -120,7 +120,7 @@ onBeforeUnmount(() => { void stopPreview(); });
                 <label class="resource-select"><input type="checkbox" :checked="selectedIds.has(item.id)" :aria-label="`选择${resourceName(item)}`" @change="toggleSelection(item.id)"></label>
                 <span class="resource-type">{{ typeLabel(item.type) }}</span>
                 <span class="resource-identity"><strong>{{ resourceName(item) }}</strong><small>{{ resourceMeta(item) }}</small><em>{{ item.url }}</em></span>
-                <span class="card-actions"><button v-if="item.type === 'hls' || item.type === 'dash'" class="button subtle" type="button" @click="$emit('parse', item)">解析</button><button class="button subtle" type="button" :aria-expanded="expandedId === item.id" @click="toggleDetails(item)">{{ expandedId === item.id ? '收起' : '详情' }}</button><button class="button primary" type="button" @click="$emit('download', item)">下载</button></span>
+                <span class="card-actions"><button v-if="item.type === 'hls' || item.type === 'dash'" class="button subtle" type="button" @click="$emit('parse', item)">{{ compact ? '详细解析' : '解析' }}</button><button v-if="!compact" class="button subtle" type="button" :aria-expanded="expandedId === item.id" @click="toggleDetails(item)">{{ expandedId === item.id ? '收起' : '详情' }}</button><button class="button primary" type="button" @click="$emit('download', item)">{{ compact && item.type === 'hls' ? '快速下载' : '下载' }}</button></span>
               </div>
               <Transition name="resource-detail">
                 <div v-if="expandedId === item.id" class="expanded-detail"><div class="expanded-detail-inner">

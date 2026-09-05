@@ -12,6 +12,15 @@ export function runtimeUrl(path: string, fallback = path): string {
   return fallback;
 }
 
-export function sessionIdFromUrl(): string {
-  return new URLSearchParams(location.search).get("session") || "preview";
+export type UiSurface = "sidebar" | "options" | "workspace";
+
+export function surfaceFromUrl(): UiSurface {
+  const surface = new URLSearchParams(location.search).get("surface");
+  return surface === "options" ? "options" : "sidebar";
+}
+
+export async function currentWindowId(): Promise<number | null> {
+  if (!api?.windows?.getCurrent) return null;
+  const window = await api.windows.getCurrent();
+  return Number.isInteger(window?.id) ? window.id : null;
 }
