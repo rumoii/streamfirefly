@@ -32,6 +32,7 @@ function reporterSource(origin) {
   const origin = ${JSON.stringify(origin)};
   let probeResult;
   let workspaceReady = false;
+  let currentStage = 'startup';
   const pause = delay => new Promise(resolve => setTimeout(resolve, delay));
   const waitFor = async (operation, label, timeoutMs = 30000) => {
     const deadline = Date.now() + timeoutMs;
@@ -63,12 +64,16 @@ function reporterSource(origin) {
   });
 
   (async () => {
+    currentStage = 'initialize-settings';
     await postEvent('reporter-started');
     if (typeof settingsReady !== 'undefined') await settingsReady;
     await testApi.storage.local.set({ advancedDeepSearch: true, detectImages: false });
     if (typeof settings !== 'undefined') { settings.advancedDeepSearch = true; settings.detectImages = false; }
+    currentStage = 'create-fixture-tab';
     const tab = await testApi.tabs.create({ url: origin + '/fixture' });
+    currentStage = 'wait-fixture-tab';
     await waitFor(async () => (await testApi.tabs.get(tab.id)).status === 'complete', 'fixture tab did not finish loading');
+    currentStage = 'wait-probe-installation';
     const installed = await waitFor(() => probeResult?.tabId === tab.id ? probeResult : null, 'content script did not report probe installation');
     if (!installed.result?.ok) throw new Error('probe installation failed: ' + (installed.result?.error || installed.error || 'unknown'));
     await waitFor(async () => {
@@ -78,6 +83,7 @@ function reporterSource(origin) {
       throw new Error(JSON.stringify(state));
     }, 'page probes were not installed in MAIN world');
 
+    currentStage = 'stimulate-media-discovery';
     await testApi.scripting.executeScript({
       target: { tabId: tab.id },
       world: 'MAIN',
@@ -94,6 +100,7 @@ function reporterSource(origin) {
       }
     });
 
+    currentStage = 'wait-media-candidates';
     const first = await waitFor(async () => {
       const items = await candidatesFor(tab.id);
       const complete = has(items, '/media/direct.mp4')
@@ -112,6 +119,7 @@ function reporterSource(origin) {
     const postManifest = first.find(item => item.inlineManifest && item.source === 'fetch-body');
     if (!postManifest.inlineManifest.text.includes(origin + '/media/post-segment.ts') || !postManifest.inlineManifest.text.includes('URI="' + origin + '/api/key.bin"')) throw new Error('POST HLS manifest URLs were not normalized');
 
+    currentStage = 'open-workspace';
     const tabsBeforeWorkspace = (await testApi.tabs.query({ windowId: tab.windowId })).length;
     const pageBeforeWorkspace = (await testApi.scripting.executeScript({ target: { tabId: tab.id }, func: () => ({ title: document.title, htmlOverflow: document.documentElement.style.overflow, bodyOverflow: document.body.style.overflow }) }))[0].result;
     const workspaceResult = await openWorkspace(await testApi.tabs.get(tab.id), 'resources');
@@ -125,6 +133,7 @@ function reporterSource(origin) {
       return result[0]?.result || null;
     }, 'workspace did not mount in an open Shadow DOM');
     if (workspaceMounted.count !== 1 || !workspaceMounted.text.includes('流萤') || workspaceMounted.error) throw new Error('workspace mounted with an invalid Vue UI state: ' + JSON.stringify(workspaceMounted));
+    currentStage = 'synchronize-resource-state';
     const resourceState = await loadTabState(tab.id);
     const sidebarPatch = await patchResourceViewState(tab.id, resourceState.sourceContextId, { type: 'video', sortMode: 'size' });
     if (!sidebarPatch.ok) throw new Error('sidebar resource state patch failed: ' + sidebarPatch.error);
@@ -143,6 +152,7 @@ function reporterSource(origin) {
       input.dispatchEvent(new Event('input', { bubbles: true }));
     } });
     await waitFor(async () => (await loadTabState(tab.id)).resourceViewState.pattern === 'direct', 'workspace resource state did not reach background authority');
+    currentStage = 'verify-workspace-layout';
     const workspaceBehavior = (await testApi.scripting.executeScript({ target: { tabId: tab.id }, func: () => {
       const host = document.getElementById('streamfirefly-workspace-host');
       const shell = host?.shadowRoot?.querySelector('.workspace-shell');
@@ -162,17 +172,21 @@ function reporterSource(origin) {
     if (workspaceBehavior.htmlOverflow !== 'hidden' || workspaceBehavior.bodyOverflow !== 'hidden') throw new Error('workspace did not lock the underlying page scroll: ' + JSON.stringify(workspaceBehavior));
     if (workspaceBehavior.overflowY !== 'auto' || workspaceBehavior.scrollHeight <= workspaceBehavior.clientHeight || workspaceBehavior.scrollTop <= 0) throw new Error('workspace shell was not vertically scrollable: ' + JSON.stringify(workspaceBehavior));
     if (workspaceBehavior.contentWidth < workspaceBehavior.viewportWidth - 24 || workspaceBehavior.resourcesWidth < workspaceBehavior.contentInnerWidth - 1) throw new Error('workspace resources did not fill the available viewport width: ' + JSON.stringify(workspaceBehavior));
+    currentStage = 'reopen-workspace';
     const repeatedWorkspace = await openWorkspace(await testApi.tabs.get(tab.id), 'settings');
     if (!repeatedWorkspace.ok) throw new Error('repeated workspace open failed: ' + repeatedWorkspace.error);
     const tabsAfterWorkspace = (await testApi.tabs.query({ windowId: tab.windowId })).length;
     if (tabsAfterWorkspace !== tabsBeforeWorkspace) throw new Error('workspace opening created a browser tab');
+    currentStage = 'unmount-workspace';
     await testApi.tabs.sendMessage(tab.id, { type: 'workspace.unmount' });
     await testApi.tabs.sendMessage(tab.id, { type: 'workspace.unmount' });
     await waitFor(async () => (await testApi.scripting.executeScript({ target: { tabId: tab.id }, func: () => !document.getElementById('streamfirefly-workspace-host') }))[0]?.result, 'workspace did not unmount idempotently');
     const pageAfterUnmount = (await testApi.scripting.executeScript({ target: { tabId: tab.id }, func: () => ({ title: document.title, htmlOverflow: document.documentElement.style.overflow, bodyOverflow: document.body.style.overflow }) }))[0].result;
     if (JSON.stringify(pageAfterUnmount) !== JSON.stringify(pageBeforeWorkspace)) throw new Error('workspace did not restore source page title and scroll styles: ' + JSON.stringify({ pageBeforeWorkspace, pageAfterUnmount }));
+    currentStage = 'reopen-before-spa';
     await openWorkspace(await testApi.tabs.get(tab.id), 'resources');
 
+    currentStage = 'navigate-spa';
     await testApi.scripting.executeScript({
       target: { tabId: tab.id },
       world: 'MAIN',
@@ -184,14 +198,16 @@ function reporterSource(origin) {
         document.querySelector('video').replaceWith(video);
       }
     });
+    currentStage = 'verify-spa-cleanup';
     const afterSpa = await waitFor(async () => {
       const items = await candidatesFor(tab.id);
       return has(items, '/media/spa.mp4') && !has(items, '/media/direct.mp4') ? items : null;
     }, 'SPA navigation did not clear old candidates and rescan the page');
     await waitFor(async () => (await testApi.scripting.executeScript({ target: { tabId: tab.id }, func: () => !document.getElementById('streamfirefly-workspace-host') }))[0]?.result, 'SPA navigation did not unload the workspace');
+    currentStage = 'complete';
     await postResult({ ok: true, browser: ${JSON.stringify(browserName)}, first, afterSpa, workspace: { mounted: true, duplicateCount: workspaceMounted.count, tabCountUnchanged: tabsAfterWorkspace === tabsBeforeWorkspace, navigationCleanup: true, sharedResourceState: true, titlePreserved: true, scrollVerified: true } });
   })().catch(async error => {
-    try { await postResult({ ok: false, browser: ${JSON.stringify(browserName)}, error: error?.message || String(error), stack: error?.stack || null }); } catch (_) {}
+    try { await postResult({ ok: false, browser: ${JSON.stringify(browserName)}, stage: currentStage, error: currentStage + ': ' + (error?.message || String(error)), stack: error?.stack || null }); } catch (_) {}
   });
 })();
 `;
