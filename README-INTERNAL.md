@@ -1,16 +1,30 @@
-# StreamFirefly 0.9.0 Beta 4 内测指南
+# StreamFirefly 0.9.1 内测指南
 
 此版本仅用于受邀测试，不是 Chrome Web Store 正式发布版本。测试人员需要登录受邀的 GitHub 账号，从私有 Release 下载测试包。请勿转发安装包、Release 链接或测试数据。
 
 StreamFirefly 不绕过 DRM。请只测试自己拥有版权或已获授权的内容。
 
+## 本次更新与升级要求
+
+- HLS 快速、详细和批量下载使用同一套切片引擎；点播支持检查点恢复，直播仍需单独启动。
+- 最多同时执行 2 个任务，其余按先入先出排队；排队任务可暂停、取消，恢复和重试进入队尾。
+- 批量下载一次确认，逐项显示入队、失败和需单独处理的结果；已入队任务不因关闭弹窗而取消。
+- 新增时长范围筛选、弹窗键盘焦点管理及连接状态提示；助手断连时保留最后一次任务列表，恢复连接后重新同步。
+- 本版必须同时更新扩展与 Native Host，不支持新旧版本混用。旧 HLS v1 下载不再通过兼容引擎恢复，需要重新解析创建。
+
+从旧版本升级前，先等待正在进行的任务结束，关闭浏览器并确认本地助手已退出，再备份 `%LOCALAPPDATA%\StreamFirefly\tasks.json`、同目录的 `tasks` 检查点目录和已下载文件。用本版安装脚本更新助手，并在扩展管理页面更新扩展、检查版本为 0.9.1；Firefox 需重新载入本版 XPI。
+
+任务存储版本不变。遇到未知版本、损坏或无法读取的任务文件时，助手拒绝覆盖，请保留原文件排查，不要直接删除任务目录。需要回滚时，停止助手后先另存升级后的数据，再成套恢复旧扩展与旧助手；必要时恢复升级前备份，不用旧 Host 直接处理唯一一份新数据。
+
+Windows ARM64 包完成构建及包审计不等于 ARM64 设备实机验收；真实网站、长期运行和设备兼容性仍需内测反馈。此版本不是完整 1.0 验收，也不是浏览器商店正式发布。
+
 ## 一、下载测试包
 
 1. 接受 `rumoii/streamfirefly-internal-releases` 私有仓库的协作者邀请。
 2. 登录 GitHub，进入该仓库的 **Releases** 页面。
-3. 打开 `StreamFirefly 0.9.0 Beta 4 内测版`，下载与当前 Windows 架构匹配的压缩包：
-   - Intel 或 AMD Windows 电脑：`StreamFirefly-0.9.0-beta.4-internal-x64.zip`
-   - Windows ARM 电脑：`StreamFirefly-0.9.0-beta.4-internal-arm64.zip`
+3. 打开 `StreamFirefly 0.9.1 内测版`，下载与当前 Windows 架构匹配的压缩包：
+   - Intel 或 AMD Windows 电脑：`StreamFirefly-0.9.1-internal-x64.zip`
+   - Windows ARM 电脑：`StreamFirefly-0.9.1-internal-arm64.zip`
 4. 同时下载 `INTERNAL-SHA256SUMS.txt`，用于核对压缩包完整性。
 
 可以在 Windows 的“设置 → 系统 → 系统信息 → 系统类型”中查看架构。大多数 Intel、AMD 电脑使用 x64；仅骁龙等 Windows ARM 设备使用 ARM64。
@@ -22,7 +36,7 @@ StreamFirefly 不绕过 DRM。请只测试自己拥有版权或已获授权的�
 在下载目录打开 PowerShell，计算压缩包的 SHA-256：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 -LiteralPath '.\StreamFirefly-0.9.0-beta.4-internal-x64.zip'
+Get-FileHash -Algorithm SHA256 -LiteralPath '.\StreamFirefly-0.9.1-internal-x64.zip'
 ```
 
 ARM64 测试人员将文件名替换为 ARM64 包。输出应与 `INTERNAL-SHA256SUMS.txt` 中对应记录一致；不一致时不要继续安装，请重新下载并反馈。
@@ -30,8 +44,8 @@ ARM64 测试人员将文件名替换为 ARM64 包。输出应与 `INTERNAL-SHA25
 为避免 Windows 保留互联网下载标记，先解除 ZIP 锁定，再完整解压：
 
 ```powershell
-Unblock-File -LiteralPath '.\StreamFirefly-0.9.0-beta.4-internal-x64.zip'
-Expand-Archive -LiteralPath '.\StreamFirefly-0.9.0-beta.4-internal-x64.zip' -DestinationPath '.\StreamFirefly-Test'
+Unblock-File -LiteralPath '.\StreamFirefly-0.9.1-internal-x64.zip'
+Expand-Archive -LiteralPath '.\StreamFirefly-0.9.1-internal-x64.zip' -DestinationPath '.\StreamFirefly-Test'
 ```
 
 不要直接在压缩包内运行脚本，也不要单独移动 `extension`、`native-host` 或 `tools` 文件夹。
@@ -62,7 +76,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 如需测试 Firefox 142 或更高版本：
 
 1. 打开 `about:debugging#/runtime/this-firefox`，点击“临时载入附加组件”；
-2. 选择包内的 `StreamFirefly-firefox-0.9.0-test.xpi`；
+2. 选择包内的 `StreamFirefly-firefox-0.9.1-test.xpi`；
 3. Firefox 扩展 ID 固定为 `streamfirefly@example.invalid`。如果只测试 Firefox，可直接运行以下命令注册 Native Host：
 
 ```powershell
@@ -80,7 +94,8 @@ Set-ExecutionPolicy -Scope Process Bypass
 - 在同一来源标签页跳转到新网页，确认旧资源被清空且新页面使用新的任务归属；旧任务仍可在展开工作区的“全部任务”查看；
 - 在 `about:*`、`chrome://*`、`moz-extension://*` 等内部或受限页面确认只显示不可嗅探状态，不创建媒体会话、不注入工作区，也不回退打开新标签页；
 - 点击“暂停嗅探”和“继续嗅探”，确认暂停期间不新增资源且角标显示暂停状态；
-- 使用正则、类型、大小范围和时长排序筛选资源，并验证批量复制、下载和移除；
+- 使用正则、类型、大小和时长范围筛选资源，并验证时长排序、批量复制、下载和移除；
+- 用 Tab 和 Shift+Tab 检查下载弹窗焦点不离开弹窗，Escape 关闭后焦点回到触发按钮；
 - 对 HLS 分别点击“快速下载”和“详细解析”；快速下载应采用最高画质、默认音轨、完整范围且不默认下载字幕，详细解析应在展开工作区中提供清晰度、音轨、多字幕、时间范围和切片范围；
 - 点击“展开工作区”，确认界面只覆盖网页内容可视区域，地址栏、标签栏和原生侧栏仍可使用；点击“设置”应直接展开到设置视图；
 - 切换到另一标签再切回，确认原标签工作区仍保留筛选和 HLS 选择状态；在第二个标签展开工作区后，确认第一个标签的工作区已卸载；
@@ -116,11 +131,15 @@ Set-ExecutionPolicy -Scope Process Bypass
 - 对需要 Cookie 或 Authorization 的 HLS，在 Native Host 重启后回到原来源页面，点击“重新授权并继续”；任务文件和检查点中不应出现 Cookie、Authorization 或手动密钥；
 - 测试标准直播 HLS：任务应显示 LIVE、已录制时长、大小、切片数、重试数和最后媒体序列；暂停后不再新增切片，继续后从检查点恢复；
 - 点击“停止并保存”，确认已录制切片通过 FFmpeg 无转码合并成可播放文件；清单出现 `EXT-X-ENDLIST` 时应自动收尾；
-- 直播期间结束 Native Host 后重新连接，公开资源应自动继续；需要 Cookie、Authorization 或手动密钥的直播应要求重新授权或输入密钥；
+- 直播期间结束 Native Host 后重新连接，任务应保持中断，不自动恢复采集；用户可手动继续或停止保存，需要 Cookie、Authorization 或手动密钥时必须重新提供；
 - SAMPLE-AES、DRM 和 LL-HLS Part 应明确提示暂不支持，而不是尝试绕过或下载。
 
 ### 3. 下载任务管理
 
+- 同时提交至少 4 个任务，确认最多 2 个执行，其他按先入先出排队；排队任务暂停或取消后不能启动，恢复和重试进入队尾；
+- 满额时单独启动直播应明确拒绝，不能悄悄排队并错过录制开始时间；
+- 批量提交后核对各项结果，重试失败项不能重复创建已接受的任务；停止尚未提交项不取消已入队任务；
+- 断开助手后确认已有任务仍显示，下载操作禁用且出现重新连接入口；重连后状态收敛，不出现重复任务；
 - 没有下载任务时，确认下载页显示明确空状态；
 - 新任务开始后，确认进行中任务自动展开并显示速度、进度、剩余时间和输出文件；
 - 删除已完成任务时，分别测试“仅删除记录”和“同时删除本地文件”；

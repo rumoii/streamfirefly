@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "流萤 StreamFirefly",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "本地优先的网页媒体发现与下载工具",
   "icons": { "48": "icon48.png", "128": "icon128.png" },
   "permissions": ["tabs", "webNavigation", "webRequest", "declarativeNetRequest", "storage", "scripting", "nativeMessaging"],

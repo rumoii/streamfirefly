@@ -6,7 +6,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = relative => fs.readFileSync(path.join(root, relative), 'utf8');
 const requireText = (text, expected, label) => { if (!text.includes(expected)) throw new Error(`${label} is missing: ${expected}`); };
 
-const bundleVersion = '0.9.0-beta.4';
+const bundleVersion = '0.9.1';
 const packageScript = read('tools/package-internal-test.ps1');
 const auditScript = read('tools/audit-internal-test.ps1');
 const nativeTest = read('tools/test-native.mjs');
@@ -14,6 +14,25 @@ const nativeDownloadTest = read('tools/test-native-download.mjs');
 const nativeHlsTest = read('tools/test-native-hls.mjs');
 const readme = read('README-INTERNAL.md');
 const workflow = read('.github/workflows/package-internal.yml');
+
+const version = JSON.parse(read('package.json')).version;
+const lock = JSON.parse(read('package-lock.json'));
+for (const actual of [lock.version, lock.packages[''].version, JSON.parse(read('extension/manifest.json')).version, JSON.parse(read('extension/manifest.firefox.json')).version]) {
+  if (actual !== version) throw new Error(`Release version mismatch: expected ${version}, got ${actual}`);
+}
+requireText(read('native-host/Cargo.toml'), `version = "${version}"`, 'Native package version');
+requireText(read('native-host/Cargo.lock'), `name = "streamfirefly-native"\nversion = "${version}"`, 'Native lock version');
+requireText(read('installer/StreamFirefly.iss'), `#define AppVersion "${version}"`, 'Installer version');
+requireText(read('native-host/src/protocol.rs'), 'env!("CARGO_PKG_VERSION")', 'Native reported version');
+const bundlePattern = packageScript.match(/\[ValidatePattern\('([^']+)'\)\]/)?.[1];
+if (!bundlePattern) throw new Error('Bundle version validation is missing');
+const validBundleVersion = new RegExp(bundlePattern);
+for (const value of [version, '0.9.0-beta.4']) if (!validBundleVersion.test(value)) throw new Error(`Valid bundle version rejected: ${value}`);
+for (const value of ['../0.9.1', '0.9', '0.9.1/extra', '0.9.1-beta.', '0.9.1 ']) if (validBundleVersion.test(value)) throw new Error(`Unsafe bundle version accepted: ${value}`);
+requireText(nativeTest, 'LOCALAPPDATA: temporary', 'Isolated native protocol test');
+requireText(nativeTest, "child.once('close'", 'Native process completion check');
+requireText(nativeTest, 'output.length !== 4 + output.readUInt32LE(0)', 'Complete native message frame check');
+requireText(nativeTest, '15000', 'Bounded native protocol test');
 
 requireText(packageScript, `[string]$BundleVersion = '${bundleVersion}'`, 'Internal package script');
 requireText(packageScript, 'Internal packages require a clean source tree', 'Internal package script');

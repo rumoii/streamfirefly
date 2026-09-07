@@ -118,7 +118,7 @@ cargo build --release --manifest-path native-host/Cargo.toml
 npm run package:firefox
 ```
 
-产物为 `release/StreamFirefly-firefox-0.9.0-test.xpi`，可在 `about:debugging#/runtime/this-firefox` 中通过“临时载入附加组件”测试。它未经过 Mozilla 签名，不能作为 Firefox 正式版的长期安装包；长期安装或分发必须提交 Mozilla 签名。
+产物为 `release/StreamFirefly-firefox-0.9.1-test.xpi`，可在 `about:debugging#/runtime/this-firefox` 中通过“临时载入附加组件”测试。它未经过 Mozilla 签名，不能作为 Firefox 正式版的长期安装包；长期安装或分发必须提交 Mozilla 签名。
 
 
 在取得 Chrome Web Store 正式 ID 前，为 x64 和 ARM64 测试机生成不绑定开发扩展 ID的完整内测包：

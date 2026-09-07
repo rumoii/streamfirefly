@@ -124,7 +124,7 @@ function basePayload() {
 
 async function createTask() {
   if (!videoManifest.value || !advancedSupported.value || props.connected === false || loading.value || form.busy || disposed) return;
-  if (isLive.value && !liveSupported.value) { error.value = "本地助手版本过旧，请安装 0.9.0 Beta 3 后录制直播。"; return; }
+  if (isLive.value && !liveSupported.value) { error.value = "请同时更新扩展与本地助手后录制直播。"; return; }
   if (unsupportedLiveFeature.value) { error.value = unsupportedLiveFeature.value; return; }
   if (unsupportedEncryption.value) { error.value = `暂不支持 ${unsupportedEncryption.value} 加密；流萤不会绕过 DRM。`; return; }
   if (keyMode.value === "manual" && (!keyOverrideSupported.value || keyError.value)) { error.value = keyError.value || "当前本地助手不支持自定义密钥"; return; }
@@ -162,7 +162,7 @@ function previewManifest(url: string) {
     <div v-if="error" class="status-banner error">{{ error }}</div>
     <div v-if="isLive" class="status-banner warning"><strong>检测到直播清单</strong><span>流萤会持续获取新增切片；结束时点击“停止并保存”，或等待直播清单自然结束。</span></div>
     <div v-if="unsupportedLiveFeature" class="status-banner error"><strong>暂不支持录制</strong><span>{{ unsupportedLiveFeature }}</span></div>
-    <div v-if="!advancedSupported" class="status-banner warning"><strong>需要升级本地助手</strong><span>安装流萤 0.9.0 Native Host 后才能按选择下载 HLS。</span></div>
+    <div v-if="!advancedSupported" class="status-banner warning"><strong>需要成套升级</strong><span>请同时更新扩展与本地助手后按选择下载 HLS。</span></div>
     <div class="parser-grid">
       <section class="panel parser-options">
         <div class="panel-title"><div><h3>画质与轨道</h3><p>选择最终保存的媒体内容</p></div></div>
