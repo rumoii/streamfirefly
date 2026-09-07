@@ -22,6 +22,7 @@ class TestMutationObserver { observe() {} }
 class TestWorker {
   constructor(scriptUrl, options) { this.scriptUrl = scriptUrl; this.options = options; this.listeners = {}; }
   addEventListener(type, listener) { this.listeners[type] = listener; }
+  postMessage(message) { this.control = message; }
 }
 const document = {
   title: 'Probe test',
@@ -48,6 +49,7 @@ const context = {
   Worker: TestWorker,
   atob,
   setTimeout: callback => { callback(); return 1; },
+  clearTimeout() {},
   console
 };
 context.window = context;
@@ -86,4 +88,6 @@ const worker = new context.Worker('https://page.example/worker.js');
 if (!worker.scriptUrl.startsWith('blob:')) throw new Error('Same-origin classic Worker was not wrapped');
 const bootstrap = await createdBlobs.at(-1).text();
 if (!bootstrap.includes('importScripts("https://page.example/worker.js")') || !bootstrap.includes('JSON.parse =')) throw new Error('Worker bootstrap does not install deep-search hooks');
+context.__streamFireflyAdvancedProbeInstalled.dispose();
+if (context.Worker !== TestWorker || !worker.control?.__streamFireflyWorkerControl) throw new Error('Deep-search shutdown did not restore Worker and disable existing hooks');
 console.log('Page probe deep-search tests passed');

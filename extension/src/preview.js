@@ -1,3 +1,4 @@
+export function createPreview(api, candidateFor) {
 const previewRules = { nextId: 2147000000, byTab: new Map() };
 
 async function clearPreviewHeadersForTab(tabId) {
@@ -24,8 +25,7 @@ async function updatePreviewHeaders(payload = {}, sender = {}) {
     return { ok: true };
   }
   let origin; try { origin = new URL(payload.url).origin; } catch (_) { return { ok: false, error: "preview_url_invalid" }; }
-  const state = await loadTabState(tabId);
-  const candidate = state.candidates.get(payload.candidateId);
+  const candidate = await candidateFor(tabId, payload.candidateId);
   let candidateOrigin;
   try { candidateOrigin = new URL(candidate?.url || "").origin; } catch (_) {}
   if (!candidate || candidateOrigin !== origin) return { ok: false, error: "preview_candidate_mismatch" };
@@ -37,4 +37,7 @@ async function updatePreviewHeaders(payload = {}, sender = {}) {
   nextSessions.set(previewSessionId, ruleId);
   previewRules.byTab.set(tabId, nextSessions);
   return { ok: true };
+}
+
+return { clearPreviewHeadersForTab, updatePreviewHeaders };
 }

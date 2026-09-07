@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { copyResources } from "../features/configuration/copy";
 import Hls from "hls.js";
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import type { MediaCandidate, ResourceViewState } from "../types";
@@ -76,12 +77,12 @@ function toggleSelection(id: string) {
 function selectAll() { selectedIds.value = selectedIds.value.size === visible.value.length ? new Set() : new Set(visible.value.map(item => item.id)); }
 function resourceName(item: MediaCandidate) { try { return item.title || item.pageTitle || new URL(item.url).pathname.split("/").pop() || "未命名资源"; } catch { return item.title || item.pageTitle || "未命名资源"; } }
 function resourceMeta(item: MediaCandidate) { return [typeLabel(item.type), item.sizeKind === "manifest" ? "最终大小未知" : formatBytes(item.size), item.width && item.height ? `${item.width}×${item.height}` : null, item.duration ? formatDuration(item.duration) : null, item.live ? "直播" : null, sourceLabel(item.source)].filter(Boolean).join(" · "); }
-function copyUrl(value: string) { void navigator.clipboard.writeText(value); }
+function copyUrl(value: string) { const candidate = props.candidates.find(item => item.url === value); if (candidate) void copyResources([candidate]).catch(error => { previewError.value = error.message; }); }
 function setMediaElement(value: unknown) { mediaElement.value = typeof HTMLMediaElement !== "undefined" && value instanceof HTMLMediaElement ? value as HTMLVideoElement | HTMLAudioElement : null; }
 
 async function copySelected() {
   const items = resourceCandidates.value.filter(item => selectedIds.value.has(item.id));
-  await navigator.clipboard.writeText(items.map(item => item.url).join("\n"));
+  try { await copyResources(items); } catch (error) { previewError.value = error instanceof Error ? error.message : "复制失败"; }
 }
 
 function toggleDetails(item: MediaCandidate) {

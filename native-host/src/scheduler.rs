@@ -1,23 +1,27 @@
-use super::*;
+use crate::model::Task;
+#[cfg(test)]
+use crate::runtime::load_store;
+use crate::runtime::TaskRuntime;
+use crate::task_runner::run_download;
+use crate::wire::Writer;
+#[cfg(test)]
+use std::fs;
+use std::thread;
+#[cfg(test)]
+use uuid::Uuid;
 
 const MAX_ACTIVE_TASKS: usize = 2;
 
-#[derive(Default)]
-pub(super) struct Scheduler {
-    pending: VecDeque<String>,
-    running: HashSet<String>,
-}
-
-pub(super) fn scheduler_active(store: &Store, id: &str) -> bool {
+pub(crate) fn scheduler_active(store: &TaskRuntime, id: &str) -> bool {
     store.scheduler.lock().unwrap().running.contains(id)
 }
 
-pub(super) fn scheduler_full(store: &Store) -> bool {
+pub(crate) fn scheduler_full(store: &TaskRuntime) -> bool {
     let scheduler = store.scheduler.lock().unwrap();
     scheduler.running.len() >= MAX_ACTIVE_TASKS || !scheduler.pending.is_empty()
 }
 
-pub(super) fn remove_pending(store: &Store, id: &str) -> bool {
+pub(crate) fn remove_pending(store: &TaskRuntime, id: &str) -> bool {
     let mut scheduler = store.scheduler.lock().unwrap();
     if scheduler.running.contains(id) {
         return false;
@@ -26,7 +30,7 @@ pub(super) fn remove_pending(store: &Store, id: &str) -> bool {
     true
 }
 
-pub(super) fn start_download(store: Store, writer: Writer, task: Task) {
+pub(crate) fn start_download(store: TaskRuntime, writer: Writer, task: Task) {
     {
         let mut scheduler = store.scheduler.lock().unwrap();
         if scheduler.running.contains(&task.id) || scheduler.pending.contains(&task.id) {
@@ -44,7 +48,7 @@ pub(super) fn start_download(store: Store, writer: Writer, task: Task) {
 }
 
 struct RunningTask {
-    store: Store,
+    store: TaskRuntime,
     writer: Writer,
     id: String,
 }
@@ -61,13 +65,14 @@ impl Drop for RunningTask {
     }
 }
 
-fn pump(store: &Store, writer: &Writer) {
+fn pump(store: &TaskRuntime, writer: &Writer) {
     let mut scheduler = store.scheduler.lock().unwrap();
     while scheduler.running.len() < MAX_ACTIVE_TASKS {
         let Some(id) = scheduler.pending.pop_front() else {
             break;
         };
         let task = store
+            .repository
             .tasks
             .lock()
             .unwrap()

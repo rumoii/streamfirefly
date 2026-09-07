@@ -1,3 +1,5 @@
+import { supportedPage } from './platform.js';
+export function createWorkspace(api, clearPreviewHeadersForTab) {
 const workspaceTabsByWindow = new Map();
 
 function notifyWorkspaceMessage(message, tabId) {
@@ -25,4 +27,8 @@ async function openWorkspace(tab, view = "resources", candidateId = "") {
   } catch (_) {
     return { ok: false, error: "workspace_injection_failed" };
   }
+}
+
+function markReady(windowId, tabId) { workspaceTabsByWindow.set(windowId, tabId); }
+return { notifyWorkspaceMessage, unmountWorkspace, openWorkspace, markReady };
 }

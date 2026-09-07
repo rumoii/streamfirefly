@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { WebSocketServer } from 'ws';
+import assert from 'node:assert/strict';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const extensionRoot = path.join(repositoryRoot, 'extension');
@@ -13,6 +15,8 @@ const option = name => { const index = cliArgs.indexOf(name); return index >= 0 
 const browserName = option('--browser') || 'firefox';
 
 const resultPath = option('--result');
+const captureTest = cliArgs.includes('--capture');
+if (captureTest && browserName !== 'chrome') throw new Error('Capture transport browser fixture requires Chrome');
 if (!['firefox', 'chrome', 'edge'].includes(browserName)) throw new Error(`Unsupported browser: ${browserName}`);
 
 
@@ -28,6 +32,7 @@ function copyRuntimeFiles(destination) {
 function reporterSource(origin) {
   return `
 (() => {
+  const { loadTabState, queueTab, patchResourceViewState, openWorkspace, unmountWorkspace, settings } = StreamFireflyBackground.runtime;
   const testApi = globalThis.browser ?? globalThis.chrome;
   const origin = ${JSON.stringify(origin)};
   let probeResult;
@@ -59,9 +64,9 @@ function reporterSource(origin) {
   (async () => {
     currentStage = 'initialize-settings';
     await postEvent('reporter-started');
-    if (typeof settingsReady !== 'undefined') await settingsReady;
+    await settings.ready;
     await testApi.storage.local.set({ advancedDeepSearch: true, detectImages: false });
-    if (typeof settings !== 'undefined') { settings.advancedDeepSearch = true; settings.detectImages = false; }
+    await waitFor(() => settings.get().advancedDeepSearch && !settings.get().detectImages, 'settings were not applied');
     currentStage = 'create-fixture-tab';
     const tab = await testApi.tabs.create({ url: origin + '/fixture' });
     currentStage = 'wait-fixture-tab';
@@ -118,6 +123,32 @@ function reporterSource(origin) {
     const postManifest = first.find(item => item.inlineManifest && item.source === 'fetch-body');
     if (!postManifest.inlineManifest.text.includes(origin + '/media/post-segment.ts') || !postManifest.inlineManifest.text.includes('URI="' + origin + '/api/key.bin"')) throw new Error('POST HLS manifest URLs were not normalized');
 
+    if (${captureTest}) {
+      currentStage = 'capture-browser-transport';
+      const setup = await testApi.scripting.executeScript({ target: { tabId: tab.id }, world: 'MAIN', func: async () => {
+        const video = document.createElement('video'); document.body.append(video);
+        const source = new MediaSource(); video.src = URL.createObjectURL(source);
+        await new Promise(resolve => source.addEventListener('sourceopen', resolve, { once: true }));
+        window.captureFixtureBuffer = source.addSourceBuffer('video/mp4; codecs="avc1.64000a"');
+        return window.__streamFireflyCaptureProbe.sources().at(-1).id;
+      } });
+      const url = testApi.runtime.getURL('offscreen.html');
+      if (!(await testApi.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'], documentUrls: [url] })).length) await testApi.offscreen.createDocument({ url: 'offscreen.html', reasons: ['WORKERS'], justification: 'Capture test fixture' });
+      const opened = await testApi.runtime.sendMessage({ type: 'capture.transport.open', payload: { id: 'browser-capture', tabId: tab.id, endpoint: origin.replace('http:', 'ws:'), token: 'a'.repeat(64) } });
+      if (!opened?.ok) throw new Error(JSON.stringify(opened));
+      const started = await testApi.tabs.sendMessage(tab.id, { type: 'capture.start', id: 'browser-capture', sourceId: setup[0].result }, { frameId: 0 });
+      if (!started?.ok) throw new Error(JSON.stringify(started));
+      await testApi.scripting.executeScript({ target: { tabId: tab.id }, world: 'MAIN', args: [origin], func: async base => {
+        const bytes = await fetch(base + '/capture-sample.mp4').then(response => response.arrayBuffer());
+        await new Promise((resolve, reject) => { const buffer = window.captureFixtureBuffer; buffer.addEventListener('updateend', resolve, { once: true }); buffer.addEventListener('error', () => reject(Error('MSE rejected fixture')), { once: true }); buffer.appendBuffer(bytes); });
+      } });
+      const stopped = await testApi.tabs.sendMessage(tab.id, { type: 'capture.stop', id: 'browser-capture' }, { frameId: 0 });
+      if (!stopped?.ok) throw new Error(JSON.stringify(stopped));
+      const closed = await testApi.runtime.sendMessage({ type: 'capture.transport.close', payload: { id: 'browser-capture' } });
+      if (!closed?.ok) throw new Error(JSON.stringify(closed));
+      const capture = await waitFor(async () => { const status = await fetch(origin + '/capture-status').then(response => response.json()); if (status.error) throw new Error(status.error); return status.finished && status.bytes > 0 ? status : null; }, 'capture transport did not finish');
+      if (capture.frames !== 1 || capture.generation !== 0) throw new Error(JSON.stringify(capture));
+    }
     currentStage = 'open-workspace';
     const tabsBeforeWorkspace = (await testApi.tabs.query({ windowId: tab.windowId })).length;
     const pageBeforeWorkspace = (await testApi.scripting.executeScript({ target: { tabId: tab.id }, func: () => ({ title: document.title, htmlOverflow: document.documentElement.style.overflow, bodyOverflow: document.body.style.overflow }) }))[0].result;
@@ -225,7 +256,7 @@ function stageExtension(stage, origin) {
   manifest.content_scripts[0].js.push('test-content.js');
   if (browserName === 'firefox') manifest.background.scripts.push('test-reporter.js');
   else {
-    fs.writeFileSync(path.join(stage, 'test-background.js'), `${fs.readFileSync(path.join(extensionRoot, 'background.js'), 'utf8')}\n${reporter}`);
+    fs.writeFileSync(path.join(stage, 'test-background.js'), `${fs.readFileSync(path.join(extensionRoot, 'dist/background.js'), 'utf8')}\n${reporter}`);
     manifest.background.service_worker = 'test-background.js';
   }
   fs.writeFileSync(path.join(stage, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
@@ -250,11 +281,20 @@ function fixtureHtml(origin) {
 }
 
 function startFixtureServer() {
+  let captureSample;
+  const captureStatus = { bytes: 0, frames: 0, generation: null, finished: false, error: '' };
+  if (captureTest) {
+    const executable = process.env.STREAMFIREFLY_FFMPEG_EXE || path.join(repositoryRoot, 'installer/build/x64/ffmpeg.exe');
+    const sample = spawnSync(executable, ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=160x90:rate=10', '-t', '1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', 'frag_keyframe+empty_moov', '-f', 'mp4', 'pipe:1'], { windowsHide: true });
+    assert.equal(sample.status, 0, String(sample.error || sample.stderr)); captureSample = sample.stdout;
+  }
   let resolveReport;
   const events = [];
   const report = new Promise(resolve => { resolveReport = resolve; });
   const server = http.createServer((request, response) => {
     const origin = `http://127.0.0.1:${server.address().port}`;
+    if (captureTest && request.url === '/capture-sample.mp4') { response.writeHead(200, { 'content-type': 'video/mp4' }).end(captureSample); return; }
+    if (captureTest && request.url === '/capture-status') { response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(captureStatus)); return; }
     if (request.url === '/report' && request.method === 'POST') {
       const chunks = [];
       request.on('data', chunk => chunks.push(chunk));
@@ -278,6 +318,24 @@ function startFixtureServer() {
     if (request.url?.startsWith('/media/')) { response.writeHead(200, { 'content-type': request.url.endsWith('.mp4') ? 'video/mp4' : 'application/octet-stream', 'content-length': '0' }).end(); return; }
     response.writeHead(404).end();
   });
+  if (captureTest) {
+    const sockets = new WebSocketServer({ server, maxPayload: 300000 });
+    sockets.on('connection', (socket, request) => {
+      let authenticated = false;
+      socket.on('message', (data, binary) => {
+        try {
+          assert.match(request.headers.origin || '', /^chrome-extension:\/\/[a-p]{32}$/);
+          if (!authenticated) { assert.equal(JSON.parse(data).token, 'a'.repeat(64)); authenticated = true; socket.send(JSON.stringify({ ready: true })); return; }
+          if (!binary) { if (data.toString() === 'finish') captureStatus.finished = true; return; }
+          const length = data.readUInt32LE(0); const metadata = JSON.parse(data.subarray(4, 4 + length));
+          const bytes = data.subarray(4 + length); assert.deepEqual(bytes, captureSample); assert.equal(metadata.sequence, 0);
+          captureStatus.frames++; captureStatus.bytes += bytes.length; captureStatus.generation = metadata.generation;
+          socket.send(JSON.stringify({ track: metadata.track, sequence: metadata.sequence, bytes: captureStatus.bytes }));
+        } catch (error) { captureStatus.error = error.message; socket.close(); }
+      });
+    });
+    server.on('close', () => { for (const socket of sockets.clients) socket.terminate(); sockets.close(); });
+  }
   return new Promise((resolve, reject) => server.listen(0, '127.0.0.1', () => resolve({ server, report, events, origin: `http://127.0.0.1:${server.address().port}` })).once('error', reject));
 }
 

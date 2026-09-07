@@ -2,25 +2,10 @@ import { computed, onBeforeUnmount, ref } from "vue";
 import { defineStore } from "pinia";
 import { currentWindowId, extensionApi, sendCore, sendMessage, surfaceFromUrl, type UiSurface } from "./api";
 import type { DownloadTask, MediaCandidate, ResourceViewState, UiContext } from "./types";
-import { createTaskState } from "./task-state";
+import { createSettingsState } from "./features/settings/state";
+import { createDownloadsState } from "./features/downloads/state";
 
-const activeStates = new Set(["queued", "starting", "running", "retrying", "pausing", "cancelling", "stopping"]);
 
-export interface AppSettings {
-  saveDir: string;
-  downloadThreads: number;
-  detectImages: boolean;
-  advancedDeepSearch: boolean;
-  candidateSort: string;
-}
-
-export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
-  saveDir: "",
-  downloadThreads: 6,
-  detectImages: false,
-  advancedDeepSearch: false,
-  candidateSort: "detected"
-});
 
 export const DEFAULT_RESOURCE_VIEW_STATE: Readonly<ResourceViewState> = Object.freeze({
   pattern: "",
@@ -35,22 +20,18 @@ export const DEFAULT_RESOURCE_VIEW_STATE: Readonly<ResourceViewState> = Object.f
   revision: 0
 });
 
-export async function readSettings(storage = extensionApi()?.storage?.local): Promise<AppSettings> {
-  if (!storage) return { ...DEFAULT_SETTINGS };
-  const stored = await storage.get(Object.keys(DEFAULT_SETTINGS));
-  return { ...DEFAULT_SETTINGS, ...stored };
-}
 
 export const useAppStore = defineStore("app", () => {
   const surface = ref<UiSurface>(surfaceFromUrl());
   const context = ref<UiContext | null>(null);
   const candidates = ref<MediaCandidate[]>([]);
-  const taskState = createTaskState(message => message.type === "native.connect" ? sendCore({ type: "native.connect" }) : sendCore({ type: "task.list" }));
+  const taskState = createDownloadsState(candidates);
+  const { activeTasks, controlTask, deleteTask } = taskState;
   const { tasks, capabilities, connection, connectionError } = taskState;
   const loading = ref(true);
   const error = ref("");
   const status = ref("");
-  const settings = ref<AppSettings>({ ...DEFAULT_SETTINGS });
+  const { settings, loadSettings, saveSettings } = createSettingsState();
   const resourceViewState = ref<ResourceViewState>({ ...DEFAULT_RESOURCE_VIEW_STATE });
   let timer: number | null = null;
   let listening = false;
@@ -61,7 +42,6 @@ export const useAppStore = defineStore("app", () => {
   let pendingPatches = 0;
 
   const sourceTasks = computed(() => tasks.value.filter(task => task.source_context_id && task.source_context_id === context.value?.sourceContextId));
-  const activeTasks = computed(() => tasks.value.filter(task => activeStates.has(task.state)));
 
   async function loadContext() {
     const sequence = ++contextSequence;
@@ -86,7 +66,6 @@ export const useAppStore = defineStore("app", () => {
 
   const loadTasks = taskState.refresh;
 
-  async function loadSettings() { settings.value = await readSettings(); }
 
   async function initialize(nextSurface: UiSurface = surfaceFromUrl()) {
     surface.value = nextSurface;
@@ -195,34 +174,7 @@ export const useAppStore = defineStore("app", () => {
     if (index >= 0 && result.candidate) candidates.value[index] = { ...candidates.value[index], ...result.candidate };
   }
 
-  async function saveSettings(next = settings.value) {
-    if (next.saveDir.trim()) {
-      const result: any = await sendMessage({ type: "path.validate", payload: { path: next.saveDir.trim() } });
-      if (!result?.ok) throw new Error(result?.error || "path_not_writable");
-    }
-    const normalized: AppSettings = { ...next, saveDir: next.saveDir.trim(), downloadThreads: Math.max(1, Math.min(16, Number(next.downloadThreads) || 6)) };
-    await extensionApi().storage.local.set({ ...normalized });
-    settings.value = normalized;
-  }
 
-  async function controlTask(task: DownloadTask, action: string, suppliedContext: any = null) {
-    const resumeContext: any = suppliedContext ? { ...suppliedContext } : {};
-    if (task.resume_requirement?.includes("authorization")) {
-      const candidate = candidates.value.find(item => item.id === task.source_candidate_id) || candidates.value.find(item => item.url === task.url);
-      if (!candidate) throw new Error("hls_source_candidate_missing");
-      resumeContext.requestHeaders = candidate.requestHeaders || {};
-      resumeContext.referer = candidate.referer || candidate.pageUrl || null;
-    }
-    const result: any = await sendMessage({ type: "task.control", payload: { id: task.id, action, resumeContext: Object.keys(resumeContext).length ? resumeContext : null } });
-    if (!result?.ok) throw new Error(result?.error || "task_control_failed");
-    if (result.task) taskState.receive({ type: "task.progress", task: result.task });
-  }
-
-  async function deleteTask(task: DownloadTask, deleteFile: boolean) {
-    const result: any = await sendMessage({ type: "task.delete", payload: { id: task.id, deleteFile } });
-    if (!result?.ok) throw new Error(result?.error || "task_delete_failed");
-    taskState.receive({ type: "task.deleted", id: task.id });
-  }
 
   function onRuntimeMessage(message: any) {
     if (disposed) return;

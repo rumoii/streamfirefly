@@ -1,20 +1,39 @@
-use super::*;
+use crate::model::Task;
+use crate::processes::cancel_requested;
+use crate::processes::mark_stopped;
+use crate::processes::register_process;
+use crate::processes::stop_process;
+use crate::processes::unregister_process;
+use crate::runtime::TaskRuntime;
+use crate::settings::MAX_DOWNLOAD_THREADS;
+use crate::task_state::update;
+use crate::wire::Writer;
+use std::fs;
+use std::fs::OpenOptions;
+use std::io;
+use std::io::Read;
+use std::path::PathBuf;
+use std::process::Command;
+use std::process::Stdio;
+use std::thread;
+use std::time::Duration;
+use std::time::Instant;
 
 #[derive(Default, Clone, Copy)]
-pub(super) struct ProbeInfo {
+pub(crate) struct ProbeInfo {
     total: Option<u64>,
     accept_ranges: bool,
     cancelled: bool,
 }
 
-pub(super) fn add_header_args(args: &mut Vec<String>, task: &Task) {
+pub(crate) fn add_header_args(args: &mut Vec<String>, task: &Task) {
     for (name, value) in &task.request_headers {
         args.push("--header".into());
         args.push(format!("{name}: {value}"));
     }
 }
 
-pub(super) fn probe_size(store: &Store, task: &Task) -> ProbeInfo {
+pub(crate) fn probe_size(store: &TaskRuntime, task: &Task) -> ProbeInfo {
     let mut command = Command::new("curl");
     let mut args: Vec<String> = [
         "--silent",
@@ -95,8 +114,8 @@ pub(super) fn probe_size(store: &Store, task: &Task) -> ProbeInfo {
     }
 }
 
-pub(super) fn start_single_http_download(
-    store: Store,
+pub(crate) fn start_single_http_download(
+    store: TaskRuntime,
     writer: Writer,
     task: Task,
     output: String,
@@ -248,8 +267,8 @@ pub(super) fn start_single_http_download(
     }
 }
 
-pub(super) fn start_parallel_http_download(
-    store: Store,
+pub(crate) fn start_parallel_http_download(
+    store: TaskRuntime,
     writer: Writer,
     task: Task,
     output: String,
@@ -429,7 +448,7 @@ pub(super) fn start_parallel_http_download(
     }
 }
 
-pub(super) fn start_http_download(store: Store, writer: Writer, task: Task, output: String) {
+pub(crate) fn start_http_download(store: TaskRuntime, writer: Writer, task: Task, output: String) {
     let probe = probe_size(&store, &task);
     if probe.cancelled || cancel_requested(&store, &task.id) {
         mark_stopped(&store, &writer, &task.id);

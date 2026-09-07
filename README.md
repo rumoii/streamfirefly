@@ -129,6 +129,29 @@ npm run package:firefox
 
 内测包包含解压即用的扩展目录、Native Host、FFmpeg、安装/卸载脚本、宣传素材、内外层 SHA-256 和测试说明。测试机应先加载扩展，再将该电脑实际显示的扩展 ID传给包内安装脚本。正式内测包默认要求干净工作树；仅本地验收未提交代码时可显式添加 `-AllowDirtySource`，包内 `PACKAGE-INFO.json` 会如实记录未提交文件，不能据此创建正式 Release。
 
+## 开发中的发现与工具模块
+
+当前源码新增以下能力，版本号仍为 0.9.1；既有 Release 不包含这些未发布改动：
+
+- **识别规则**：后缀、MIME、URL 正则，站点范围、大小约束、排除优先、排序、复制、导入导出与命中解释。正则和模板运行在有超时上限的 Worker 中。
+- **输出模板**：HLS、DASH、其他资源分别设置复制模板，另设文件主名称模板；支持条件、替换、截取、编码等纯字符串变换，不执行脚本。
+- **外部工具**：Aria2 RPC、HTTP 接收服务、本机 EXE 参数数组及自定义协议；独立确认页预览展开参数，逐项展示交接状态。明确失败允许手动重试，未知结果不会自动重发。自动发送仅面向显式配置的站点与 HTTP/Aria2 工具。
+- **深度搜索**：按页启停、站点记忆、同源经典 Worker 和解码结果观察；疑似 AES-128 密钥仅存内存，可在 HLS 解析器中选择，仍需通过首片验证。
+- **缓存捕捉**：选择当前页媒体源，捕获开启后的 MediaSource 数据，经本机认证 WebSocket 保存；写盘和检查点成功后才确认。跳转、编码变化按代际分段，分别输出 MKV，不跨时间线拼接。支持停止排空、异常保留、自定义目录索引和重启后整理片段。
+
+工作区中的工具配置和缓存捕捉通过独立扩展页面操作；网页不能选择程序路径、修改目标服务或获取捕捉令牌。Chrome 捕捉传输由 offscreen 文档持有，Firefox 使用后台页传输。
+
+捕捉不是完整浏览器缓存读取：不能补回启动前已经缓冲的数据，缺少初始化片段的代际保留原始轨道并标记部分结果。DRM 不支持。
+
+模块边界和验证范围见 `docs/development/modular-discovery.md`。开发验证入口：
+
+```powershell
+npm run verify:features
+npm run test:capture:browser
+```
+
+第一条包含构建、类型、模块边界、单元与真实 Native 集成测试；Native 测试使用临时 `LOCALAPPDATA`，需要 x64 FFmpeg 与 FFprobe。第二条使用独立 Chrome 扩展测试配置，验证真实 MediaSource → content → offscreen → WebSocket 链路，接收端为测试服务，不代表 Native Messaging 安装注册已验收。
+
 ## Windows 安装包
 
 正式交付由浏览器商店扩展和 Windows Native Host 安装包组成。安装包包含 Native Host 与固定版本的 GPL FFmpeg，并分别生成 x64、ARM64 版本：

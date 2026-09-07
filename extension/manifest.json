@@ -4,9 +4,9 @@
   "version": "0.9.1",
   "description": "本地优先的网页媒体发现与下载工具",
   "icons": { "16": "icon16.png", "32": "icon32.png", "48": "icon48.png", "128": "icon128.png" },
-  "permissions": ["tabs", "webNavigation", "webRequest", "declarativeNetRequest", "storage", "scripting", "nativeMessaging", "sidePanel"],
+  "permissions": ["tabs", "webNavigation", "webRequest", "declarativeNetRequest", "storage", "scripting", "nativeMessaging", "sidePanel", "offscreen"],
   "host_permissions": ["http://*/*", "https://*/*"],
-  "background": { "service_worker": "background.js" },
+  "background": { "service_worker": "dist/background.js" },
   "action": {
     "default_title": "流萤 StreamFirefly",
     "default_icon": { "16": "icon16.png", "32": "icon32.png", "48": "icon48.png" }
@@ -15,7 +15,7 @@
   "content_scripts": [
     {
       "matches": ["http://*/*", "https://*/*"],
-      "js": ["content.js"],
+      "js": ["content.js", "capture-content.js"],
       "run_at": "document_start",
       "all_frames": true
     }

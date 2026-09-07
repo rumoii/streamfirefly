@@ -1,7 +1,60 @@
-use super::*;
+use crate::hls::decrypt_aes128;
+use crate::hls::load_checkpoint;
+use crate::hls::local_playlist;
+use crate::hls::media_header_valid;
+use crate::hls::merge_live_window;
+use crate::hls::override_key_bytes;
+use crate::hls::parse_live_media_playlist_after;
+use crate::hls::parse_manifest_iv;
+use crate::hls::save_checkpoint;
+use crate::hls::ByteRange;
+use crate::hls::HlsCheckpoint;
+use crate::hls::KeyOverride;
+use crate::hls::KeyOverrideKind;
+use crate::hls::KeySpec;
+use crate::hls::PersistedManifest;
+use crate::hls_plan::new_checkpoint;
+use crate::hls_plan::runtime_plan_from_persisted;
+use crate::http_download::add_header_args;
+use crate::media_process::run_ffmpeg_with_progress;
+use crate::media_process::set_output_state;
+use crate::model::HlsPlan;
+use crate::model::Task;
+use crate::paths::checkpoint_available;
+use crate::paths::checkpoint_path_for_state;
+use crate::paths::task_work_root_for_state;
+use crate::processes::cancel_requested;
+use crate::processes::clear_stop;
+use crate::processes::mark_stopped;
+use crate::processes::register_process;
+use crate::processes::stop_process;
+use crate::processes::stop_requested;
+use crate::processes::unregister_all_processes;
+use crate::processes::unregister_process;
+use crate::repository::is_sensitive_request_header;
+use crate::runtime::TaskRuntime;
+use crate::task_state::update;
+use crate::wire::Writer;
+use std::collections::HashMap;
+use std::collections::VecDeque;
+use std::fs;
+use std::io::Read;
+use std::path::Path;
+use std::path::PathBuf;
+use std::process::Command;
+use std::process::Stdio;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::sync::mpsc;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::thread;
+use std::time::Duration;
+use std::time::Instant;
+use uuid::Uuid;
 
 #[derive(Clone)]
-pub(super) struct HlsDownloadJob {
+pub(crate) struct HlsDownloadJob {
     track_index: usize,
     item_index: usize,
     is_map: bool,
@@ -13,15 +66,15 @@ pub(super) struct HlsDownloadJob {
     validate_decryption: bool,
 }
 
-pub(super) struct HlsDownloadResult {
+pub(crate) struct HlsDownloadResult {
     job: HlsDownloadJob,
     bytes: u64,
     retries: u32,
     error: Option<String>,
 }
 
-pub(super) fn hls_curl_once(
-    store: &Store,
+pub(crate) fn hls_curl_once(
+    store: &TaskRuntime,
     task: &Task,
     url: &str,
     range: Option<&ByteRange>,
@@ -147,7 +200,7 @@ pub(super) fn hls_curl_once(
     }
 }
 
-pub(super) fn retryable_hls_error(error: &str) -> bool {
+pub(crate) fn retryable_hls_error(error: &str) -> bool {
     let status = error
         .strip_prefix("http_status_")
         .and_then(|value| value.split(':').next())
@@ -166,11 +219,11 @@ pub(super) fn retryable_hls_error(error: &str) -> bool {
     }
 }
 
-pub(super) fn authorization_hls_error(error: &str) -> bool {
+pub(crate) fn authorization_hls_error(error: &str) -> bool {
     error.starts_with("http_status_401") || error.starts_with("http_status_403")
 }
 
-pub(super) fn retry_after_seconds(error: &str) -> Option<u64> {
+pub(crate) fn retry_after_seconds(error: &str) -> Option<u64> {
     error
         .split(":retry_after=")
         .nth(1)
@@ -178,7 +231,12 @@ pub(super) fn retry_after_seconds(error: &str) -> Option<u64> {
         .map(|value| value.min(30))
 }
 
-pub(super) fn wait_retry(store: &Store, task_id: &str, abort: &AtomicBool, seconds: u64) -> bool {
+pub(crate) fn wait_retry(
+    store: &TaskRuntime,
+    task_id: &str,
+    abort: &AtomicBool,
+    seconds: u64,
+) -> bool {
     let deadline = Instant::now() + Duration::from_secs(seconds);
     while Instant::now() < deadline {
         if abort.load(Ordering::Relaxed) || cancel_requested(store, task_id) {
@@ -189,8 +247,8 @@ pub(super) fn wait_retry(store: &Store, task_id: &str, abort: &AtomicBool, secon
     true
 }
 
-pub(super) fn load_hls_key(
-    store: &Store,
+pub(crate) fn load_hls_key(
+    store: &TaskRuntime,
     task: &Task,
     specification: &KeySpec,
     key_override: Option<&KeyOverride>,
@@ -228,8 +286,8 @@ pub(super) fn load_hls_key(
     Ok(key)
 }
 
-pub(super) fn execute_hls_job(
-    store: &Store,
+pub(crate) fn execute_hls_job(
+    store: &TaskRuntime,
     task: &Task,
     job: &HlsDownloadJob,
     key_override: Option<&KeyOverride>,
@@ -341,7 +399,7 @@ pub(super) fn execute_hls_job(
     }
 }
 
-pub(super) fn checkpoint_counts(checkpoint: &HlsCheckpoint) -> (u32, u32, u32, u32, u64) {
+pub(crate) fn checkpoint_counts(checkpoint: &HlsCheckpoint) -> (u32, u32, u32, u32, u64) {
     let segments = checkpoint.tracks.iter().flat_map(|track| &track.segments);
     let total = segments.clone().count() as u32;
     let completed = segments
@@ -357,7 +415,7 @@ pub(super) fn checkpoint_counts(checkpoint: &HlsCheckpoint) -> (u32, u32, u32, u
     (completed, total, failed, retries, bytes)
 }
 
-pub(super) fn checkpoint_jobs(
+pub(crate) fn checkpoint_jobs(
     checkpoint: &mut HlsCheckpoint,
     work_dir: &Path,
 ) -> Vec<HlsDownloadJob> {
@@ -406,7 +464,7 @@ pub(super) fn checkpoint_jobs(
     jobs
 }
 
-pub(super) fn apply_hls_result(checkpoint: &mut HlsCheckpoint, result: &HlsDownloadResult) {
+pub(crate) fn apply_hls_result(checkpoint: &mut HlsCheckpoint, result: &HlsDownloadResult) {
     let track = &mut checkpoint.tracks[result.job.track_index];
     if result.job.is_map {
         let item = &mut track.maps[result.job.item_index];
@@ -445,8 +503,8 @@ pub(super) fn apply_hls_result(checkpoint: &mut HlsCheckpoint, result: &HlsDownl
     }
 }
 
-pub(super) fn publish_hls_progress(
-    store: &Store,
+pub(crate) fn publish_hls_progress(
+    store: &TaskRuntime,
     writer: &Writer,
     task_id: &str,
     checkpoint: &HlsCheckpoint,
@@ -478,8 +536,8 @@ pub(super) fn publish_hls_progress(
     });
 }
 
-pub(super) fn merge_hls_checkpoint(
-    store: &Store,
+pub(crate) fn merge_hls_checkpoint(
+    store: &TaskRuntime,
     writer: &Writer,
     task: &Task,
     output: &str,
@@ -640,15 +698,15 @@ pub(super) fn merge_hls_checkpoint(
     Ok(subtitle_failures)
 }
 
-pub(super) fn start_hls_checkpoint_download(
-    store: Store,
+pub(crate) fn start_hls_checkpoint_download(
+    store: TaskRuntime,
     writer: Writer,
     task: Task,
     output: String,
     runtime_plan: Option<HlsPlan>,
 ) {
-    let work_dir = task_work_dir_for_store(&store, &task.id);
-    let checkpoint_file = checkpoint_path_for_store(&store, &task.id);
+    let work_dir = task_work_root_for_state(&store.repository.path).join(&task.id);
+    let checkpoint_file = checkpoint_path_for_state(&store.repository.path, &task.id);
     let checkpoint = if checkpoint_available(&checkpoint_file) {
         match load_checkpoint(&checkpoint_file) {
             Ok(value) => value,
@@ -1084,6 +1142,7 @@ pub(super) fn start_hls_checkpoint_download(
                 }
             }
             let next_task = store
+                .repository
                 .tasks
                 .lock()
                 .unwrap()
@@ -1168,8 +1227,8 @@ pub(super) fn start_hls_checkpoint_download(
     }
 }
 
-pub(super) fn fetch_live_manifest(
-    store: &Store,
+pub(crate) fn fetch_live_manifest(
+    store: &TaskRuntime,
     task: &Task,
     url: &str,
     destination: &Path,
@@ -1201,8 +1260,8 @@ pub(super) fn fetch_live_manifest(
     })
 }
 
-pub(super) fn refresh_live_checkpoint(
-    store: &Store,
+pub(crate) fn refresh_live_checkpoint(
+    store: &TaskRuntime,
     task: &Task,
     checkpoint: &mut HlsCheckpoint,
     work_dir: &Path,

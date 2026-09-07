@@ -1,31 +1,34 @@
-if (typeof importScripts === "function") importScripts("background-native.js", "background-workspace.js", "background-preview.js", "background-resources.js");
+import { createSettings } from './settings.js';
+import { createEvaluation } from './evaluation.js';
+import { createDiscovery } from './discovery.js';
+import { createIntegrations } from './integrations.js';
+import { createDispatchIntents } from './dispatch-intents.js';
+import { createDeepSearch } from './deep-search.js';
+import { createCaptureCoordinator } from './capture-coordinator.js';
+import { createOutputTemplates } from './output-templates.js';
+import { createNative } from './native.js';
+import { createResources } from './resources.js';
+import { createPreview } from './preview.js';
+import { createWorkspace } from './workspace.js';
 const api = globalThis.browser ?? globalThis.chrome;
-
-const INLINE_MANIFEST_MAX_BYTES = 512 * 1024;
-
-const DEFAULT_SETTINGS = Object.freeze({ detectImages: false, advancedDeepSearch: false, candidateSort: "detected" });
-let settings = { ...DEFAULT_SETTINGS };
-let settingsReady = loadSettings();
-
-async function loadSettings() {
-  try { settings = { ...DEFAULT_SETTINGS, ...await api.storage.local.get(Object.keys(DEFAULT_SETTINGS)) }; } catch (_) {}
-  return settings;
-}
-
-api.storage?.onChanged?.addListener((changes, area) => {
-  if (area !== "local") return;
-  for (const key of ["detectImages", "advancedDeepSearch"]) if (changes[key]) settings[key] = Boolean(changes[key].newValue);
-  if (changes.candidateSort) settings.candidateSort = normalizeSortMode(changes.candidateSort.newValue);
-});
-
-function newId() { try { return crypto.randomUUID(); } catch (_) { return `${Date.now()}-${Math.random().toString(16).slice(2)}`; } }
-function supportedPage(url) { try { return ["http:", "https:"].includes(new URL(url).protocol); } catch (_) { return false; } }
-function cleanPageTitle(value) {
-  const cleaned = String(value || "").replace(/^(?:(?:流萤(?:\s+StreamFirefly)?)[\s·|\-–—:：]+)+/i, "").trim();
-  return cleaned || "未命名页面";
-}
-function pageTitleFor(tab) { try { return cleanPageTitle(tab?.title || new URL(tab?.url || "").hostname); } catch (_) { return cleanPageTitle(tab?.title); } }
-
+const settings = createSettings(api);
+const evaluation = createEvaluation(api);
+const discovery = createDiscovery(api, settings, evaluation);
+const resources = createResources(api, settings, (message, tabId) => workspace.notifyWorkspaceMessage(message, tabId), discovery.detect);
+const { loadTabState, uiContextForTab, resolveUiTab, notifyUiContext, queueTab, rememberRequestContext, parseContentRange, addCandidate, clearTab, resolveRequestTabId, setSniffingPaused, patchResourceViewState, updateCandidateMetadata, removeCandidates, candidateFor, fetchMediaText } = resources;
+const preview = createPreview(api, resources.candidateFor);
+const { updatePreviewHeaders } = preview;
+const workspace = createWorkspace(api, preview.clearPreviewHeadersForTab);
+const { openWorkspace, unmountWorkspace } = workspace;
+const native = createNative(api, workspace.notifyWorkspaceMessage);
+const { nativeRequestPromise, nativeInfo } = native;
+const integrations = createIntegrations(api, resources, nativeRequestPromise, evaluation.run);
+resources.subscribeCandidates(integrations.autoSend);
+const dispatchIntents = createDispatchIntents(api, resources);
+const deepSearch = createDeepSearch(api, settings);
+const capture = createCaptureCoordinator(api, nativeRequestPromise, evaluation, resources);
+const outputTemplates = createOutputTemplates(api, evaluation.run);
+const requestHeadersById = new Map();
 if (api.sidePanel?.setPanelBehavior) {
   api.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch?.(() => {});
 } else if (api.sidebarAction?.open) {
@@ -54,6 +57,8 @@ api.webRequest.onErrorOccurred.addListener(details => requestHeadersById.delete(
 
 api.webNavigation?.onBeforeNavigate?.addListener(details => {
   if (details.frameId !== 0) return;
+  deepSearch.clear(details.tabId);
+  void capture.interrupted(details.tabId);
   void unmountWorkspace(details.tabId).then(() => clearTab(details.tabId, details.url)).then(() => notifyUiContext(details.tabId));
 });
 api.webNavigation?.onHistoryStateUpdated?.addListener(details => {
@@ -62,6 +67,8 @@ api.webNavigation?.onHistoryStateUpdated?.addListener(details => {
 });
 
 api.tabs.onRemoved.addListener(tabId => {
+  deepSearch.clear(tabId);
+  void capture.interrupted(tabId);
   void unmountWorkspace(tabId).then(() => clearTab(tabId, "", true)).then(() => notifyUiContext(tabId));
 });
 api.tabs.onUpdated?.addListener((tabId, changeInfo, tab) => {
@@ -78,6 +85,50 @@ async function taskPayloadForSender(payload = {}, sender = {}) {
 }
 
 api.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "capture.transport.push" && capture.isLocal) { capture.push(message.payload, sender).then(value => sendResponse({ ok: true, value }), error => sendResponse({ ok: false, error: error.message })); return true; }
+  if (message?.type === "capture.interrupted" && sender.tab) { capture.interrupted(sender.tab.id).then(() => sendResponse({ ok: true }), () => sendResponse({ ok: false })); return true; }
+  if (message?.type === "deep.key.add") { deepSearch.addKey(sender, message.payload).then(ok => sendResponse({ ok }), () => sendResponse({ ok: false })); return true; }
+  if (["deep.status", "deep.set"].includes(message?.type)) {
+    const tabId = sender.tab?.id ?? message.payload?.tabId;
+    const operation = message.type === "deep.status" ? deepSearch.status(tabId) : deepSearch.set(tabId, message.payload?.enabled, Boolean(message.payload?.remember));
+    operation.then(value => sendResponse({ ok: true, value }), error => sendResponse({ ok: false, error: error.message })); return true;
+  }
+  if (message?.type === "settings.open") { api.runtime.openOptionsPage().then(() => sendResponse({ ok: true }), () => sendResponse({ ok: false, error: "设置页打开失败" })); return true; }
+  if (message?.type === "integration.open") { dispatchIntents.open(message.payload || {}, sender).then(sendResponse, error => sendResponse({ ok: false, error: error.message })); return true; }
+  if (message?.type === "capture.control.open") {
+    const tabId = sender.tab?.id ?? message.payload?.tabId;
+    if (!Number.isInteger(tabId)) { sendResponse({ ok: false, error: "来源页面无效" }); return false; }
+    capture.openControl(tabId).then(() => sendResponse({ ok: true }), () => sendResponse({ ok: false, error: "捕捉控制页打开失败" })); return true;
+  }
+  if (message?.type === "capture.context" && sender.url?.split(/[?#]/, 1)[0] === api.runtime.getURL("dist/app.html")) {
+    api.tabs.get(message.payload.tabId).then(uiContextForTab).then(value => sendResponse({ ok: true, value }), () => sendResponse({ ok: false, error: "来源页面已关闭" })); return true;
+  }
+  const administrative = ["discovery.get", "discovery.save", "discovery.test", "template.render", "templates.get", "templates.save", "integration.preview", "integration.get", "integration.save", "integration.test", "integration.invoke", "integration.secret", "integration.intent", "capture.sources", "capture.open", "capture.close", "capture.list", "capture.recover"];
+  if (administrative.includes(message?.type)) {
+    if (typeof sender.url !== "string" || sender.url.split(/[?#]/, 1)[0] !== api.runtime.getURL("dist/app.html")) { sendResponse({ ok: false, error: "请从扩展设置页执行此操作" }); return false; }
+    const operations = {
+      "discovery.get": () => discovery.read(),
+      "discovery.save": async () => { const result = await discovery.save(message.payload); await resources.reevaluate(); return result; },
+      "discovery.test": () => discovery.detect(message.payload),
+      "template.render": () => evaluation.run({ ...message.payload, kind: "template" }),
+      "templates.get": () => outputTemplates.read(),
+      "templates.save": () => outputTemplates.save(message.payload),
+      "integration.preview": () => integrations.preview(message.payload),
+      "integration.get": () => integrations.read(),
+      "integration.save": () => integrations.save(message.payload),
+      "integration.test": () => integrations.test(message.payload.profileId),
+      "integration.invoke": () => integrations.dispatch({ ...message.payload, protocolTabId: sender.tab?.id }),
+      "integration.secret": () => integrations.setSecret(message.payload.profileId, message.payload.secret),
+      "integration.intent": () => dispatchIntents.get(message.payload.id),
+      "capture.sources": () => capture.sources(message.payload.tabId),
+      "capture.open": () => capture.open(message.payload),
+      "capture.close": () => capture.close(message.payload.tabId),
+      "capture.list": () => capture.list(),
+      "capture.recover": () => capture.recover(message.payload.id)
+    };
+    Promise.resolve().then(operations[message.type]).then(value => sendResponse({ ok: true, value }), error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
   if (message?.type === "ui.context.get") {
     resolveUiTab(sender, message.scope === "sender", message.windowId).then(tab => tab ? uiContextForTab(tab) : null).then(context => context ? sendResponse({ ok: true, context }) : sendResponse({ ok: false, error: "source_tab_unavailable" })).catch(error => sendResponse({ ok: false, error: error.message }));
     return true;
@@ -92,7 +143,7 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   if (message?.type === "workspace.ready") {
-    if (Number.isInteger(sender?.tab?.windowId) && Number.isInteger(sender?.tab?.id)) workspaceTabsByWindow.set(sender.tab.windowId, sender.tab.id);
+    if (Number.isInteger(sender?.tab?.windowId) && Number.isInteger(sender?.tab?.id)) workspace.markReady(sender.tab.windowId, sender.tab.id);
     sendResponse({ ok: true });
     return false;
   }
@@ -129,6 +180,13 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     candidateFor(sender.tab?.id ?? message.tabId, message.id).then(candidate => sendResponse({ ok: true, candidate })).catch(error => sendResponse({ ok: false, error: error.message }));
     return true;
   }
+  if (message?.type === "media.copy") {
+    const tabId = sender.tab?.id ?? message.payload?.tabId;
+    const ids = message.payload?.ids;
+    if (!Array.isArray(ids) || ids.length > 100) { sendResponse({ ok: false, error: "复制资源数量无效" }); return false; }
+    Promise.all(ids.map(async id => { const item = await candidateFor(tabId, id); if (!item) throw new Error("资源已移除"); return outputTemplates.copy(item); })).then(items => sendResponse({ ok: true, value: items.join("\n") }), error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
   if (message?.type === "media.fetchText") {
     fetchMediaText(sender.tab?.id ?? message.tabId, message.id, message.url).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
     return true;
@@ -136,12 +194,14 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "media.add") { addCandidate(sender.tab?.id, { ...message.candidate, source: message.candidate?.source || "dom" }).then(ok => sendResponse({ ok })).catch(error => sendResponse({ ok: false, error: error.message })); return true; }
   if (message?.type === "probe.install") {
     (async () => {
-      await settingsReady;
+      await settings.ready;
       if (!api.scripting?.executeScript || !Number.isInteger(sender.tab?.id)) return { ok: false, error: "page_probe_unavailable" };
       const target = { tabId: sender.tab.id, frameIds: [sender.frameId ?? 0] };
       await api.scripting.executeScript({ target, world: "MAIN", files: ["page-probe.js"] });
-      if (settings.advancedDeepSearch) await api.scripting.executeScript({ target, world: "MAIN", files: ["page-probe-advanced.js"] });
-      return { ok: true, advanced: settings.advancedDeepSearch };
+      if ((sender.frameId ?? 0) === 0) await api.scripting.executeScript({ target, world: "MAIN", files: ["capture-probe.js"] });
+      const advanced = await deepSearch.install(sender);
+      if (advanced) await api.scripting.executeScript({ target, world: "MAIN", files: ["page-probe-advanced.js"] });
+      return { ok: true, advanced };
     })().then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
     return true;
   }
@@ -151,6 +211,7 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const info = await nativeInfo();
       if (!info.ok) return info;
       if (payload.hlsPlan && ![2, 3].includes(payload.hlsPlan.version)) return { ok: false, error: "hls_plan_version_unsupported" };
+      if (!payload.fileName) { const filename = await outputTemplates.filename(payload); if (filename) payload = { ...payload, fileName: filename }; }
       return nativeRequestPromise(message.type, payload);
     }).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
     return true;
@@ -160,3 +221,5 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "preview.headers.clear") { updatePreviewHeaders({ action: "clear", previewSessionId: message.previewSessionId || message.payload?.previewSessionId }, sender).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message })); return true; }
   return false;
 });
+
+export const runtime = { ...resources, openWorkspace, unmountWorkspace, settings };

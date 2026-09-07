@@ -1,3 +1,6 @@
+import { INLINE_MANIFEST_MAX_BYTES, newId, supportedPage, cleanPageTitle, pageTitleFor, normalizeSortMode } from './platform.js';
+export function createResources(api, settings, notifyWorkspaceMessage, detect) {
+const candidateListeners = new Set();
 const STATE_VERSION = 2;
 
 const STATE_PREFIX = "media-candidates-v2:";
@@ -10,15 +13,14 @@ const tabQueues = new Map();
 
 const persistTimers = new Map();
 
-const requestHeadersById = new Map();
+
 
 const recentRequestContexts = new Map();
 
 function stateKey(tabId) { return `${STATE_PREFIX}${tabId}`; }
 
-function normalizeSortMode(value) { return ["detected", "size", "duration", "type"].includes(value) ? value : "detected"; }
 
-function defaultResourceViewState() { return { pattern: "", type: "all", minMb: "", maxMb: "", minDuration: "", maxDuration: "", sortMode: normalizeSortMode(settings.candidateSort), collapsed: false, expandedId: "", revision: 0 }; }
+function defaultResourceViewState() { return { pattern: "", type: "all", minMb: "", maxMb: "", minDuration: "", maxDuration: "", sortMode: normalizeSortMode(settings.get().candidateSort), collapsed: false, expandedId: "", revision: 0 }; }
 
 function normalizeResourceViewState(value) {
   const input = value && typeof value === "object" ? value : {};
@@ -27,7 +29,7 @@ function normalizeResourceViewState(value) {
     type: ["all", "video", "audio", "image"].includes(input.type) ? input.type : "all",
     minMb: normalizeSizeFilter(input.minMb), maxMb: normalizeSizeFilter(input.maxMb),
     minDuration: normalizeSizeFilter(input.minDuration), maxDuration: normalizeSizeFilter(input.maxDuration),
-    sortMode: normalizeSortMode(input.sortMode ?? settings.candidateSort),
+    sortMode: normalizeSortMode(input.sortMode ?? settings.get().candidateSort),
     collapsed: Boolean(input.collapsed), expandedId: typeof input.expandedId === "string" ? input.expandedId.slice(0, 16384) : "",
     revision: Number.isInteger(input.revision) && input.revision >= 0 ? input.revision : 0
   };
@@ -60,7 +62,7 @@ async function uiContextForTab(tab) {
   if (!supported) {
     return { sourceTabId, sourceContextId: "", pageUrl, pageTitle: pageTitleFor(tab), favIconUrl: tab?.favIconUrl || "", supported: false, paused: false, resourceViewState: defaultResourceViewState(), candidates: [] };
   }
-  await settingsReady;
+  await settings.ready;
   let state = await loadTabState(sourceTabId);
   if (!state.pageUrl) {
     state.pageUrl = pageUrl;
@@ -181,17 +183,6 @@ function mimeRank(value) {
   return 0;
 }
 
-function classify(item) {
-  const url = String(item?.url || "");
-  const mime = String(item?.mime || "").toLowerCase();
-  if (/\.(?:m3u8|m3u)(?:$|[?#&])/i.test(url) || /(?:vnd\.apple\.mpegurl|x-mpegurl|application\/mpegurl)/.test(mime)) return "hls";
-  if (/\.mpd(?:$|[?#&])/i.test(url) || mime.includes("dash+xml")) return "dash";
-  if (item?.segmentKind || /\.(?:ts|m4s|key)(?:$|[?#&])/i.test(url) || /^(?:video\/mp2t|video\/iso\.segment|audio\/iso\.segment)$/i.test(mime)) return "segment";
-  if (mime.startsWith("video/") || /\.(?:mp4|webm|mov|mkv|flv|f4v|m4v|mpeg|mpg|avi|wmv|asf|ogv|3gp)(?:$|[?#&])/i.test(url) || item?.resourceType === "media") return "video";
-  if (mime.startsWith("audio/") || /\.(?:mp3|m4a|aac|wav|flac|ogg|opus|wma|weba)(?:$|[?#&])/i.test(url)) return "audio";
-  if (mime.startsWith("image/") || /\.(?:jpg|jpeg|png|gif|webp)(?:$|[?#&])/i.test(url)) return "image";
-  return null;
-}
 
 function mergeCandidate(existing, item) {
   const merged = { ...(existing ?? {}), ...(item ?? {}) };
@@ -222,7 +213,7 @@ async function hashInlineManifest(inlineManifest) {
 async function addCandidate(tabId, item) {
   if (!Number.isInteger(tabId) || tabId < 0 || !item?.url) return false;
   if (isHeuristicNamespaceCandidate(item)) return false;
-  await settingsReady;
+  await settings.ready;
   if (item.inlineManifest) {
     const bytes = new TextEncoder().encode(item.inlineManifest.text || "").byteLength;
     if (item.inlineManifest.format !== "hls" || !bytes || bytes > INLINE_MANIFEST_MAX_BYTES) return false;
@@ -235,11 +226,14 @@ async function addCandidate(tabId, item) {
     const existing = state.candidates.get(id);
     const context = item.inlineManifest ? requestContextFor(tabId, item) : null;
     const inlineHeaders = context ? Object.fromEntries(Object.entries(context.requestHeaders || {}).filter(([name]) => !["cookie", "authorization"].includes(name.toLowerCase()))) : null;
-    const normalizedItem = { ...item, pageTitle: item.pageTitle ? cleanPageTitle(item.pageTitle) : item.pageTitle, pageUrl: item.pageUrl || state.pageUrl };
+    const sourceUrl = state.pageUrl || (await api.tabs.get(tabId)).url || "";
+    const normalizedItem = { ...item, pageTitle: item.pageTitle ? cleanPageTitle(item.pageTitle) : item.pageTitle, pageUrl: sourceUrl };
     const enriched = context ? { ...normalizedItem, requestHeaders: normalizedItem.requestHeaders && Object.keys(normalizedItem.requestHeaders).length ? normalizedItem.requestHeaders : inlineHeaders, referer: normalizedItem.referer || context.referer, contentDisposition: normalizedItem.contentDisposition || context.contentDisposition } : normalizedItem;
     const merged = mergeCandidate(existing, { ...enriched, canonicalUrl });
-    const type = classify(merged);
-    if (!type || type === "image" && !settings.detectImages) return false;
+    const detection = await detect(merged);
+    const type = detection.kind;
+    if (!type) return false;
+    merged.detection = detection;
     const now = Date.now();
     state.candidates.set(id, { ...merged, id, canonicalUrl, type, sizeKind: merged.sizeKind || (type === "hls" || type === "dash" ? "manifest" : "file"), detectedAt: existing?.detectedAt ?? now, lastSeenAt: now });
     state.lastTouchedAt = now;
@@ -248,6 +242,7 @@ async function addCandidate(tabId, item) {
     for (const stale of inlineItems.slice(4)) state.candidates.delete(stale.id);
     schedulePersist(state);
     updateBadge(state);
+    for (const listener of candidateListeners) Promise.resolve().then(() => listener(tabId, id)).catch(() => {});
     return true;
   });
 }
@@ -398,4 +393,18 @@ async function fetchMediaText(tabId, id, requestedUrl) {
   try { text = await readBoundedText(response, 4 * 1024 * 1024); }
   catch (error) { return { ok: false, error: error.message === "media_manifest_too_large" ? error.message : "media_fetch_failed" }; }
   return { ok: true, url: response.url || url.href, text };
+}
+
+async function reevaluate() {
+  for (const [tabId] of candidatesByTab) await queueTab(tabId, async () => {
+    const state = await loadTabState(tabId);
+    for (const [id, candidate] of state.candidates) {
+      const detection = await detect(candidate);
+      if (!detection.kind) state.candidates.delete(id);
+      else state.candidates.set(id, { ...candidate, type: detection.kind, detection });
+    }
+    schedulePersist(state); updateBadge(state); notifyUiContext(tabId);
+  });
+}
+return { subscribeCandidates(listener) { candidateListeners.add(listener); return () => candidateListeners.delete(listener); }, reevaluate, loadTabState, uiContextForTab, resolveUiTab, notifyUiContext, queueTab, rememberRequestContext, parseContentRange, addCandidate, clearTab, resolveRequestTabId, setSniffingPaused, patchResourceViewState, updateCandidateMetadata, removeCandidates, candidateFor, fetchMediaText };
 }

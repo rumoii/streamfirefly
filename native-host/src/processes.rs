@@ -1,6 +1,14 @@
-use super::*;
+use crate::runtime::TaskRuntime;
+use crate::task_state::update;
+use crate::wire::Writer;
+use std::process::Child;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::thread;
+use std::time::Duration;
+use std::time::Instant;
 
-pub(super) fn register_process(store: &Store, id: &str, child: Child) -> Arc<Mutex<Child>> {
+pub(crate) fn register_process(store: &TaskRuntime, id: &str, child: Child) -> Arc<Mutex<Child>> {
     let child = Arc::new(Mutex::new(child));
     store
         .processes
@@ -12,7 +20,7 @@ pub(super) fn register_process(store: &Store, id: &str, child: Child) -> Arc<Mut
     child
 }
 
-pub(super) fn unregister_process(store: &Store, id: &str, process: &Arc<Mutex<Child>>) {
+pub(crate) fn unregister_process(store: &TaskRuntime, id: &str, process: &Arc<Mutex<Child>>) {
     let mut processes = store.processes.lock().unwrap();
     if let Some(items) = processes.get_mut(id) {
         items.retain(|item| !Arc::ptr_eq(item, process));
@@ -22,35 +30,35 @@ pub(super) fn unregister_process(store: &Store, id: &str, process: &Arc<Mutex<Ch
     }
 }
 
-pub(super) fn unregister_all_processes(store: &Store, id: &str) {
+pub(crate) fn unregister_all_processes(store: &TaskRuntime, id: &str) {
     store.processes.lock().unwrap().remove(id);
 }
 
-pub(super) fn clear_cancellation(store: &Store, id: &str) {
+pub(crate) fn clear_cancellation(store: &TaskRuntime, id: &str) {
     store.cancellations.lock().unwrap().remove(id);
 }
 
-pub(super) fn clear_pause(store: &Store, id: &str) {
+pub(crate) fn clear_pause(store: &TaskRuntime, id: &str) {
     store.pauses.lock().unwrap().remove(id);
 }
 
-pub(super) fn clear_stop(store: &Store, id: &str) {
+pub(crate) fn clear_stop(store: &TaskRuntime, id: &str) {
     store.stops.lock().unwrap().remove(id);
 }
 
-pub(super) fn pause_requested(store: &Store, id: &str) -> bool {
+pub(crate) fn pause_requested(store: &TaskRuntime, id: &str) -> bool {
     store.pauses.lock().unwrap().contains(id)
 }
 
-pub(super) fn cancel_requested(store: &Store, id: &str) -> bool {
+pub(crate) fn cancel_requested(store: &TaskRuntime, id: &str) -> bool {
     store.cancellations.lock().unwrap().contains_key(id)
 }
 
-pub(super) fn stop_requested(store: &Store, id: &str) -> bool {
+pub(crate) fn stop_requested(store: &TaskRuntime, id: &str) -> bool {
     store.stops.lock().unwrap().contains(id)
 }
 
-pub(super) fn mark_stopped(store: &Store, writer: &Writer, id: &str) {
+pub(crate) fn mark_stopped(store: &TaskRuntime, writer: &Writer, id: &str) {
     unregister_all_processes(store, id);
     let paused = pause_requested(store, id);
     update(store, writer, id, |task| {
@@ -79,7 +87,7 @@ pub(super) fn mark_stopped(store: &Store, writer: &Writer, id: &str) {
     clear_stop(store, id);
 }
 
-pub(super) fn stop_process(store: &Store, id: &str) {
+pub(crate) fn stop_process(store: &TaskRuntime, id: &str) {
     let processes = store
         .processes
         .lock()
@@ -95,14 +103,15 @@ pub(super) fn stop_process(store: &Store, id: &str) {
     }
 }
 
-pub(super) fn wait_for_state(
-    store: &Store,
+pub(crate) fn wait_for_state(
+    store: &TaskRuntime,
     id: &str,
     expected: &[&str],
     deadline: Instant,
 ) -> bool {
     loop {
         let reached = store
+            .repository
             .tasks
             .lock()
             .unwrap()

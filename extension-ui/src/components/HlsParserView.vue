@@ -7,6 +7,7 @@ import { extensionApi, sendMessage } from "../api";
 import { humanError } from "../store";
 import { buildHlsPlan } from "../download-plan";
 import { createDownload } from "../download-client";
+import KeyCandidates from "../features/configuration/KeyCandidates.vue";
 const requestId = ref(crypto.randomUUID());
 
 const props = defineProps<{ candidate: MediaCandidate; context: UiContext; capabilities: string[]; saveDir: string; downloadThreads: number; connected?: boolean }>();
@@ -194,6 +195,7 @@ function previewManifest(url: string) {
         <div v-if="unsupportedEncryption" class="status-banner error"><strong>不支持 {{ unsupportedEncryption }}</strong><span>仅支持标准 AES-128；SAMPLE-AES 与 DRM 只识别，不尝试绕过。</span></div>
         <label class="choice-card compact"><input v-model="keyMode" type="radio" value="auto"><span><strong>自动使用清单密钥</strong><small>按照 #EXT-X-KEY 获取密钥，并在批量下载前验证首个加密切片。</small></span></label>
         <label class="choice-card compact" :class="{ disabled: !keyOverrideSupported }"><input v-model="keyMode" type="radio" value="manual" :disabled="!keyOverrideSupported"><span><strong>手动指定 AES-128 密钥</strong><small>密钥仅保存在本次 Native Host 进程内，不写入任务记录或检查点。</small></span></label>
+        <KeyCandidates v-if="keyOverrideSupported" :context="context" @select="value => { keyMode = 'manual'; keyForm.kind = 'hex'; keyForm.value = value; }" />
         <div v-if="keyMode === 'manual'" class="key-form">
           <label><span>密钥格式</span><select v-model="keyForm.kind" class="control"><option value="hex">Hex</option><option value="base64">Base64</option><option value="url">密钥 URL</option></select></label>
           <label class="key-value"><span>{{ keyForm.kind === 'url' ? '密钥地址' : '密钥内容' }}</span><input v-model="keyForm.value" class="control" autocomplete="off" :placeholder="keyForm.kind === 'hex' ? '32 位十六进制' : keyForm.kind === 'base64' ? '解码后 16 字节' : 'https://example.com/key.bin'"></label>

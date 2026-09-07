@@ -1,10 +1,44 @@
-use super::*;
+use crate::hls::load_checkpoint;
+use crate::hls::parse_key_override;
+use crate::hls_plan::runtime_plan_from_persisted;
+use crate::model::Task;
+use crate::paths::checkpoint_available;
+use crate::paths::checkpoint_path_for_state;
+use crate::paths::task_work_root_for_state;
+use crate::processes::clear_cancellation;
+use crate::processes::clear_pause;
+use crate::processes::clear_stop;
+use crate::processes::mark_stopped;
+use crate::processes::stop_process;
+use crate::processes::wait_for_state;
+use crate::repository::is_sensitive_request_header;
+use crate::repository::persist_tasks;
+use crate::repository::sanitized_task;
+use crate::repository::save_store;
+use crate::runtime::TaskRuntime;
+use crate::scheduler::remove_pending;
+use crate::scheduler::scheduler_active;
+use crate::scheduler::scheduler_full;
+use crate::scheduler::start_download;
+use crate::task_input::allowed_request_headers;
+use crate::task_state::update;
+use crate::wire::emit;
+use crate::wire::Writer;
+use serde_json::json;
+use serde_json::Value;
+use std::collections::HashSet;
+use std::fs;
+use std::io;
+use std::path::Path;
+use std::thread;
+use std::time::Duration;
+use std::time::Instant;
 
-pub(super) fn ensure_restart_context(store: &Store, task: &Task) -> Result<(), &'static str> {
+pub(crate) fn ensure_restart_context(store: &TaskRuntime, task: &Task) -> Result<(), &'static str> {
     if task.hls_selection
         && task.hls_plan.is_none()
         && !(task.hls_plan_version >= 2
-            && checkpoint_available(&checkpoint_path_for_store(store, &task.id)))
+            && checkpoint_available(&checkpoint_path_for_state(&store.repository.path, &task.id)))
     {
         Err("hls_plan_expired")
     } else {
@@ -12,14 +46,14 @@ pub(super) fn ensure_restart_context(store: &Store, task: &Task) -> Result<(), &
     }
 }
 
-pub(super) fn task_control(
-    store: &Store,
+pub(crate) fn task_control(
+    store: &TaskRuntime,
     writer: &Writer,
     payload: &Value,
 ) -> Result<Task, &'static str> {
-    let retry_save = store.runtime_error.lock().unwrap().is_some();
+    let retry_save = store.repository.runtime_error.lock().unwrap().is_some();
     if retry_save {
-        save_store(store).map_err(|_| "task_store_write_failed")?;
+        save_store(&store.repository).map_err(|_| "task_store_write_failed")?;
     }
     let id = payload["id"]
         .as_str()
@@ -27,6 +61,7 @@ pub(super) fn task_control(
         .ok_or("task_id_empty")?;
     let action = payload["action"].as_str().ok_or("task_action_empty")?;
     let task = store
+        .repository
         .tasks
         .lock()
         .unwrap()
@@ -55,10 +90,11 @@ pub(super) fn task_control(
                 .into(),
             );
         });
-        if store.runtime_error.lock().unwrap().is_some() {
+        if store.repository.runtime_error.lock().unwrap().is_some() {
             return Err("task_store_write_failed");
         }
         return store
+            .repository
             .tasks
             .lock()
             .unwrap()
@@ -118,8 +154,9 @@ pub(super) fn task_control(
                 current.message = Some("正在停止录制并保存已下载内容".into());
             });
             if needs_restart {
-                let checkpoint = load_checkpoint(&checkpoint_path_for_store(store, id))
-                    .map_err(|_| "hls_checkpoint_missing")?;
+                let checkpoint =
+                    load_checkpoint(&checkpoint_path_for_state(&store.repository.path, id))
+                        .map_err(|_| "hls_checkpoint_missing")?;
                 let mut resumed = task.clone();
                 resumed.state = "stopping".into();
                 resumed.hls_plan = Some(runtime_plan_from_persisted(&checkpoint.plan));
@@ -228,7 +265,13 @@ pub(super) fn task_control(
                 .transpose()?;
             let mut resumed_plan = task.hls_plan.clone().or_else(|| {
                 (task.hls_plan_version >= 2)
-                    .then(|| load_checkpoint(&checkpoint_path_for_store(store, &task.id)).ok())
+                    .then(|| {
+                        load_checkpoint(&checkpoint_path_for_state(
+                            &store.repository.path,
+                            &task.id,
+                        ))
+                        .ok()
+                    })
                     .flatten()
                     .map(|checkpoint| runtime_plan_from_persisted(&checkpoint.plan))
             });
@@ -290,18 +333,20 @@ pub(super) fn task_control(
                     .into(),
                 );
             });
-            if store.runtime_error.lock().unwrap().is_some() {
+            if store.repository.runtime_error.lock().unwrap().is_some() {
                 return Err("task_store_write_failed");
             }
             {
-                let mut tasks = store.tasks.lock().unwrap();
+                let mut tasks = store.repository.tasks.lock().unwrap();
                 if let Some(index) = tasks.iter().position(|task| task.id == id) {
                     let task = tasks.remove(index);
                     tasks.push(task);
-                    persist_tasks(store, &tasks).map_err(|_| "task_store_write_failed")?;
+                    persist_tasks(&store.repository, &tasks)
+                        .map_err(|_| "task_store_write_failed")?;
                 }
             }
             let restarted = store
+                .repository
                 .tasks
                 .lock()
                 .unwrap()
@@ -313,10 +358,11 @@ pub(super) fn task_control(
         }
         _ => return Err("task_action_unsupported"),
     }
-    if store.runtime_error.lock().unwrap().is_some() {
+    if store.repository.runtime_error.lock().unwrap().is_some() {
         return Err("task_store_write_failed");
     }
     store
+        .repository
         .tasks
         .lock()
         .unwrap()
@@ -326,7 +372,7 @@ pub(super) fn task_control(
         .ok_or("task_not_found")
 }
 
-pub(super) fn delete_output(path: &str) -> Result<bool, &'static str> {
+pub(crate) fn delete_output(path: &str) -> Result<bool, &'static str> {
     let path = Path::new(path);
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -340,7 +386,7 @@ pub(super) fn delete_output(path: &str) -> Result<bool, &'static str> {
     Ok(true)
 }
 
-pub(super) fn task_output_paths(task: &Task) -> HashSet<String> {
+pub(crate) fn task_output_paths(task: &Task) -> HashSet<String> {
     let mut paths = HashSet::new();
     if let Some(path) = &task.output {
         paths.insert(path.clone());
@@ -353,7 +399,7 @@ pub(super) fn task_output_paths(task: &Task) -> HashSet<String> {
     paths
 }
 
-pub(super) fn delete_task_outputs(task: &Task) -> Result<bool, &'static str> {
+pub(crate) fn delete_task_outputs(task: &Task) -> Result<bool, &'static str> {
     let mut deleted = false;
     for path in task_output_paths(task) {
         deleted |= delete_output(&path)?;
@@ -361,8 +407,8 @@ pub(super) fn delete_task_outputs(task: &Task) -> Result<bool, &'static str> {
     Ok(deleted)
 }
 
-pub(super) fn delete_task(
-    store: &Store,
+pub(crate) fn delete_task(
+    store: &TaskRuntime,
     writer: &Writer,
     payload: &Value,
 ) -> Result<Value, &'static str> {
@@ -372,6 +418,7 @@ pub(super) fn delete_task(
         .ok_or("task_id_empty")?;
     let delete_file = payload["deleteFile"].as_bool().unwrap_or(false);
     let task = store
+        .repository
         .tasks
         .lock()
         .unwrap()
@@ -397,6 +444,7 @@ pub(super) fn delete_task(
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             let terminal = store
+                .repository
                 .tasks
                 .lock()
                 .unwrap()
@@ -415,6 +463,7 @@ pub(super) fn delete_task(
             thread::sleep(Duration::from_millis(50));
         }
         let cancelled = store
+            .repository
             .tasks
             .lock()
             .unwrap()
@@ -451,20 +500,20 @@ pub(super) fn delete_task(
         false
     };
     {
-        let mut tasks = store.tasks.lock().unwrap();
+        let mut tasks = store.repository.tasks.lock().unwrap();
         let before = tasks.clone();
         tasks.retain(|item| item.id != id);
         if tasks.len() == before.len() {
             return Err("task_not_found");
         }
-        if persist_tasks(store, &tasks).is_err() {
+        if persist_tasks(&store.repository, &tasks).is_err() {
             *tasks = before;
             return Err("task_store_write_failed");
         }
     }
     clear_cancellation(store, id);
     clear_pause(store, id);
-    let _ = fs::remove_dir_all(task_work_dir_for_store(store, id));
+    let _ = fs::remove_dir_all(task_work_root_for_state(&store.repository.path).join(id));
     emit(writer, json!({"version":1,"type":"task.deleted","id":id}));
     Ok(
         json!({"id": id, "fileDeleted": file_deleted, "fileKept": !delete_file && task.output.is_some()}),

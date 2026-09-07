@@ -32,6 +32,7 @@
     }
   });
   window.addEventListener("message", event => {
+    if (event.source === window && event.data?.source === "streamfirefly" && event.data.type === "key") { api.runtime.sendMessage({ type: "deep.key.add", payload: { hex: event.data.hex, source: event.data.foundBy } }).catch?.(() => {}); return; }
     if (event.source !== window || event.data?.source !== "streamfirefly" || event.data.type !== "media") return;
     api.runtime.sendMessage({ type: "media.add", candidate: event.data.candidate }).catch?.(() => {});
   });

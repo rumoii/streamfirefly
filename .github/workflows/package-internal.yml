@@ -105,6 +105,8 @@ jobs:
             $env:STREAMFIREFLY_FFMPEG_EXE = Join-Path $installDir 'ffmpeg.exe'
             npm run test:native
             if ($LASTEXITCODE -ne 0) { throw 'Packaged Native Host protocol test failed' }
+            npm run test:capture:browser
+            if ($LASTEXITCODE -ne 0) { throw 'Chrome capture transport test failed' }
             & (Join-Path $installDir 'ffmpeg.exe') -version | Select-Object -First 1
             if ($LASTEXITCODE -ne 0) { throw 'Packaged FFmpeg failed to start' }
           } finally {

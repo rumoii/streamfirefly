@@ -1,10 +1,11 @@
+import { readBackgroundSource } from './read-background-source.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'extension');
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
-const background = ["background-native.js","background-workspace.js","background-preview.js","background-resources.js","background.js"].map(file => fs.readFileSync(path.join(root, file), 'utf8')).join('\n');
+const background = readBackgroundSource();
 const required = JSON.parse(fs.readFileSync(path.join(root, '..', 'tools', 'extension-package-files.json'), 'utf8'));
 const missing = required.filter(file => !fs.existsSync(path.join(root, file)));
 if (manifest.manifest_version !== 3) throw new Error('manifest_version must be 3');
@@ -16,7 +17,7 @@ if (manifest.version !== '0.9.1') throw new Error(`unexpected extension version:
 if (!manifest.permissions?.includes('sidePanel')) throw new Error('Chrome sidePanel permission missing');
 if (manifest.side_panel?.default_path !== 'dist/app.html?surface=sidebar#/resources') throw new Error('Chrome side panel entry missing');
 if (manifest.options_ui?.page !== 'dist/app.html?surface=options#/settings') throw new Error('Vue settings entry missing');
-if (/\btabs\.create\s*\(/.test(background)) throw new Error('Toolbar entry must not create an application tab');
+if (/\btabs\.create\s*\(/.test(readBackgroundSource(['background.js', 'workspace.js']))) throw new Error('Toolbar entry must not create an application tab');
 if (/AppSession|app\.session\.|appTabId/.test(background)) throw new Error('Obsolete application session lifecycle is still present');
 if (!background.includes('openPanelOnActionClick: true')) throw new Error('Chrome action is not bound to native side panel behavior');
 if (!background.includes('files: ["dist/workspace.js"]')) throw new Error('On-demand workspace injection is missing');

@@ -1,6 +1,28 @@
-use super::*;
+use crate::model::Task;
+use crate::model::TaskOutput;
+use crate::paths::checkpoint_available;
+use crate::paths::checkpoint_path_for_state;
+use crate::persistence::replace_file;
+use serde_json::json;
+use serde_json::Value;
+use std::fs;
+use std::io;
+use std::io::Write;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Mutex;
 
-pub(super) fn load_store(path: &Path) -> Store {
+pub(crate) const STORE_VERSION: u8 = 1;
+const SENSITIVE_REQUEST_HEADERS: [&str; 2] = ["cookie", "authorization"];
+pub(crate) struct TaskRepository {
+    pub(crate) path: PathBuf,
+    pub(crate) tasks: Mutex<Vec<Task>>,
+    persistence: Mutex<()>,
+    pub(crate) load_error: Option<String>,
+    pub(crate) runtime_error: Mutex<Option<String>>,
+}
+
+pub(crate) fn load_repository(path: &Path) -> TaskRepository {
     let load_error = match fs::read_to_string(path) {
         Ok(text) => match serde_json::from_str::<Value>(&text) {
             Ok(value)
@@ -89,19 +111,12 @@ pub(super) fn load_store(path: &Path) -> Store {
             }
         }
     }
-    let store = Store {
+    let store = TaskRepository {
         path: path.to_path_buf(),
-        tasks: Arc::new(Mutex::new(tasks)),
-        processes: Arc::new(Mutex::new(HashMap::new())),
-        cancellations: Arc::new(Mutex::new(HashMap::new())),
-        pauses: Arc::new(Mutex::new(HashSet::new())),
-        stops: Arc::new(Mutex::new(HashSet::new())),
-        recovery_started: Arc::new(AtomicBool::new(false)),
-        scheduler: Arc::new(Mutex::new(scheduler::Scheduler::default())),
-        persistence: Arc::new(Mutex::new(())),
-        creation: Arc::new(Mutex::new(())),
+        tasks: Mutex::new(tasks),
+        persistence: Mutex::new(()),
         load_error,
-        runtime_error: Arc::new(Mutex::new(None)),
+        runtime_error: Mutex::new(None),
     };
     if store.load_error.is_none() {
         let _ = save_store(&store);
@@ -109,12 +124,12 @@ pub(super) fn load_store(path: &Path) -> Store {
     store
 }
 
-pub(super) fn save_store(store: &Store) -> io::Result<()> {
+pub(crate) fn save_store(store: &TaskRepository) -> io::Result<()> {
     let tasks = store.tasks.lock().unwrap();
     persist_tasks(store, &tasks)
 }
 
-pub(super) fn persist_tasks(store: &Store, tasks: &[Task]) -> io::Result<()> {
+pub(crate) fn persist_tasks(store: &TaskRepository, tasks: &[Task]) -> io::Result<()> {
     let result = write_tasks(store, tasks);
     *store.runtime_error.lock().unwrap() = result
         .as_ref()
@@ -123,7 +138,7 @@ pub(super) fn persist_tasks(store: &Store, tasks: &[Task]) -> io::Result<()> {
     result
 }
 
-fn write_tasks(store: &Store, tasks: &[Task]) -> io::Result<()> {
+fn write_tasks(store: &TaskRepository, tasks: &[Task]) -> io::Result<()> {
     let _persistence = store.persistence.lock().unwrap();
     if let Some(error) = &store.load_error {
         return Err(io::Error::other(error.clone()));
@@ -140,43 +155,18 @@ fn write_tasks(store: &Store, tasks: &[Task]) -> io::Result<()> {
     replace_file(&temporary, &store.path)
 }
 
-#[cfg(not(windows))]
-pub(super) fn replace_file(source: &Path, destination: &Path) -> io::Result<()> {
-    fs::rename(source, destination)
-}
-
-#[cfg(windows)]
-pub(super) fn replace_file(source: &Path, destination: &Path) -> io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn MoveFileExW(existing: *const u16, replacement: *const u16, flags: u32) -> i32;
-    }
-    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
-    let destination: Vec<u16> = destination
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
-    if unsafe { MoveFileExW(source.as_ptr(), destination.as_ptr(), 1 | 8) } == 0 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
-}
-
-pub(super) fn is_sensitive_request_header(name: &str) -> bool {
+pub(crate) fn is_sensitive_request_header(name: &str) -> bool {
     SENSITIVE_REQUEST_HEADERS
         .iter()
         .any(|sensitive| name.eq_ignore_ascii_case(sensitive))
 }
 
-pub(super) fn strip_sensitive_headers(task: &mut Task) {
+pub(crate) fn strip_sensitive_headers(task: &mut Task) {
     task.request_headers
         .retain(|name, _| !is_sensitive_request_header(name));
 }
 
-pub(super) fn sanitized_task(task: &Task) -> Task {
+pub(crate) fn sanitized_task(task: &Task) -> Task {
     let mut copy = task.clone();
     strip_sensitive_headers(&mut copy);
     copy.inline_manifest = None;
@@ -204,6 +194,6 @@ pub(super) fn sanitized_task(task: &Task) -> Task {
     copy
 }
 
-pub(super) fn sanitized_tasks(tasks: &[Task]) -> Vec<Task> {
+pub(crate) fn sanitized_tasks(tasks: &[Task]) -> Vec<Task> {
     tasks.iter().map(sanitized_task).collect()
 }

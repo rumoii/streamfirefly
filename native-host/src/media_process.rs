@@ -1,6 +1,23 @@
-use super::*;
+use crate::model::Task;
+use crate::processes::cancel_requested;
+use crate::processes::register_process;
+use crate::processes::unregister_process;
+use crate::runtime::TaskRuntime;
+use crate::task_state::update;
+use crate::wire::Writer;
+use std::fs;
+use std::io::BufRead;
+use std::io::BufReader;
+use std::path::PathBuf;
+use std::process::Command;
+use std::process::Stdio;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::thread;
+use std::time::Duration;
+use std::time::Instant;
 
-pub(super) fn bundled_tool(name: &str) -> PathBuf {
+pub(crate) fn bundled_tool(name: &str) -> PathBuf {
     std::env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(|parent| parent.join(name)))
@@ -8,7 +25,7 @@ pub(super) fn bundled_tool(name: &str) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(name))
 }
 
-pub(super) fn set_output_state(
+pub(crate) fn set_output_state(
     task: &mut Task,
     kind: &str,
     index: usize,
@@ -26,8 +43,8 @@ pub(super) fn set_output_state(
     }
 }
 
-pub(super) fn run_ffmpeg_with_progress(
-    store: &Store,
+pub(crate) fn run_ffmpeg_with_progress(
+    store: &TaskRuntime,
     writer: &Writer,
     task: &Task,
     args: Vec<String>,

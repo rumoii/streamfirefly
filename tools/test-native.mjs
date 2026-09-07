@@ -32,7 +32,7 @@ const output = await new Promise((resolve, reject) => {
 });
 if (output.length < 4 || output.length !== 4 + output.readUInt32LE(0)) throw new Error('Native host returned an incomplete or unexpected message frame');
 const response = JSON.parse(output.subarray(4).toString('utf8'));
-const requiredCapabilities = ['inline-hls-v1', 'task-control-v1', 'hls-selection-v1', 'hls-subtitle-sidecar-v1', 'task-output-group-v1', 'hls-segment-engine-v1', 'hls-checkpoint-v1', 'hls-aes128-v1', 'hls-key-override-v1', 'hls-reauthorize-v1', 'hls-live-engine-v1', 'task-queue-v1', 'task-idempotency-v1'];
+const requiredCapabilities = ['inline-hls-v1', 'task-control-v1', 'hls-selection-v1', 'hls-subtitle-sidecar-v1', 'task-output-group-v1', 'hls-segment-engine-v1', 'hls-checkpoint-v1', 'hls-aes128-v1', 'hls-key-override-v1', 'hls-reauthorize-v1', 'hls-live-engine-v1', 'task-queue-v1', 'task-idempotency-v1', 'integration-program-v1', 'capture-stream-v1'];
 if (!response.ok || response.id !== 'smoke' || response.hostVersion !== expectedVersion || response.protocolVersion !== 3 || JSON.stringify(response.supportedProtocolVersions) !== '[3]' || requiredCapabilities.some(capability => !response.capabilities?.includes(capability))) throw new Error(`Unexpected native response: ${JSON.stringify(response)}`);
 const resolvedTemporary = fs.realpathSync(temporary);
 if (path.dirname(resolvedTemporary) !== fs.realpathSync(os.tmpdir()) || !path.basename(resolvedTemporary).startsWith('streamfirefly-protocol-')) throw new Error('Unexpected protocol test cleanup path');

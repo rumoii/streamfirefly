@@ -1,3 +1,4 @@
+import { readBackgroundSource } from './read-background-source.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,9 +10,9 @@ const extensionId = manifest.browser_specific_settings?.gecko?.id;
 if (extensionId !== 'streamfirefly@example.invalid') throw new Error(`Unexpected Firefox extension ID: ${extensionId}`);
 if (manifest.sidebar_action?.default_panel !== 'dist/app.html?surface=sidebar#/resources') throw new Error('Firefox sidebar panel entry is missing');
 
-const background = ["background-native.js","background-workspace.js","background-preview.js","background-resources.js","background.js"].map(file => fs.readFileSync(path.join(path.join(root, 'extension'), file), 'utf8')).join('\n');
+const background = readBackgroundSource();
 if (!background.includes('api.storage.local.get(Object.keys(DEFAULT_SETTINGS))')) throw new Error('Firefox-safe settings key-array load is missing');
-if (/\btabs\.create\s*\(/.test(background)) throw new Error('Toolbar entry still creates an application tab');
+if (/\btabs\.create\s*\(/.test(readBackgroundSource(['background.js', 'workspace.js']))) throw new Error('Toolbar entry still creates an application tab');
 if (!background.includes('api.sidebarAction.open()')) throw new Error('Firefox toolbar action does not open the sidebar');
 if (!background.includes('type === "ui.context.get"') || !background.includes('type === "workspace.open"')) throw new Error('Sidebar context or workspace message contract is missing');
 

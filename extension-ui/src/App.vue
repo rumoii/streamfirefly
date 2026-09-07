@@ -8,12 +8,17 @@ import ResourcesView from "./components/ResourcesView.vue";
 import BatchDownloadDialog from "./components/BatchDownloadDialog.vue";
 import ConnectionBanner from "./components/ConnectionBanner.vue";
 import SettingsView from "./components/SettingsView.vue";
+import DispatchView from "./features/configuration/DispatchView.vue";
+import CaptureView from "./features/configuration/CaptureView.vue";
+import ExternalAction from "./features/configuration/ExternalAction.vue";
 import DownloadDialog from "./components/DownloadDialog.vue";
 import TaskOverview from "./components/TaskOverview.vue";
 
 const store = useAppStore();
 const surface = surfaceFromUrl();
 const isOptions = computed(() => surface === "options");
+const isDispatch = new URLSearchParams(location.search).has("dispatch");
+const isCapture = new URLSearchParams(location.search).has("captureTab");
 const downloadCandidate = ref<MediaCandidate | null>(null);
 const batchCandidates = ref<MediaCandidate[] | null>(null);
 watch(() => store.context?.sourceContextId, (next, previous) => { if (previous && next !== previous) downloadCandidate.value = null; });
@@ -32,7 +37,7 @@ onBeforeUnmount(() => clearTimeout(toastTimer));
 <template>
   <div v-if="isOptions" class="app-shell options-shell">
     <AppHeader :context="null" :loading="store.loading" @refresh="store.refresh" @toggle-sniffing="store.toggleSniffing" />
-    <main class="app-content"><SettingsView :settings="store.settings" @save="settings => guard(() => store.saveSettings(settings), '设置已保存')" @reset="resetSettings" /></main>
+    <main class="app-content"><DispatchView v-if="isDispatch" /><CaptureView v-else-if="isCapture" /><SettingsView v-else :settings="store.settings" @save="settings => guard(() => store.saveSettings(settings), '设置已保存')" @reset="resetSettings" /></main>
   </div>
   <div v-else class="app-shell sidebar-shell">
     <AppHeader :context="store.context" :loading="store.loading" compact @refresh="store.refresh" @toggle-sniffing="guard(store.toggleSniffing)" />
@@ -45,6 +50,7 @@ onBeforeUnmount(() => clearTimeout(toastTimer));
       <template v-else>
         <div class="sidebar-source-summary"><strong>{{ store.candidates.filter(item => item.type !== 'segment').length }}</strong><span>个媒体资源</span><i></i><strong>{{ store.activeTasks.length }}</strong><span>个活动任务</span></div>
         <ResourcesView :connected="store.connection === 'ready'" @batch-download="batchCandidates = $event" :candidates="store.candidates" :loading="store.loading" :view-state="store.resourceViewState" compact @download="downloadCandidate = $event" @parse="openParser" @remove="guard(() => store.removeCandidates($event), '已从列表移除资源')" @update-view-state="patch => guard(() => store.patchResourceView(patch))" @metadata="(candidate, metadata) => guard(() => store.updateCandidateMetadata(candidate, metadata))" />
+        <ExternalAction :candidates="store.candidates" :context="store.context" />
         <TaskOverview :source-tasks="store.sourceTasks" :active-tasks="store.activeTasks" />
       </template>
     </main>

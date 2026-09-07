@@ -1,5 +1,5 @@
 import { isProxy, reactive } from "vue";
-import { DEFAULT_SETTINGS, readSettings } from "./store";
+import { DEFAULT_SETTINGS, readSettings } from "./features/settings/state";
 
 describe("settings loading", () => {
   it("reads known keys with a plain array and merges stored values over defaults", async () => {

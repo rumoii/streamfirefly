@@ -1,3 +1,4 @@
+import { readBackgroundSource } from './read-background-source.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -5,13 +6,13 @@ import { fileURLToPath } from 'node:url';
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const extensionRoot = path.join(repositoryRoot, 'extension');
 const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'manifest.firefox.json'), 'utf8'));
-const background = ["background-native.js","background-workspace.js","background-preview.js","background-resources.js","background.js"].map(file => fs.readFileSync(path.join(extensionRoot, file), 'utf8')).join('\n');
+const background = readBackgroundSource();
 const required = JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'tools', 'extension-package-files.json'), 'utf8'));
 const missing = required.filter(file => !fs.existsSync(path.join(extensionRoot, file)));
 const gecko = manifest.browser_specific_settings?.gecko;
 
 if (manifest.manifest_version !== 3) throw new Error('Firefox manifest_version must be 3');
-if (!Array.isArray(manifest.background?.scripts) || !manifest.background.scripts.includes('background.js')) throw new Error('Firefox background scripts missing');
+if (!Array.isArray(manifest.background?.scripts) || !manifest.background.scripts.includes('dist/background.js')) throw new Error('Firefox background scripts missing');
 if (manifest.background?.service_worker) throw new Error('Firefox manifest must not declare a service worker');
 if (!manifest.permissions?.includes('nativeMessaging')) throw new Error('Firefox nativeMessaging permission missing');
 if (!manifest.permissions?.includes('declarativeNetRequest')) throw new Error('Firefox declarativeNetRequest permission missing');
@@ -22,7 +23,7 @@ if (JSON.stringify(gecko?.data_collection_permissions?.required) !== JSON.string
 if (manifest.version !== '0.9.1') throw new Error(`Unexpected Firefox extension version: ${manifest.version}`);
 if (manifest.sidebar_action?.default_panel !== 'dist/app.html?surface=sidebar#/resources') throw new Error('Firefox sidebar entry missing');
 if (manifest.options_ui?.page !== 'dist/app.html?surface=options#/settings') throw new Error('Firefox Vue settings entry missing');
-if (/\btabs\.create\s*\(/.test(background)) throw new Error('Firefox toolbar entry must not create an application tab');
+if (/\btabs\.create\s*\(/.test(readBackgroundSource(['background.js', 'workspace.js']))) throw new Error('Firefox toolbar entry must not create an application tab');
 if (!background.includes('api.sidebarAction.open()')) throw new Error('Firefox action is not connected to sidebarAction');
 if (!background.includes('Object.keys(DEFAULT_SETTINGS)')) throw new Error('Firefox settings must be loaded with a plain key array');
 if (missing.length) throw new Error(`Firefox package files missing: ${missing.join(', ')}`);
