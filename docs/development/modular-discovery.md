@@ -47,4 +47,4 @@ Native 集成仅使用临时 `LOCALAPPDATA`。需要先准备 x64 FFmpeg 与 FFp
 
 `npm audit` 仍报告既有 `web-ext → addons-linter → image-size` 开发工具链的 3 项 high 风险，本次未强制升级或降级该工具链。
 
-仍需在发布前补：已安装助手的浏览器捕捉全链路、真实 Aria2/N_m3u8DL-RE/协议处理器、Firefox、长时播放压力和 Windows ARM64 包验收。DASH 完整轨道选择不在本次实现内。
+后续完整验收仍需补：已安装助手的浏览器捕捉全链路、真实 Aria2/N_m3u8DL-RE/协议处理器、Firefox、长时播放压力和 Windows ARM64 包验收。DASH 完整轨道选择不在本次实现内。

@@ -118,7 +118,7 @@ cargo build --release --manifest-path native-host/Cargo.toml
 npm run package:firefox
 ```
 
-产物为 `release/StreamFirefly-firefox-0.9.1-test.xpi`，可在 `about:debugging#/runtime/this-firefox` 中通过“临时载入附加组件”测试。它未经过 Mozilla 签名，不能作为 Firefox 正式版的长期安装包；长期安装或分发必须提交 Mozilla 签名。
+产物为 `release/StreamFirefly-firefox-0.10.0-test.xpi`，可在 `about:debugging#/runtime/this-firefox` 中通过“临时载入附加组件”测试。它未经过 Mozilla 签名，不能作为 Firefox 正式版的长期安装包；长期安装或分发必须提交 Mozilla 签名。
 
 
 在取得 Chrome Web Store 正式 ID 前，为 x64 和 ARM64 测试机生成不绑定开发扩展 ID的完整内测包：
@@ -131,7 +131,7 @@ npm run package:firefox
 
 ## 开发中的发现与工具模块
 
-当前源码新增以下能力，版本号仍为 0.9.1；既有 Release 不包含这些未发布改动：
+0.10.0-beta.1 内测版新增以下能力，扩展与助手的软件版本为 0.10.0，必须成套升级：
 
 - **识别规则**：后缀、MIME、URL 正则，站点范围、大小约束、排除优先、排序、复制、导入导出与命中解释。正则和模板运行在有超时上限的 Worker 中。
 - **输出模板**：HLS、DASH、其他资源分别设置复制模板，另设文件主名称模板；支持条件、替换、截取、编码等纯字符串变换，不执行脚本。
