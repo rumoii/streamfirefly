@@ -1,5 +1,9 @@
 [
   "background.js",
+  "background-native.js",
+  "background-workspace.js",
+  "background-preview.js",
+  "background-resources.js",
   "content.js",
   "page-probe.js",
   "page-probe-advanced.js",

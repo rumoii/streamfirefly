@@ -2,6 +2,8 @@
 
 Status: proposed
 
+本记录中新旧扩展/Host 混用与单端回滚约定已由 `2026-09-07-unified-download-queue-and-atomic-upgrade.md` 取代。HLS 检查点恢复由 `2026-09-03-hls-checkpoint-and-key-recovery.md` 负责，不再统一要求重建所有点播任务。
+
 本记录的完整应用页入口、`AppSession` 和资源快照生命周期由 `2026-09-05-native-sidebar-and-page-workspace.md` 取代。HLS 多输出任务、能力协商、敏感信息边界和任务存储兼容要求继续有效。
 
 ## Problem

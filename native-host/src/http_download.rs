@@ -1,0 +1,454 @@
+use super::*;
+
+#[derive(Default, Clone, Copy)]
+pub(super) struct ProbeInfo {
+    total: Option<u64>,
+    accept_ranges: bool,
+    cancelled: bool,
+}
+
+pub(super) fn add_header_args(args: &mut Vec<String>, task: &Task) {
+    for (name, value) in &task.request_headers {
+        args.push("--header".into());
+        args.push(format!("{name}: {value}"));
+    }
+}
+
+pub(super) fn probe_size(store: &Store, task: &Task) -> ProbeInfo {
+    let mut command = Command::new("curl");
+    let mut args: Vec<String> = [
+        "--silent",
+        "--show-error",
+        "--fail",
+        "--location",
+        "--connect-timeout",
+        "10",
+        "--max-time",
+        "20",
+        "--head",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect();
+    add_header_args(&mut args, task);
+    args.push(task.url.clone());
+    command
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let child = match command.spawn() {
+        Ok(child) => register_process(store, &task.id, child),
+        Err(_) => return ProbeInfo::default(),
+    };
+    loop {
+        if cancel_requested(store, &task.id) {
+            if let Ok(mut child) = child.lock() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            unregister_process(store, &task.id, &child);
+            return ProbeInfo {
+                cancelled: true,
+                ..ProbeInfo::default()
+            };
+        }
+        let finished = match child.lock() {
+            Ok(mut child) => match child.try_wait() {
+                Ok(status) => status,
+                Err(_) => return ProbeInfo::default(),
+            },
+            Err(_) => return ProbeInfo::default(),
+        };
+        if let Some(status) = finished {
+            let mut bytes = Vec::new();
+            if let Ok(mut child) = child.lock() {
+                if let Some(mut stdout) = child.stdout.take() {
+                    let _ = stdout.read_to_end(&mut bytes);
+                }
+            }
+            unregister_process(store, &task.id, &child);
+            if !status.success() {
+                return ProbeInfo::default();
+            }
+            let output = String::from_utf8_lossy(&bytes);
+            let total = output.lines().rev().find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                (name.trim().eq_ignore_ascii_case("content-length"))
+                    .then(|| value.trim().parse().ok())
+                    .flatten()
+            });
+            let accept_ranges = output.lines().any(|line| {
+                line.split_once(':')
+                    .map(|(name, value)| {
+                        name.trim().eq_ignore_ascii_case("accept-ranges")
+                            && value.trim().eq_ignore_ascii_case("bytes")
+                    })
+                    .unwrap_or(false)
+            });
+            return ProbeInfo {
+                total,
+                accept_ranges,
+                cancelled: false,
+            };
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+pub(super) fn start_single_http_download(
+    store: Store,
+    writer: Writer,
+    task: Task,
+    output: String,
+    total: Option<u64>,
+) {
+    update(&store, &writer, &task.id, |t| {
+        t.state = "starting".into();
+        t.phase = "starting".into();
+        t.total_bytes = total;
+        t.active_connections = 0;
+        t.segments_completed = 0;
+        t.segments_total = 0;
+        t.message = Some("正在连接资源".into());
+    });
+    let mut args = vec![
+        "--silent".into(),
+        "--show-error".into(),
+        "--fail".into(),
+        "--location".into(),
+        "--retry".into(),
+        "3".into(),
+        "--retry-all-errors".into(),
+        "--continue-at".into(),
+        "-".into(),
+        "--output".into(),
+        output.clone(),
+    ];
+    add_header_args(&mut args, &task);
+    args.push(task.url.clone());
+    let child = match Command::new("curl")
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => register_process(&store, &task.id, child),
+        Err(error) => {
+            update(&store, &writer, &task.id, |t| {
+                t.state = "failed".into();
+                t.phase = "failed".into();
+                t.error = Some(error.to_string());
+                t.message = Some("无法启动下载程序".into());
+            });
+            return;
+        }
+    };
+    let mut sampled_at = Instant::now();
+    let mut smoothed_speed = 0u64;
+    let mut last_bytes = fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
+    update(&store, &writer, &task.id, |t| {
+        t.state = "running".into();
+        t.phase = "downloading".into();
+        t.downloaded_bytes = last_bytes;
+        t.active_connections = 1;
+        t.message = Some("正在下载".into());
+    });
+    loop {
+        thread::sleep(Duration::from_millis(500));
+        if cancel_requested(&store, &task.id) {
+            if let Ok(mut child) = child.lock() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            mark_stopped(&store, &writer, &task.id);
+            return;
+        }
+        let bytes = fs::metadata(&output).map(|m| m.len()).unwrap_or(last_bytes);
+        let sample_seconds = sampled_at.elapsed().as_secs_f64().max(0.001);
+        let sampled_speed = (bytes.saturating_sub(last_bytes)) as f64 / sample_seconds;
+        if sampled_speed > 0.0 {
+            smoothed_speed = if smoothed_speed == 0 {
+                sampled_speed as u64
+            } else {
+                (smoothed_speed as f64 * 0.6 + sampled_speed * 0.4) as u64
+            };
+        }
+        sampled_at = Instant::now();
+        last_bytes = bytes;
+        let percent = total
+            .map(|size| {
+                if size == 0 {
+                    0
+                } else {
+                    ((bytes.saturating_mul(100) / size).min(99)) as u8
+                }
+            })
+            .unwrap_or(0);
+        let eta = total.and_then(|size| {
+            (smoothed_speed > 0).then(|| size.saturating_sub(bytes) / smoothed_speed)
+        });
+        update(&store, &writer, &task.id, |t| {
+            if !matches!(
+                t.state.as_str(),
+                "succeeded" | "failed" | "cancelled" | "interrupted"
+            ) {
+                t.progress = percent;
+                t.downloaded_bytes = bytes;
+                t.total_bytes = total;
+                t.speed_bytes_per_second = smoothed_speed;
+                t.eta_seconds = eta;
+            }
+        });
+        let process_status = child
+            .lock()
+            .map_err(|_| io::Error::other("process_lock_poisoned"))
+            .and_then(|mut child| child.try_wait());
+        match process_status {
+            Ok(Some(status)) => {
+                unregister_process(&store, &task.id, &child);
+                if cancel_requested(&store, &task.id) {
+                    mark_stopped(&store, &writer, &task.id);
+                    return;
+                }
+                if status.success() {
+                    update(&store, &writer, &task.id, |t| {
+                        t.state = "succeeded".into();
+                        t.phase = "completed".into();
+                        t.progress = 100;
+                        t.downloaded_bytes =
+                            fs::metadata(&output).map(|m| m.len()).unwrap_or(bytes);
+                        t.total_bytes = total.or(Some(t.downloaded_bytes));
+                        t.active_connections = 0;
+                        t.eta_seconds = Some(0);
+                        t.message = Some("下载完成".into());
+                    });
+                } else {
+                    update(&store, &writer, &task.id, |t| {
+                        t.state = "failed".into();
+                        t.phase = "failed".into();
+                        t.active_connections = 0;
+                        t.error = Some("curl_download_failed".into());
+                        t.message = Some("下载失败，请检查网络或资源地址".into());
+                    });
+                }
+                break;
+            }
+            Err(error) => {
+                unregister_process(&store, &task.id, &child);
+                update(&store, &writer, &task.id, |t| {
+                    t.state = "failed".into();
+                    t.phase = "failed".into();
+                    t.active_connections = 0;
+                    t.error = Some(error.to_string());
+                });
+                break;
+            }
+            Ok(None) => {}
+        }
+    }
+}
+
+pub(super) fn start_parallel_http_download(
+    store: Store,
+    writer: Writer,
+    task: Task,
+    output: String,
+    total: u64,
+) -> bool {
+    let count = usize::from(task.download_threads.clamp(2, MAX_DOWNLOAD_THREADS));
+    let part_dir = PathBuf::from(format!("{output}.streamfirefly-parts-{}", task.id));
+    if fs::create_dir_all(&part_dir).is_err() {
+        return false;
+    }
+    let ranges: Vec<(u64, u64)> = (0..count)
+        .map(|index| {
+            let start = total * index as u64 / count as u64;
+            let end = total * (index as u64 + 1) / count as u64 - 1;
+            (start, end)
+        })
+        .collect();
+    let mut children = Vec::new();
+    for (index, (start, end)) in ranges.iter().enumerate() {
+        let part = part_dir.join(format!("{index:04}.part"));
+        let mut args = vec![
+            "--silent".into(),
+            "--show-error".into(),
+            "--fail".into(),
+            "--location".into(),
+            "--retry".into(),
+            "3".into(),
+            "--retry-all-errors".into(),
+            "--range".into(),
+            format!("{start}-{end}"),
+            "--output".into(),
+            part.to_string_lossy().into(),
+        ];
+        add_header_args(&mut args, &task);
+        args.push(task.url.clone());
+        match Command::new("curl")
+            .args(args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(child) => children.push((part, register_process(&store, &task.id, child))),
+            Err(_) => {
+                stop_process(&store, &task.id);
+                let _ = fs::remove_dir_all(&part_dir);
+                return false;
+            }
+        }
+    }
+    update(&store, &writer, &task.id, |t| {
+        t.state = "running".into();
+        t.phase = "downloading".into();
+        t.total_bytes = Some(total);
+        t.active_connections = count as u8;
+        t.segments_total = count as u32;
+        t.segments_completed = 0;
+        t.message = Some(format!("正在并发下载（{count} 路）"));
+    });
+    let mut sampled_at = Instant::now();
+    let mut last_bytes = 0u64;
+    let mut smoothed_speed = 0u64;
+    loop {
+        thread::sleep(Duration::from_millis(500));
+        if cancel_requested(&store, &task.id) {
+            stop_process(&store, &task.id);
+            if let Some((first_part, _)) = children.first() {
+                if fs::metadata(first_part)
+                    .map(|metadata| metadata.len())
+                    .unwrap_or(0)
+                    > 0
+                {
+                    let _ = fs::copy(first_part, &output);
+                }
+            }
+            let _ = fs::remove_dir_all(&part_dir);
+            mark_stopped(&store, &writer, &task.id);
+            return true;
+        }
+        let bytes: u64 = children
+            .iter()
+            .map(|(path, _)| fs::metadata(path).map(|m| m.len()).unwrap_or(0))
+            .sum();
+        let sample_seconds = sampled_at.elapsed().as_secs_f64().max(0.001);
+        let sampled_speed = bytes.saturating_sub(last_bytes) as f64 / sample_seconds;
+        if sampled_speed > 0.0 {
+            smoothed_speed = if smoothed_speed == 0 {
+                sampled_speed as u64
+            } else {
+                (smoothed_speed as f64 * 0.6 + sampled_speed * 0.4) as u64
+            };
+        }
+        sampled_at = Instant::now();
+        last_bytes = bytes;
+        let completed = children
+            .iter()
+            .filter(|(path, child)| {
+                child
+                    .lock()
+                    .ok()
+                    .and_then(|mut child| child.try_wait().ok().flatten())
+                    .map(|status| status.success())
+                    .unwrap_or(false)
+                    && path.exists()
+            })
+            .count() as u32;
+        update(&store, &writer, &task.id, |t| {
+            t.progress = ((bytes.saturating_mul(100) / total).min(99)) as u8;
+            t.downloaded_bytes = bytes;
+            t.speed_bytes_per_second = smoothed_speed;
+            t.eta_seconds =
+                (smoothed_speed > 0).then(|| total.saturating_sub(bytes) / smoothed_speed);
+            t.segments_completed = completed;
+        });
+        let statuses: Vec<Option<bool>> = children
+            .iter()
+            .map(|(_, child)| {
+                child
+                    .lock()
+                    .ok()
+                    .and_then(|mut child| child.try_wait().ok().flatten())
+                    .map(|status| status.success())
+            })
+            .collect();
+        if statuses.iter().all(Option::is_some) {
+            for (_, child) in &children {
+                unregister_process(&store, &task.id, child);
+            }
+            let valid = statuses.iter().all(|status| *status == Some(true))
+                && children.iter().enumerate().all(|(index, (path, _))| {
+                    fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+                        == ranges[index].1 - ranges[index].0 + 1
+                });
+            if !valid {
+                let _ = fs::remove_dir_all(&part_dir);
+                return false;
+            }
+            let mut destination = match OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&output)
+            {
+                Ok(file) => file,
+                Err(_) => {
+                    let _ = fs::remove_dir_all(&part_dir);
+                    return false;
+                }
+            };
+            for (path, _) in &children {
+                let mut part = match fs::File::open(path) {
+                    Ok(file) => file,
+                    Err(_) => {
+                        let _ = fs::remove_dir_all(&part_dir);
+                        return false;
+                    }
+                };
+                if io::copy(&mut part, &mut destination).is_err() {
+                    let _ = fs::remove_dir_all(&part_dir);
+                    return false;
+                }
+            }
+            let _ = fs::remove_dir_all(&part_dir);
+            update(&store, &writer, &task.id, |t| {
+                t.state = "succeeded".into();
+                t.phase = "completed".into();
+                t.progress = 100;
+                t.downloaded_bytes = total;
+                t.total_bytes = Some(total);
+                t.active_connections = 0;
+                t.segments_completed = count as u32;
+                t.speed_bytes_per_second = smoothed_speed;
+                t.eta_seconds = Some(0);
+                t.message = Some("下载完成".into());
+            });
+            return true;
+        }
+    }
+}
+
+pub(super) fn start_http_download(store: Store, writer: Writer, task: Task, output: String) {
+    let probe = probe_size(&store, &task);
+    if probe.cancelled || cancel_requested(&store, &task.id) {
+        mark_stopped(&store, &writer, &task.id);
+        return;
+    }
+    if probe.accept_ranges && task.download_threads > 1 {
+        if let Some(total) = probe.total {
+            if total >= 1024 * 1024
+                && start_parallel_http_download(
+                    store.clone(),
+                    writer.clone(),
+                    task.clone(),
+                    output.clone(),
+                    total,
+                )
+            {
+                return;
+            }
+        }
+    }
+    start_single_http_download(store, writer, task, output, probe.total);
+}

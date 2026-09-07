@@ -2,6 +2,8 @@
 
 Status: proposed
 
+本记录中的 HLS v1 回退与旧 Host 混用约定已由 `2026-09-07-unified-download-queue-and-atomic-upgrade.md` 取代。当前点播统一使用 v2 计划，直播显式使用 v3；检查点、密钥与敏感信息边界继续有效。
+
 ## Problem
 
 由 FFmpeg 直接读取远端 HLS 清单时，流萤无法稳定展示切片级进度，也无法独立控制并发、重试和进程重启恢复。登录资源和 AES-128 密钥又包含不能持久化的敏感信息，因此检查点不能简单保存完整请求上下文。

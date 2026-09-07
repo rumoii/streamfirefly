@@ -35,7 +35,7 @@ vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { cal
 
 const { default: ResourcesView } = await import("./ResourcesView.vue");
 
-const defaultState = (expandedId = "hls-1"): ResourceViewState => ({ pattern: "", type: "all", minMb: "", maxMb: "", sortMode: "detected", collapsed: false, expandedId, revision: 0 });
+const defaultState = (expandedId = "hls-1"): ResourceViewState => ({ pattern: "", type: "all", minMb: "", maxMb: "", minDuration: "", maxDuration: "", sortMode: "detected", collapsed: false, expandedId, revision: 0 });
 const candidate = { id: "hls-1", url: "https://media.example/master.m3u8", type: "hls", sizeKind: "manifest", pageTitle: "测试 HLS", requestHeaders: { Referer: "https://media.example/page" } };
 
 describe("resource preview lifecycle", () => {

@@ -18,6 +18,7 @@ const executedScripts = [];
 const tabMessages = [];
 const previewRuleUpdates = [];
 let sidePanelBehavior = null;
+let nativeInfoError = null;
 let nextTabId = 100;
 const tabsById = new Map([
   [7, { id: 7, active: true, url: 'https://media.example/page', title: '流萤 · 流萤 · 媒体页面 A', lastAccessed: 2, windowId: 1 }],
@@ -60,7 +61,7 @@ const api = {
     connectNative: () => ({
       onMessage: { addListener: listener => { nativeListeners.message = listener; } },
       onDisconnect: { addListener: listener => { nativeListeners.disconnect = listener; } },
-      postMessage: message => { nativePosted.push(structuredClone(message)); queueMicrotask(() => nativeListeners.message({ version: 1, id: message.id, ok: true, protocolVersion: 3, supportedProtocolVersions: [2, 3], capabilities: ['inline-hls-v1', 'task-control-v1', 'hls-selection-v1', 'task-output-group-v1'] })); }
+      postMessage: message => { nativePosted.push(structuredClone(message)); queueMicrotask(() => nativeListeners.message(nativeInfoError && message.type === 'host.info' ? { id: message.id, ok: false, error: nativeInfoError } : { version: 1, id: message.id, ok: true, protocolVersion: 3, supportedProtocolVersions: [3], capabilities: ['inline-hls-v1', 'task-control-v1', 'hls-selection-v1', 'task-output-group-v1', 'hls-segment-engine-v1', 'hls-live-engine-v1', 'task-queue-v1', 'task-idempotency-v1'] })); }
     })
   },
   tabs: {
@@ -86,7 +87,7 @@ const api = {
   },
   windows: { update: async (id, properties) => { windowUpdates.push({ id, properties: { ...properties } }); } }
 };
-const source = fs.readFileSync(path.join(root, 'extension', 'background.js'), 'utf8');
+const source = ["background-native.js","background-workspace.js","background-preview.js","background-resources.js","background.js"].map(file => fs.readFileSync(path.join(path.join(root, 'extension'), file), 'utf8')).join('\n');
 vm.runInNewContext(source, { chrome: api, URL, Map, Set, Number, Object, Date, Promise, TextEncoder, TextDecoder, Headers, Uint8Array, crypto: webcrypto, structuredClone, fetch: async () => fetchResponse, setTimeout, clearTimeout, console });
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
@@ -100,12 +101,10 @@ const send = (message, sender = {}) => new Promise((resolve, reject) => {
 
 const nativeInfo = await send({ type: 'native.connect' });
 if (!nativeInfo.ok || !nativeInfo.capabilities.includes('inline-hls-v1') || !nativeInfo.capabilities.includes('task-control-v1')) throw new Error(`Native capability negotiation failed: ${JSON.stringify(nativeInfo)}`);
-const oldHostRejectedV2 = await send({ type: 'task.create', payload: { hlsPlan: { version: 2 } } });
-if (oldHostRejectedV2.ok || oldHostRejectedV2.error !== 'hls_selection_native_upgrade_required') throw new Error(`Old host accepted HLS v2: ${JSON.stringify(oldHostRejectedV2)}`);
-const oldHostRejectedV3 = await send({ type: 'task.create', payload: { hlsPlan: { version: 3 } } });
-if (oldHostRejectedV3.ok || oldHostRejectedV3.error !== 'hls_selection_native_upgrade_required') throw new Error(`Old host accepted live HLS v3: ${JSON.stringify(oldHostRejectedV3)}`);
-const oldHostAcceptedV1 = await send({ type: 'task.create', payload: { hlsPlan: { version: 1 } } });
-if (!oldHostAcceptedV1.ok) throw new Error(`Old host rejected compatible HLS v1: ${JSON.stringify(oldHostAcceptedV1)}`);
+const rejectedV1 = await send({ type: 'task.create', payload: { hlsPlan: { version: 1 } } });
+if (rejectedV1.ok || rejectedV1.error !== 'hls_plan_version_unsupported') throw new Error('Legacy HLS plan was accepted');
+const acceptedV2 = await send({ type: 'task.create', payload: { hlsPlan: { version: 2 } } });
+if (!acceptedV2.ok) throw new Error('Current HLS plan was rejected');
 
 listeners.beforeHeaders({ tabId: 7, url: 'https://media.example/a.mp4#fragment', requestId: '1', requestHeaders: [{ name: 'Referer', value: 'https://media.example/page' }, { name: 'Authorization', value: 'Bearer preview' }, { name: 'X-Secret', value: 'must-not-leak' }] });
 listeners.headers({ tabId: 7, url: 'https://media.example/a.mp4#fragment', requestId: '1', statusCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'video/mp4' }, { name: 'Content-Length', value: '1024' }, { name: 'Content-Disposition', value: 'attachment; filename=movie.mp4' }] });
@@ -224,7 +223,10 @@ if (!repeatedWorkspace.ok || tabMessages.slice(messagesBeforeRepeat).some(entry 
 
 const senderView = await send({ type: 'ui.context.get', scope: 'sender' }, { tab: { ...tabsById.get(8) } });
 if (!senderView.ok || senderView.context.sourceTabId !== 8) throw new Error(`Workspace context did not use its sender tab: ${JSON.stringify(senderView)}`);
-await send({ type: 'task.create', payload: { url: 'https://video.example/file.mp4', sourceTabId: 7, sourceContextId: 'forged' } }, { tab: { ...tabsById.get(8) } });
+const postedBeforeStaleTask = nativePosted.length;
+const staleTask = await send({ type: 'task.create', payload: { url: 'https://video.example/file.mp4', sourceTabId: 7, sourceContextId: 'forged' } }, { tab: { ...tabsById.get(8) } });
+if (staleTask.ok || staleTask.error !== 'resource_view_context_stale' || nativePosted.length !== postedBeforeStaleTask) throw new Error(`Stale workspace task was forwarded: ${JSON.stringify(staleTask)}`);
+await send({ type: 'task.create', payload: { url: 'https://video.example/file.mp4', sourceTabId: 7, sourceContextId: senderView.context.sourceContextId } }, { tab: { ...tabsById.get(8) } });
 const workspaceTask = nativePosted.at(-1)?.payload;
 if (workspaceTask?.sourceTabId !== 8 || workspaceTask?.sourceContextId !== senderView.context.sourceContextId) throw new Error(`Workspace task escaped its sender context: ${JSON.stringify(workspaceTask)}`);
 const firstClose = await send({ type: 'workspace.close' }, { tab: { ...tabsById.get(8) } });
@@ -245,4 +247,10 @@ tabsById.delete(7);
 listeners.removed(7);
 await flush();
 if (sessionValues['media-candidates-v2:7']) throw new Error('Closing a source tab did not remove its ephemeral media state');
-console.log('Extension candidate state, UI context, and workspace lifecycle tests passed');
+nativeListeners.disconnect();
+nativeInfoError = 'native_host_timeout';
+const timedOutConnection = await send({ type: 'native.connect' });
+if (timedOutConnection.ok || timedOutConnection.error !== 'native_host_timeout') throw new Error('Failed handshake was not reported');
+nativeInfoError = null;
+if (!(await send({ type: 'native.connect' })).ok) throw new Error('Failed handshake was cached and prevented reconnection');
+console.log('Extension candidate state, UI context, workspace lifecycle, and native reconnection tests passed');

@@ -1,4 +1,24 @@
 mod hls;
+mod protocol;
+fn main() -> io::Result<()> {
+    protocol::run()
+}
+mod model;
+use model::*;
+mod media_process;
+use media_process::*;
+mod hls_download;
+use hls_download::*;
+mod processes;
+use processes::*;
+mod http_download;
+use http_download::*;
+mod task_control;
+use task_control::*;
+mod task_store;
+use task_store::*;
+mod scheduler;
+use scheduler::{remove_pending, scheduler_active, scheduler_full, start_download};
 
 use hls::{
     decrypt_aes128, load_checkpoint, local_playlist, media_header_valid, merge_live_window,
@@ -20,7 +40,7 @@ use std::{
         mpsc, Arc, Mutex,
     },
     thread,
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, Instant},
 };
 use uuid::Uuid;
 
@@ -31,131 +51,6 @@ const MAX_DOWNLOAD_THREADS: u8 = 16;
 const INLINE_MANIFEST_MAX_BYTES: usize = 512 * 1024;
 const SENSITIVE_REQUEST_HEADERS: [&str; 2] = ["cookie", "authorization"];
 
-#[derive(Debug, Clone)]
-struct InlineManifest {
-    text: String,
-    base_url: String,
-}
-
-#[derive(Debug, Clone)]
-struct HlsSubtitlePlan {
-    language: Option<String>,
-    label: Option<String>,
-    extension: String,
-    manifest: InlineManifest,
-}
-
-#[derive(Debug, Clone)]
-struct HlsPlan {
-    version: u8,
-    duration: f64,
-    container: String,
-    video_manifest: InlineManifest,
-    audio_manifest: Option<InlineManifest>,
-    subtitles: Vec<HlsSubtitlePlan>,
-    key_override: Option<KeyOverride>,
-    live: bool,
-    poll_interval_seconds: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct TaskOutput {
-    kind: String,
-    #[serde(default)]
-    language: Option<String>,
-    #[serde(default)]
-    label: Option<String>,
-    #[serde(default)]
-    path: Option<String>,
-    state: String,
-    #[serde(default)]
-    error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Task {
-    id: String,
-    url: String,
-    title: String,
-    state: String,
-    #[serde(default)]
-    phase: String,
-    progress: u8,
-    #[serde(default)]
-    downloaded_bytes: u64,
-    #[serde(default)]
-    total_bytes: Option<u64>,
-    #[serde(default)]
-    speed_bytes_per_second: u64,
-    #[serde(default)]
-    eta_seconds: Option<u64>,
-    #[serde(default)]
-    attempt: u8,
-    #[serde(default)]
-    message: Option<String>,
-    output: Option<String>,
-    error: Option<String>,
-    mime: Option<String>,
-    #[serde(default)]
-    referer: Option<String>,
-    #[serde(default = "default_download_threads")]
-    download_threads: u8,
-    #[serde(default)]
-    request_headers: HashMap<String, String>,
-    #[serde(default)]
-    active_connections: u8,
-    #[serde(default)]
-    segments_completed: u32,
-    #[serde(default)]
-    segments_total: u32,
-    #[serde(default)]
-    source_context_id: Option<String>,
-    #[serde(default)]
-    outputs: Vec<TaskOutput>,
-    #[serde(default)]
-    hls_selection: bool,
-    #[serde(default)]
-    hls_plan_version: u8,
-    #[serde(default)]
-    failed_segments: u32,
-    #[serde(default)]
-    retry_count: u32,
-    #[serde(default)]
-    checkpoint_state: Option<String>,
-    #[serde(default)]
-    resume_requirement: Option<String>,
-    #[serde(default)]
-    requires_authorization: bool,
-    #[serde(default)]
-    requires_key_override: bool,
-    #[serde(default)]
-    live_recording: bool,
-    #[serde(default)]
-    recorded_duration: f64,
-    #[serde(default)]
-    last_media_sequence: Option<u64>,
-    #[serde(default)]
-    source_candidate_id: Option<String>,
-    #[serde(skip)]
-    inline_manifest: Option<InlineManifest>,
-    #[serde(skip)]
-    hls_plan: Option<HlsPlan>,
-}
-
-struct TempManifestFile(PathBuf);
-
-impl TempManifestFile {
-    fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for TempManifestFile {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
-    }
-}
-
 #[derive(Clone)]
 struct Store {
     path: PathBuf,
@@ -165,6 +60,11 @@ struct Store {
     pauses: Arc<Mutex<HashSet<String>>>,
     stops: Arc<Mutex<HashSet<String>>>,
     recovery_started: Arc<AtomicBool>,
+    scheduler: Arc<Mutex<scheduler::Scheduler>>,
+    persistence: Arc<Mutex<()>>,
+    creation: Arc<Mutex<()>>,
+    load_error: Option<String>,
+    runtime_error: Arc<Mutex<Option<String>>>,
 }
 type Writer = Arc<Mutex<io::BufWriter<io::Stdout>>>;
 
@@ -185,9 +85,6 @@ fn state_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
         .join("StreamFirefly")
         .join("tasks.json")
-}
-fn inline_manifest_dir() -> PathBuf {
-    std::env::temp_dir().join("StreamFirefly").join("manifests")
 }
 fn task_work_root_for_state(path: &Path) -> PathBuf {
     path.parent().unwrap_or(Path::new(".")).join("tasks")
@@ -311,27 +208,6 @@ fn new_checkpoint(task_id: &str, plan: &HlsPlan) -> Result<HlsCheckpoint, String
     })
 }
 
-fn cleanup_stale_inline_manifests() {
-    let dir = inline_manifest_dir();
-    let Ok(entries) = fs::read_dir(&dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let stale = entry
-            .metadata()
-            .ok()
-            .and_then(|metadata| metadata.modified().ok())
-            .and_then(|modified| SystemTime::now().duration_since(modified).ok())
-            .is_some_and(|age| age >= Duration::from_secs(24 * 60 * 60));
-        if stale
-            && path.is_file()
-            && path.extension().and_then(|value| value.to_str()) == Some("m3u8")
-        {
-            let _ = fs::remove_file(path);
-        }
-    }
-}
 fn default_download_dir() -> PathBuf {
     state_path()
         .parent()
@@ -339,152 +215,6 @@ fn default_download_dir() -> PathBuf {
         .join("downloads")
 }
 
-fn load_store(path: &Path) -> Store {
-    let mut tasks: Vec<Task> = fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-        .and_then(|v| {
-            (v["version"].as_u64() == Some(STORE_VERSION.into()))
-                .then(|| serde_json::from_value(v["tasks"].clone()).ok())
-                .flatten()
-        })
-        .unwrap_or_default();
-    // Credentials are intentionally valid only for the process that captured them.
-    // This also scrubs task files written by versions that persisted sensitive headers.
-    for task in &mut tasks {
-        let had_credentials = task.requires_authorization
-            || task
-                .request_headers
-                .keys()
-                .any(|name| is_sensitive_request_header(name));
-        strip_sensitive_headers(task);
-        if matches!(
-            task.state.as_str(),
-            "running"
-                | "queued"
-                | "starting"
-                | "downloading"
-                | "retrying"
-                | "pausing"
-                | "cancelling"
-                | "stopping"
-        ) {
-            let recoverable_hls = task.hls_plan_version >= 2
-                && checkpoint_available(&checkpoint_path_for_state(path, &task.id));
-            task.state = "interrupted".into();
-            task.phase = "interrupted".into();
-            task.error = Some("native_host_restarted".into());
-            task.resume_requirement = if !recoverable_hls {
-                None
-            } else if had_credentials && task.requires_key_override {
-                Some("authorization_and_key_required".into())
-            } else if had_credentials {
-                Some("authorization_required".into())
-            } else if task.requires_key_override {
-                Some("key_required".into())
-            } else {
-                None
-            };
-            task.checkpoint_state = task.hls_selection.then(|| {
-                if recoverable_hls {
-                    "recoverable"
-                } else {
-                    "missing"
-                }
-                .into()
-            });
-            task.message = Some(if !recoverable_hls {
-                if had_credentials {
-                    "登录凭据未持久化，请从页面重新发起下载"
-                } else {
-                    "本地助手重新启动，请重新发起下载"
-                }
-                .into()
-            } else if had_credentials {
-                "登录凭据未持久化，请回到来源页面重新授权后继续".into()
-            } else if task.requires_key_override {
-                "自定义密钥未持久化，请重新输入后继续".into()
-            } else {
-                "本地助手重新启动，正在恢复已完成切片".into()
-            });
-            for output in &mut task.outputs {
-                if matches!(output.state.as_str(), "queued" | "starting" | "running") {
-                    output.state = "interrupted".into();
-                    output.error = Some("native_host_restarted".into());
-                }
-            }
-        }
-    }
-    let store = Store {
-        path: path.to_path_buf(),
-        tasks: Arc::new(Mutex::new(tasks)),
-        processes: Arc::new(Mutex::new(HashMap::new())),
-        cancellations: Arc::new(Mutex::new(HashMap::new())),
-        pauses: Arc::new(Mutex::new(HashSet::new())),
-        stops: Arc::new(Mutex::new(HashSet::new())),
-        recovery_started: Arc::new(AtomicBool::new(false)),
-    };
-    save_store(&store);
-    store
-}
-
-fn save_store(store: &Store) {
-    if let Some(parent) = store.path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    if let Ok(tasks) = store.tasks.lock() {
-        let persisted_tasks: Vec<Task> = tasks.iter().map(sanitized_task).collect();
-        let data = json!({"version": STORE_VERSION, "tasks": persisted_tasks});
-        let tmp = store.path.with_extension("tmp");
-        if fs::write(&tmp, serde_json::to_vec_pretty(&data).unwrap_or_default()).is_ok() {
-            let _ = fs::remove_file(&store.path);
-            let _ = fs::rename(tmp, &store.path);
-        }
-    }
-}
-
-fn is_sensitive_request_header(name: &str) -> bool {
-    SENSITIVE_REQUEST_HEADERS
-        .iter()
-        .any(|sensitive| name.eq_ignore_ascii_case(sensitive))
-}
-
-fn strip_sensitive_headers(task: &mut Task) {
-    task.request_headers
-        .retain(|name, _| !is_sensitive_request_header(name));
-}
-
-fn sanitized_task(task: &Task) -> Task {
-    let mut copy = task.clone();
-    strip_sensitive_headers(&mut copy);
-    copy.inline_manifest = None;
-    copy.hls_plan = None;
-    if copy.outputs.len() <= 1 {
-        if let Some(primary) = copy
-            .outputs
-            .iter_mut()
-            .find(|output| output.kind == "media")
-        {
-            primary.state = copy.state.clone();
-            primary.error = copy.error.clone();
-        }
-    }
-    if copy.outputs.is_empty() && copy.output.is_some() {
-        copy.outputs.push(TaskOutput {
-            kind: "media".into(),
-            language: None,
-            label: None,
-            path: copy.output.clone(),
-            state: copy.state.clone(),
-            error: copy.error.clone(),
-        });
-    }
-    copy
-}
-
-fn sanitized_tasks(tasks: &[Task]) -> Vec<Task> {
-    tasks.iter().map(sanitized_task).collect()
-}
 fn read_message(reader: &mut impl Read) -> io::Result<Value> {
     let mut length = [0u8; 4];
     reader.read_exact(&mut length)?;
@@ -657,11 +387,8 @@ fn hls_plan(payload: &Value) -> Result<Option<HlsPlan>, &'static str> {
     };
     let version = value["version"]
         .as_u64()
-        .filter(|version| matches!(*version, 1 | 2 | 3))
+        .filter(|version| matches!(*version, 2 | 3))
         .ok_or("hls_plan_version_unsupported")? as u8;
-    if version == 1 && value.get("keyOverride").is_some_and(|item| !item.is_null()) {
-        return Err("hls_plan_version_unsupported");
-    }
     let live = version == 3;
     let duration = value["duration"]
         .as_f64()
@@ -728,33 +455,6 @@ fn hls_plan(payload: &Value) -> Result<Option<HlsPlan>, &'static str> {
         live,
         poll_interval_seconds,
     }))
-}
-
-fn write_inline_manifest(task_id: &str, manifest: &InlineManifest) -> io::Result<TempManifestFile> {
-    write_named_manifest(task_id, "input", manifest)
-}
-
-fn write_named_manifest(
-    task_id: &str,
-    name: &str,
-    manifest: &InlineManifest,
-) -> io::Result<TempManifestFile> {
-    let dir = inline_manifest_dir();
-    fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("{task_id}-{name}.m3u8"));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)?;
-    if let Err(error) = file
-        .write_all(manifest.text.as_bytes())
-        .and_then(|_| file.flush())
-    {
-        drop(file);
-        let _ = fs::remove_file(&path);
-        return Err(error);
-    }
-    Ok(TempManifestFile(path))
 }
 
 fn extension_for(payload: &Value) -> String {
@@ -901,9 +601,42 @@ fn allowed_request_headers(payload: &Value) -> HashMap<String, String> {
 }
 
 fn create_task(store: &Store, payload: &Value) -> Result<Task, &'static str> {
+    let _creation = store.creation.lock().unwrap();
+    if store.load_error.is_some() {
+        return Err("task_store_unavailable");
+    }
+    if let Some(request_id) = payload["requestId"].as_str() {
+        if request_id.is_empty() || request_id.len() > 128 {
+            return Err("request_id_invalid");
+        }
+        if let Some(task) = store
+            .tasks
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|task| task.request_id.as_deref() == Some(request_id))
+            .cloned()
+        {
+            return Ok(task);
+        }
+    }
+    if payload["hlsPlan"]["version"].as_u64() == Some(3) && scheduler_full(store) {
+        return Err("live_capacity_unavailable");
+    }
     let inline_manifest = inline_manifest(payload)?;
     let hls_plan = hls_plan(payload)?;
     let hls_selection = hls_plan.is_some();
+    if !hls_selection
+        && (inline_manifest.is_some()
+            || payload["url"]
+                .as_str()
+                .is_some_and(|url| url.to_ascii_lowercase().contains(".m3u8"))
+            || payload["mime"]
+                .as_str()
+                .is_some_and(|mime| mime.contains("mpegurl")))
+    {
+        return Err("hls_plan_required");
+    }
     let url = payload["url"]
         .as_str()
         .filter(|url| is_network_url(url))
@@ -1008,6 +741,8 @@ fn create_task(store: &Store, payload: &Value) -> Result<Task, &'static str> {
     )
     .collect();
     let task = Task {
+        revision: 1,
+        request_id: payload["requestId"].as_str().map(str::to_owned),
         id,
         url,
         title: display_title,
@@ -1046,2244 +781,86 @@ fn create_task(store: &Store, payload: &Value) -> Result<Task, &'static str> {
         inline_manifest,
         hls_plan,
     };
+    if let Some(plan) = &task.hls_plan {
+        let checkpoint = new_checkpoint(&task.id, plan).map_err(|_| "hls_checkpoint_invalid")?;
+        save_checkpoint(&checkpoint_path_for_store(store, &task.id), &checkpoint)
+            .map_err(|_| "task_store_write_failed")?;
+    }
     tasks.push(task.clone());
-    drop(tasks);
-    save_store(store);
+    if persist_tasks(store, &tasks).is_err() {
+        tasks.retain(|current| current.id != task.id);
+        return Err("task_store_write_failed");
+    }
     Ok(task)
 }
 
-fn update(store: &Store, writer: &Writer, id: &str, f: impl FnOnce(&mut Task)) {
-    let changed = if let Ok(mut tasks) = store.tasks.lock() {
-        if let Some(task) = tasks.iter_mut().find(|t| t.id == id) {
-            f(task);
-            Some(task.clone())
-        } else {
-            None
-        }
-    } else {
-        None
+fn update(store: &Store, writer: &Writer, id: &str, change: impl FnOnce(&mut Task)) {
+    let mut tasks = store.tasks.lock().unwrap();
+    let Some(index) = tasks.iter().position(|task| task.id == id) else {
+        return;
     };
-    if let Some(task) = changed {
-        save_store(store);
-        let public_task = sanitized_task(&task);
+    change(&mut tasks[index]);
+    tasks[index].revision = tasks[index].revision.saturating_add(1);
+    if persist_tasks(store, &tasks).is_err() {
         emit(
             writer,
-            json!({"version":1,"type":"task.progress","task":public_task}),
+            json!({"version":1,"type":"task.persistence-error","id":id,"error":"task_store_write_failed"}),
         );
-    }
-}
-
-fn register_process(store: &Store, id: &str, child: Child) -> Arc<Mutex<Child>> {
-    let child = Arc::new(Mutex::new(child));
-    store
-        .processes
-        .lock()
-        .unwrap()
-        .entry(id.into())
-        .or_default()
-        .push(child.clone());
-    child
-}
-
-fn unregister_process(store: &Store, id: &str, process: &Arc<Mutex<Child>>) {
-    let mut processes = store.processes.lock().unwrap();
-    if let Some(items) = processes.get_mut(id) {
-        items.retain(|item| !Arc::ptr_eq(item, process));
-        if items.is_empty() {
-            processes.remove(id);
-        }
-    }
-}
-
-fn unregister_all_processes(store: &Store, id: &str) {
-    store.processes.lock().unwrap().remove(id);
-}
-
-fn clear_cancellation(store: &Store, id: &str) {
-    store.cancellations.lock().unwrap().remove(id);
-}
-
-fn clear_pause(store: &Store, id: &str) {
-    store.pauses.lock().unwrap().remove(id);
-}
-
-fn clear_stop(store: &Store, id: &str) {
-    store.stops.lock().unwrap().remove(id);
-}
-
-fn pause_requested(store: &Store, id: &str) -> bool {
-    store.pauses.lock().unwrap().contains(id)
-}
-
-fn cancel_requested(store: &Store, id: &str) -> bool {
-    store.cancellations.lock().unwrap().contains_key(id)
-}
-
-fn stop_requested(store: &Store, id: &str) -> bool {
-    store.stops.lock().unwrap().contains(id)
-}
-
-fn mark_stopped(store: &Store, writer: &Writer, id: &str) {
-    unregister_all_processes(store, id);
-    let paused = pause_requested(store, id);
-    update(store, writer, id, |task| {
-        task.state = if paused { "paused" } else { "cancelled" }.into();
-        task.phase = if paused { "paused" } else { "cancelled" }.into();
-        task.speed_bytes_per_second = 0;
-        task.eta_seconds = None;
-        task.active_connections = 0;
-        task.error = None;
-        for output in &mut task.outputs {
-            if matches!(output.state.as_str(), "queued" | "starting" | "running") {
-                output.state = if paused { "paused" } else { "cancelled" }.into();
-            }
-        }
-        task.message = Some(
-            if paused {
-                "下载已暂停"
-            } else {
-                "下载已取消"
-            }
-            .into(),
-        );
-    });
-    clear_cancellation(store, id);
-    clear_pause(store, id);
-    clear_stop(store, id);
-}
-
-fn stop_process(store: &Store, id: &str) {
-    let processes = store
-        .processes
-        .lock()
-        .unwrap()
-        .get(id)
-        .cloned()
-        .unwrap_or_default();
-    for process in processes {
-        if let Ok(mut child) = process.lock() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    }
-}
-
-fn wait_for_state(store: &Store, id: &str, expected: &[&str], deadline: Instant) -> bool {
-    loop {
-        let reached = store
-            .tasks
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|item| item.id == id)
-            .map(|item| expected.contains(&item.state.as_str()))
-            .unwrap_or(false);
-        if reached || Instant::now() >= deadline {
-            return reached;
-        }
-        thread::sleep(Duration::from_millis(50));
-    }
-}
-
-fn ensure_restart_context(store: &Store, task: &Task) -> Result<(), &'static str> {
-    if task.hls_selection
-        && task.hls_plan.is_none()
-        && !(task.hls_plan_version >= 2
-            && checkpoint_available(&checkpoint_path_for_store(store, &task.id)))
-    {
-        Err("hls_plan_expired")
-    } else {
-        Ok(())
-    }
-}
-
-fn task_control(store: &Store, writer: &Writer, payload: &Value) -> Result<Task, &'static str> {
-    let id = payload["id"]
-        .as_str()
-        .filter(|id| !id.is_empty())
-        .ok_or("task_id_empty")?;
-    let action = payload["action"].as_str().ok_or("task_action_empty")?;
-    let task = store
-        .tasks
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|task| task.id == id)
-        .cloned()
-        .ok_or("task_not_found")?;
-    match action {
-        "stop" => {
-            if !task.live_recording {
-                return Err("task_not_live");
-            }
-            if matches!(task.state.as_str(), "succeeded" | "partial") {
-                return Ok(sanitized_task(&task));
-            }
-            if !matches!(
-                task.state.as_str(),
-                "queued"
-                    | "starting"
-                    | "running"
-                    | "retrying"
-                    | "pausing"
-                    | "paused"
-                    | "interrupted"
-                    | "stopping"
-            ) {
-                return Err("task_not_stoppable");
-            }
-            store.stops.lock().unwrap().insert(id.into());
-            let needs_restart = matches!(task.state.as_str(), "paused" | "interrupted");
-            if needs_restart {
-                clear_pause(store, id);
-                clear_cancellation(store, id);
-            }
-            update(store, writer, id, |current| {
-                current.state = "stopping".into();
-                current.phase = "stopping".into();
-                current.message = Some("正在停止录制并保存已下载内容".into());
-            });
-            if needs_restart {
-                let checkpoint = load_checkpoint(&checkpoint_path_for_store(store, id))
-                    .map_err(|_| "hls_checkpoint_missing")?;
-                let mut resumed = task.clone();
-                resumed.hls_plan = Some(runtime_plan_from_persisted(&checkpoint.plan));
-                start_download(store.clone(), writer.clone(), resumed);
-            }
-        }
-        "pause" => {
-            if task.state == "paused" {
-                return Ok(sanitized_task(&task));
-            }
-            if !matches!(
-                task.state.as_str(),
-                "queued" | "starting" | "running" | "retrying"
-            ) {
-                return Err("task_not_pauseable");
-            }
-            store.pauses.lock().unwrap().insert(id.into());
-            store.cancellations.lock().unwrap().insert(id.into(), true);
-            update(store, writer, id, |task| {
-                task.state = "pausing".into();
-                task.phase = "pausing".into();
-                task.message = Some("正在暂停下载".into());
-            });
-            stop_process(store, id);
-            if !wait_for_state(
-                store,
-                id,
-                &["paused"],
-                Instant::now() + Duration::from_secs(5),
-            ) {
-                clear_pause(store, id);
-                clear_cancellation(store, id);
-                return Err("pause_failed");
-            }
-        }
-        "cancel" => {
-            if task.state == "cancelled" {
-                return Ok(sanitized_task(&task));
-            }
-            if !matches!(
-                task.state.as_str(),
-                "queued" | "starting" | "running" | "retrying" | "pausing" | "paused"
-            ) {
-                return Err("task_not_cancellable");
-            }
-            clear_pause(store, id);
-            clear_stop(store, id);
-            store.cancellations.lock().unwrap().insert(id.into(), true);
-            update(store, writer, id, |task| {
-                task.state = "cancelling".into();
-                task.phase = "cancelling".into();
-                task.message = Some("正在取消下载".into());
-            });
-            stop_process(store, id);
-            if task.state == "paused" {
-                mark_stopped(store, writer, id);
-            }
-            if !wait_for_state(
-                store,
-                id,
-                &["cancelled"],
-                Instant::now() + Duration::from_secs(5),
-            ) {
-                clear_cancellation(store, id);
-                return Err("cancel_failed");
-            }
-        }
-        "resume" | "retry" | "reauthorize" => {
-            let allowed = if action == "resume" {
-                matches!(task.state.as_str(), "paused" | "interrupted")
-            } else if action == "reauthorize" {
-                task.state == "interrupted"
-            } else {
-                matches!(
-                    task.state.as_str(),
-                    "failed" | "partial" | "cancelled" | "interrupted" | "paused"
-                )
-            };
-            if !allowed {
-                return Err(if action == "resume" {
-                    "task_not_resumable"
-                } else if action == "reauthorize" {
-                    "task_not_awaiting_authorization"
-                } else {
-                    "task_not_retryable"
-                });
-            }
-            ensure_restart_context(store, &task)?;
-            let resume_context = payload
-                .get("resumeContext")
-                .filter(|value| value.is_object());
-            let resumed_headers = resume_context
-                .map(allowed_request_headers)
-                .unwrap_or_default();
-            let resumed_key_override = resume_context
-                .and_then(|value| value.get("keyOverride"))
-                .filter(|value| !value.is_null())
-                .map(|value| {
-                    parse_key_override(
-                        value["kind"].as_str().unwrap_or(""),
-                        value["value"].as_str().unwrap_or(""),
-                        value["iv"].as_str(),
-                    )
-                    .map_err(|_| "hls_key_override_invalid")
-                })
-                .transpose()?;
-            let mut resumed_plan = task.hls_plan.clone().or_else(|| {
-                (task.hls_plan_version >= 2)
-                    .then(|| load_checkpoint(&checkpoint_path_for_store(store, &task.id)).ok())
-                    .flatten()
-                    .map(|checkpoint| runtime_plan_from_persisted(&checkpoint.plan))
-            });
-            if let (Some(plan), Some(key_override)) = (resumed_plan.as_mut(), resumed_key_override)
-            {
-                plan.key_override = Some(key_override);
-            }
-            if task
-                .resume_requirement
-                .as_deref()
-                .is_some_and(|value| value.contains("authorization"))
-                && !resumed_headers
-                    .keys()
-                    .any(|name| is_sensitive_request_header(name))
-            {
-                return Err("hls_authorization_required");
-            }
-            if task
-                .resume_requirement
-                .as_deref()
-                .is_some_and(|value| value.contains("key"))
-                && !resumed_plan
-                    .as_ref()
-                    .is_some_and(|plan| plan.key_override.is_some())
-            {
-                return Err("hls_key_required");
-            }
-            clear_pause(store, id);
-            clear_cancellation(store, id);
-            clear_stop(store, id);
-            update(store, writer, id, move |task| {
-                if !resumed_headers.is_empty() {
-                    if resumed_headers
-                        .keys()
-                        .any(|name| is_sensitive_request_header(name))
-                    {
-                        task.requires_authorization = true;
-                    }
-                    task.request_headers = resumed_headers;
-                }
-                if let Some(plan) = resumed_plan {
-                    task.hls_plan = Some(plan);
-                }
-                task.state = "retrying".into();
-                task.phase = "retrying".into();
-                task.attempt = task.attempt.saturating_add(1);
-                task.error = None;
-                task.speed_bytes_per_second = 0;
-                task.eta_seconds = None;
-                task.resume_requirement = None;
-                task.message = Some(
-                    if action == "resume" {
-                        "正在恢复下载"
-                    } else if action == "reauthorize" {
-                        "授权已更新，正在继续下载"
-                    } else {
-                        "正在重新下载"
-                    }
-                    .into(),
-                );
-            });
-            let restarted = store
-                .tasks
-                .lock()
-                .unwrap()
-                .iter()
-                .find(|task| task.id == id)
-                .cloned()
-                .ok_or("task_not_found")?;
-            start_download(store.clone(), writer.clone(), restarted);
-        }
-        _ => return Err("task_action_unsupported"),
-    }
-    store
-        .tasks
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|task| task.id == id)
-        .map(sanitized_task)
-        .ok_or("task_not_found")
-}
-
-fn delete_output(path: &str) -> Result<bool, &'static str> {
-    let path = Path::new(path);
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
-        Err(_) => return Err("file_delete_failed"),
-    };
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err("file_delete_unsafe");
-    }
-    fs::remove_file(path).map_err(|_| "file_delete_failed")?;
-    Ok(true)
-}
-
-fn task_output_paths(task: &Task) -> HashSet<String> {
-    let mut paths = HashSet::new();
-    if let Some(path) = &task.output {
-        paths.insert(path.clone());
-    }
-    for output in &task.outputs {
-        if let Some(path) = &output.path {
-            paths.insert(path.clone());
-        }
-    }
-    paths
-}
-
-fn delete_task_outputs(task: &Task) -> Result<bool, &'static str> {
-    let mut deleted = false;
-    for path in task_output_paths(task) {
-        deleted |= delete_output(&path)?;
-    }
-    Ok(deleted)
-}
-
-fn delete_task(store: &Store, writer: &Writer, payload: &Value) -> Result<Value, &'static str> {
-    let id = payload["id"]
-        .as_str()
-        .filter(|id| !id.is_empty())
-        .ok_or("task_id_empty")?;
-    let delete_file = payload["deleteFile"].as_bool().unwrap_or(false);
-    let task = store
-        .tasks
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|task| task.id == id)
-        .cloned()
-        .ok_or("task_not_found")?;
-    if matches!(
-        task.state.as_str(),
-        "queued" | "starting" | "running" | "retrying" | "pausing" | "cancelling"
-    ) {
-        clear_pause(store, id);
-        update(store, writer, id, |task| {
-            task.state = "cancelling".into();
-            task.phase = "cancelling".into();
-            task.message = Some("正在取消下载".into());
-        });
-        store.cancellations.lock().unwrap().insert(id.into(), true);
-        stop_process(store, id);
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            let terminal = store
-                .tasks
-                .lock()
-                .unwrap()
-                .iter()
-                .find(|item| item.id == id)
-                .map(|item| {
-                    matches!(
-                        item.state.as_str(),
-                        "cancelled" | "succeeded" | "failed" | "interrupted"
-                    )
-                })
-                .unwrap_or(true);
-            if terminal || Instant::now() >= deadline {
-                break;
-            }
-            thread::sleep(Duration::from_millis(50));
-        }
-        let cancelled = store
-            .tasks
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|item| item.id == id)
-            .map(|item| {
-                matches!(
-                    item.state.as_str(),
-                    "cancelled" | "succeeded" | "failed" | "interrupted"
-                )
-            })
-            .unwrap_or(false);
-        if !cancelled {
-            clear_cancellation(store, id);
-            update(store, writer, id, |task| {
-                task.state = "failed".into();
-                task.phase = "failed".into();
-                task.error = Some("cancel_failed".into());
-                task.message = Some("取消下载失败，任务和文件均已保留".into());
-            });
-            return Err("cancel_failed");
-        }
-    }
-    let file_deleted = if delete_file {
-        delete_task_outputs(&task)?
-    } else {
-        false
-    };
-    let removed = {
-        let mut tasks = store.tasks.lock().unwrap();
-        let before = tasks.len();
-        tasks.retain(|item| item.id != id);
-        tasks.len() != before
-    };
-    if !removed {
-        return Err("task_not_found");
-    }
-    clear_cancellation(store, id);
-    clear_pause(store, id);
-    let _ = fs::remove_dir_all(task_work_dir_for_store(store, id));
-    save_store(store);
-    emit(writer, json!({"version":1,"type":"task.deleted","id":id}));
-    Ok(
-        json!({"id": id, "fileDeleted": file_deleted, "fileKept": !delete_file && task.output.is_some()}),
-    )
-}
-
-#[derive(Default, Clone, Copy)]
-struct ProbeInfo {
-    total: Option<u64>,
-    accept_ranges: bool,
-    cancelled: bool,
-}
-
-fn add_header_args(args: &mut Vec<String>, task: &Task) {
-    for (name, value) in &task.request_headers {
-        args.push("--header".into());
-        args.push(format!("{name}: {value}"));
-    }
-}
-
-fn probe_size(store: &Store, task: &Task) -> ProbeInfo {
-    let mut command = Command::new("curl");
-    let mut args: Vec<String> = [
-        "--silent",
-        "--show-error",
-        "--fail",
-        "--location",
-        "--connect-timeout",
-        "10",
-        "--max-time",
-        "20",
-        "--head",
-    ]
-    .into_iter()
-    .map(str::to_string)
-    .collect();
-    add_header_args(&mut args, task);
-    args.push(task.url.clone());
-    command
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    let child = match command.spawn() {
-        Ok(child) => register_process(store, &task.id, child),
-        Err(_) => return ProbeInfo::default(),
-    };
-    loop {
-        if cancel_requested(store, &task.id) {
-            if let Ok(mut child) = child.lock() {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
-            unregister_process(store, &task.id, &child);
-            return ProbeInfo {
-                cancelled: true,
-                ..ProbeInfo::default()
-            };
-        }
-        let finished = match child.lock() {
-            Ok(mut child) => match child.try_wait() {
-                Ok(status) => status,
-                Err(_) => return ProbeInfo::default(),
-            },
-            Err(_) => return ProbeInfo::default(),
-        };
-        if let Some(status) = finished {
-            let mut bytes = Vec::new();
-            if let Ok(mut child) = child.lock() {
-                if let Some(mut stdout) = child.stdout.take() {
-                    let _ = stdout.read_to_end(&mut bytes);
-                }
-            }
-            unregister_process(store, &task.id, &child);
-            if !status.success() {
-                return ProbeInfo::default();
-            }
-            let output = String::from_utf8_lossy(&bytes);
-            let total = output.lines().rev().find_map(|line| {
-                let (name, value) = line.split_once(':')?;
-                (name.trim().eq_ignore_ascii_case("content-length"))
-                    .then(|| value.trim().parse().ok())
-                    .flatten()
-            });
-            let accept_ranges = output.lines().any(|line| {
-                line.split_once(':')
-                    .map(|(name, value)| {
-                        name.trim().eq_ignore_ascii_case("accept-ranges")
-                            && value.trim().eq_ignore_ascii_case("bytes")
-                    })
-                    .unwrap_or(false)
-            });
-            return ProbeInfo {
-                total,
-                accept_ranges,
-                cancelled: false,
-            };
-        }
-        thread::sleep(Duration::from_millis(50));
-    }
-}
-
-fn start_single_http_download(
-    store: Store,
-    writer: Writer,
-    task: Task,
-    output: String,
-    total: Option<u64>,
-) {
-    update(&store, &writer, &task.id, |t| {
-        t.state = "starting".into();
-        t.phase = "starting".into();
-        t.total_bytes = total;
-        t.active_connections = 0;
-        t.segments_completed = 0;
-        t.segments_total = 0;
-        t.message = Some("正在连接资源".into());
-    });
-    let mut args = vec![
-        "--silent".into(),
-        "--show-error".into(),
-        "--fail".into(),
-        "--location".into(),
-        "--retry".into(),
-        "3".into(),
-        "--retry-all-errors".into(),
-        "--continue-at".into(),
-        "-".into(),
-        "--output".into(),
-        output.clone(),
-    ];
-    add_header_args(&mut args, &task);
-    args.push(task.url.clone());
-    let child = match Command::new("curl")
-        .args(args)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        Ok(child) => register_process(&store, &task.id, child),
-        Err(error) => {
-            update(&store, &writer, &task.id, |t| {
-                t.state = "failed".into();
-                t.phase = "failed".into();
-                t.error = Some(error.to_string());
-                t.message = Some("无法启动下载程序".into());
-            });
-            return;
-        }
-    };
-    let mut sampled_at = Instant::now();
-    let mut smoothed_speed = 0u64;
-    let mut last_bytes = fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
-    update(&store, &writer, &task.id, |t| {
-        t.state = "running".into();
-        t.phase = "downloading".into();
-        t.downloaded_bytes = last_bytes;
-        t.active_connections = 1;
-        t.message = Some("正在下载".into());
-    });
-    loop {
-        thread::sleep(Duration::from_millis(500));
-        if cancel_requested(&store, &task.id) {
-            if let Ok(mut child) = child.lock() {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
-            mark_stopped(&store, &writer, &task.id);
-            return;
-        }
-        let bytes = fs::metadata(&output).map(|m| m.len()).unwrap_or(last_bytes);
-        let sample_seconds = sampled_at.elapsed().as_secs_f64().max(0.001);
-        let sampled_speed = (bytes.saturating_sub(last_bytes)) as f64 / sample_seconds;
-        if sampled_speed > 0.0 {
-            smoothed_speed = if smoothed_speed == 0 {
-                sampled_speed as u64
-            } else {
-                (smoothed_speed as f64 * 0.6 + sampled_speed * 0.4) as u64
-            };
-        }
-        sampled_at = Instant::now();
-        last_bytes = bytes;
-        let percent = total
-            .map(|size| {
-                if size == 0 {
-                    0
-                } else {
-                    ((bytes.saturating_mul(100) / size).min(99)) as u8
-                }
-            })
-            .unwrap_or(0);
-        let eta = total.and_then(|size| {
-            (smoothed_speed > 0).then(|| size.saturating_sub(bytes) / smoothed_speed)
-        });
-        update(&store, &writer, &task.id, |t| {
-            if !matches!(
-                t.state.as_str(),
-                "succeeded" | "failed" | "cancelled" | "interrupted"
-            ) {
-                t.progress = percent;
-                t.downloaded_bytes = bytes;
-                t.total_bytes = total;
-                t.speed_bytes_per_second = smoothed_speed;
-                t.eta_seconds = eta;
-            }
-        });
-        let process_status = child
-            .lock()
-            .map_err(|_| io::Error::other("process_lock_poisoned"))
-            .and_then(|mut child| child.try_wait());
-        match process_status {
-            Ok(Some(status)) => {
-                unregister_process(&store, &task.id, &child);
-                if cancel_requested(&store, &task.id) {
-                    mark_stopped(&store, &writer, &task.id);
-                    return;
-                }
-                if status.success() {
-                    update(&store, &writer, &task.id, |t| {
-                        t.state = "succeeded".into();
-                        t.phase = "completed".into();
-                        t.progress = 100;
-                        t.downloaded_bytes =
-                            fs::metadata(&output).map(|m| m.len()).unwrap_or(bytes);
-                        t.total_bytes = total.or(Some(t.downloaded_bytes));
-                        t.active_connections = 0;
-                        t.eta_seconds = Some(0);
-                        t.message = Some("下载完成".into());
-                    });
-                } else {
-                    update(&store, &writer, &task.id, |t| {
-                        t.state = "failed".into();
-                        t.phase = "failed".into();
-                        t.active_connections = 0;
-                        t.error = Some("curl_download_failed".into());
-                        t.message = Some("下载失败，请检查网络或资源地址".into());
-                    });
-                }
-                break;
-            }
-            Err(error) => {
-                unregister_process(&store, &task.id, &child);
-                update(&store, &writer, &task.id, |t| {
-                    t.state = "failed".into();
-                    t.phase = "failed".into();
-                    t.active_connections = 0;
-                    t.error = Some(error.to_string());
-                });
-                break;
-            }
-            Ok(None) => {}
-        }
-    }
-}
-
-fn start_parallel_http_download(
-    store: Store,
-    writer: Writer,
-    task: Task,
-    output: String,
-    total: u64,
-) -> bool {
-    let count = usize::from(task.download_threads.clamp(2, MAX_DOWNLOAD_THREADS));
-    let part_dir = PathBuf::from(format!("{output}.streamfirefly-parts-{}", task.id));
-    if fs::create_dir_all(&part_dir).is_err() {
-        return false;
-    }
-    let ranges: Vec<(u64, u64)> = (0..count)
-        .map(|index| {
-            let start = total * index as u64 / count as u64;
-            let end = total * (index as u64 + 1) / count as u64 - 1;
-            (start, end)
-        })
-        .collect();
-    let mut children = Vec::new();
-    for (index, (start, end)) in ranges.iter().enumerate() {
-        let part = part_dir.join(format!("{index:04}.part"));
-        let mut args = vec![
-            "--silent".into(),
-            "--show-error".into(),
-            "--fail".into(),
-            "--location".into(),
-            "--retry".into(),
-            "3".into(),
-            "--retry-all-errors".into(),
-            "--range".into(),
-            format!("{start}-{end}"),
-            "--output".into(),
-            part.to_string_lossy().into(),
-        ];
-        add_header_args(&mut args, &task);
-        args.push(task.url.clone());
-        match Command::new("curl")
-            .args(args)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-        {
-            Ok(child) => children.push((part, register_process(&store, &task.id, child))),
-            Err(_) => {
-                stop_process(&store, &task.id);
-                let _ = fs::remove_dir_all(&part_dir);
-                return false;
-            }
-        }
-    }
-    update(&store, &writer, &task.id, |t| {
-        t.state = "running".into();
-        t.phase = "downloading".into();
-        t.total_bytes = Some(total);
-        t.active_connections = count as u8;
-        t.segments_total = count as u32;
-        t.segments_completed = 0;
-        t.message = Some(format!("正在并发下载（{count} 路）"));
-    });
-    let mut sampled_at = Instant::now();
-    let mut last_bytes = 0u64;
-    let mut smoothed_speed = 0u64;
-    loop {
-        thread::sleep(Duration::from_millis(500));
-        if cancel_requested(&store, &task.id) {
-            stop_process(&store, &task.id);
-            if let Some((first_part, _)) = children.first() {
-                if fs::metadata(first_part)
-                    .map(|metadata| metadata.len())
-                    .unwrap_or(0)
-                    > 0
-                {
-                    let _ = fs::copy(first_part, &output);
-                }
-            }
-            let _ = fs::remove_dir_all(&part_dir);
-            mark_stopped(&store, &writer, &task.id);
-            return true;
-        }
-        let bytes: u64 = children
-            .iter()
-            .map(|(path, _)| fs::metadata(path).map(|m| m.len()).unwrap_or(0))
-            .sum();
-        let sample_seconds = sampled_at.elapsed().as_secs_f64().max(0.001);
-        let sampled_speed = bytes.saturating_sub(last_bytes) as f64 / sample_seconds;
-        if sampled_speed > 0.0 {
-            smoothed_speed = if smoothed_speed == 0 {
-                sampled_speed as u64
-            } else {
-                (smoothed_speed as f64 * 0.6 + sampled_speed * 0.4) as u64
-            };
-        }
-        sampled_at = Instant::now();
-        last_bytes = bytes;
-        let completed = children
-            .iter()
-            .filter(|(path, child)| {
-                child
-                    .lock()
-                    .ok()
-                    .and_then(|mut child| child.try_wait().ok().flatten())
-                    .map(|status| status.success())
-                    .unwrap_or(false)
-                    && path.exists()
-            })
-            .count() as u32;
-        update(&store, &writer, &task.id, |t| {
-            t.progress = ((bytes.saturating_mul(100) / total).min(99)) as u8;
-            t.downloaded_bytes = bytes;
-            t.speed_bytes_per_second = smoothed_speed;
-            t.eta_seconds =
-                (smoothed_speed > 0).then(|| total.saturating_sub(bytes) / smoothed_speed);
-            t.segments_completed = completed;
-        });
-        let statuses: Vec<Option<bool>> = children
-            .iter()
-            .map(|(_, child)| {
-                child
-                    .lock()
-                    .ok()
-                    .and_then(|mut child| child.try_wait().ok().flatten())
-                    .map(|status| status.success())
-            })
-            .collect();
-        if statuses.iter().all(Option::is_some) {
-            for (_, child) in &children {
-                unregister_process(&store, &task.id, child);
-            }
-            let valid = statuses.iter().all(|status| *status == Some(true))
-                && children.iter().enumerate().all(|(index, (path, _))| {
-                    fs::metadata(path).map(|m| m.len()).unwrap_or(0)
-                        == ranges[index].1 - ranges[index].0 + 1
-                });
-            if !valid {
-                let _ = fs::remove_dir_all(&part_dir);
-                return false;
-            }
-            let mut destination = match OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .open(&output)
-            {
-                Ok(file) => file,
-                Err(_) => {
-                    let _ = fs::remove_dir_all(&part_dir);
-                    return false;
-                }
-            };
-            for (path, _) in &children {
-                let mut part = match fs::File::open(path) {
-                    Ok(file) => file,
-                    Err(_) => {
-                        let _ = fs::remove_dir_all(&part_dir);
-                        return false;
-                    }
-                };
-                if io::copy(&mut part, &mut destination).is_err() {
-                    let _ = fs::remove_dir_all(&part_dir);
-                    return false;
-                }
-            }
-            let _ = fs::remove_dir_all(&part_dir);
-            update(&store, &writer, &task.id, |t| {
-                t.state = "succeeded".into();
-                t.phase = "completed".into();
-                t.progress = 100;
-                t.downloaded_bytes = total;
-                t.total_bytes = Some(total);
-                t.active_connections = 0;
-                t.segments_completed = count as u32;
-                t.speed_bytes_per_second = smoothed_speed;
-                t.eta_seconds = Some(0);
-                t.message = Some("下载完成".into());
-            });
-            return true;
-        }
-    }
-}
-
-fn start_http_download(store: Store, writer: Writer, task: Task, output: String) {
-    let probe = probe_size(&store, &task);
-    if probe.cancelled || cancel_requested(&store, &task.id) {
-        mark_stopped(&store, &writer, &task.id);
         return;
     }
-    if probe.accept_ranges && task.download_threads > 1 {
-        if let Some(total) = probe.total {
-            if total >= 1024 * 1024
-                && start_parallel_http_download(
-                    store.clone(),
-                    writer.clone(),
-                    task.clone(),
-                    output.clone(),
-                    total,
-                )
-            {
-                return;
-            }
-        }
-    }
-    start_single_http_download(store, writer, task, output, probe.total);
+    let public_task = sanitized_task(&tasks[index]);
+    emit(
+        writer,
+        json!({"version":1,"type":"task.progress","task":public_task}),
+    );
 }
 
-#[derive(Clone)]
-struct HlsDownloadJob {
-    track_index: usize,
-    item_index: usize,
-    is_map: bool,
-    uri: String,
-    byte_range: Option<ByteRange>,
-    key: Option<KeySpec>,
-    sequence: u64,
-    destination: PathBuf,
-    validate_decryption: bool,
-}
-
-struct HlsDownloadResult {
-    job: HlsDownloadJob,
-    bytes: u64,
-    retries: u32,
-    error: Option<String>,
-}
-
-fn hls_curl_once(
-    store: &Store,
-    task: &Task,
-    url: &str,
-    range: Option<&ByteRange>,
-    destination: &Path,
-    abort: &AtomicBool,
-) -> Result<(u64, u16), String> {
-    if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    let temporary = destination.with_extension(format!(
-        "{}.download",
-        destination
-            .extension()
-            .and_then(|value| value.to_str())
-            .unwrap_or("part")
-    ));
-    let response_headers = destination.with_extension(format!(
-        "{}.headers",
-        destination
-            .extension()
-            .and_then(|value| value.to_str())
-            .unwrap_or("part")
-    ));
-    let _ = fs::remove_file(&temporary);
-    let _ = fs::remove_file(&response_headers);
-    let mut args: Vec<String> = [
-        "--silent",
-        "--show-error",
-        "--location",
-        "--connect-timeout",
-        "10",
-        "--max-time",
-        "120",
-        "--output",
-    ]
-    .into_iter()
-    .map(str::to_string)
-    .collect();
-    args.push(temporary.to_string_lossy().into_owned());
-    args.extend([
-        "--dump-header".into(),
-        response_headers.to_string_lossy().into_owned(),
-    ]);
-    args.extend(["--write-out".into(), "%{http_code}".into()]);
-    if let Some(range) = range {
-        args.extend([
-            "--range".into(),
-            format!("{}-{}", range.start, range.start + range.length - 1),
-        ]);
-    }
-    add_header_args(&mut args, task);
-    args.push(url.into());
-    let mut child = Command::new("curl")
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| error.to_string())?;
-    let mut stdout = child.stdout.take();
-    let child = register_process(store, &task.id, child);
-    loop {
-        if abort.load(Ordering::Relaxed) || cancel_requested(store, &task.id) {
-            if let Ok(mut process) = child.lock() {
-                let _ = process.kill();
-                let _ = process.wait();
-            }
-            unregister_process(store, &task.id, &child);
-            let _ = fs::remove_file(&temporary);
-            let _ = fs::remove_file(&response_headers);
-            return Err("cancelled".into());
-        }
-        let status = child
-            .lock()
-            .map_err(|_| "process_lock_poisoned".to_string())?
-            .try_wait()
-            .map_err(|error| error.to_string())?;
-        if let Some(status) = status {
-            let mut response = String::new();
-            if let Some(mut stdout) = stdout.take() {
-                let _ = stdout.read_to_string(&mut response);
-            }
-            unregister_process(store, &task.id, &child);
-            let http_status = response.trim().parse::<u16>().unwrap_or(0);
-            if !status.success() || !(200..300).contains(&http_status) {
-                let retry_after = fs::read_to_string(&response_headers)
-                    .ok()
-                    .and_then(|headers| {
-                        headers.lines().rev().find_map(|line| {
-                            let (name, value) = line.split_once(':')?;
-                            name.trim()
-                                .eq_ignore_ascii_case("retry-after")
-                                .then(|| value.trim().parse::<u64>().ok())
-                                .flatten()
-                        })
-                    })
-                    .map(|seconds| seconds.min(30));
-                let _ = fs::remove_file(&temporary);
-                let _ = fs::remove_file(&response_headers);
-                return Err(match retry_after {
-                    Some(seconds) => {
-                        format!("http_status_{http_status}:retry_after={seconds}")
-                    }
-                    None => format!("http_status_{http_status}"),
-                });
-            }
-            let bytes = fs::metadata(&temporary)
-                .map_err(|error| error.to_string())?
-                .len();
-            if let Some(range) = range {
-                if bytes != range.length {
-                    let _ = fs::remove_file(&temporary);
-                    return Err("hls_byte_range_length_mismatch".into());
-                }
-            }
-            if destination.exists() {
-                fs::remove_file(destination).map_err(|error| error.to_string())?;
-            }
-            fs::rename(&temporary, destination).map_err(|error| error.to_string())?;
-            let _ = fs::remove_file(&response_headers);
-            return Ok((bytes, http_status));
-        }
-        thread::sleep(Duration::from_millis(50));
-    }
-}
-
-fn retryable_hls_error(error: &str) -> bool {
-    let status = error
-        .strip_prefix("http_status_")
-        .and_then(|value| value.split(':').next())
-        .and_then(|value| value.parse::<u16>().ok());
-    match status {
-        Some(0 | 408 | 429) => true,
-        Some(value) if value >= 500 => true,
-        Some(_) => false,
-        None => matches!(
-            error,
-            "hls_byte_range_length_mismatch"
-                | "connection_reset"
-                | "operation_timed_out"
-                | "curl_failed"
-        ),
-    }
-}
-
-fn authorization_hls_error(error: &str) -> bool {
-    error.starts_with("http_status_401") || error.starts_with("http_status_403")
-}
-
-fn retry_after_seconds(error: &str) -> Option<u64> {
-    error
-        .split(":retry_after=")
-        .nth(1)
-        .and_then(|value| value.parse::<u64>().ok())
-        .map(|value| value.min(30))
-}
-
-fn wait_retry(store: &Store, task_id: &str, abort: &AtomicBool, seconds: u64) -> bool {
-    let deadline = Instant::now() + Duration::from_secs(seconds);
-    while Instant::now() < deadline {
-        if abort.load(Ordering::Relaxed) || cancel_requested(store, task_id) {
-            return false;
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-    true
-}
-
-fn load_hls_key(
-    store: &Store,
-    task: &Task,
-    specification: &KeySpec,
-    key_override: Option<&KeyOverride>,
-    work_dir: &Path,
-    abort: &AtomicBool,
-    cache: &Mutex<HashMap<String, [u8; 16]>>,
-) -> Result<[u8; 16], String> {
-    if specification.method != "AES-128" {
-        return Err("hls_encryption_unsupported".into());
-    }
-    if let Some(value) = key_override {
-        if let Some(bytes) = override_key_bytes(value)? {
-            return Ok(bytes);
-        }
-    }
-    let url = key_override
-        .filter(|value| value.kind == KeyOverrideKind::Url)
-        .map(|value| value.value.as_str())
-        .or(specification.uri.as_deref())
-        .ok_or_else(|| "hls_key_uri_missing".to_string())?;
-    if let Some(value) = cache.lock().unwrap().get(url).copied() {
-        return Ok(value);
-    }
-    let key_file = work_dir.join(format!("key-{}.download", Uuid::new_v4()));
-    let result = hls_curl_once(store, task, url, None, &key_file, abort);
-    let bytes = match result {
-        Ok(_) => fs::read(&key_file).map_err(|error| error.to_string())?,
-        Err(error) => return Err(error),
-    };
-    let _ = fs::remove_file(&key_file);
-    let key: [u8; 16] = bytes
-        .try_into()
-        .map_err(|_| "hls_key_length_invalid".to_string())?;
-    cache.lock().unwrap().insert(url.into(), key);
-    Ok(key)
-}
-
-fn execute_hls_job(
-    store: &Store,
-    task: &Task,
-    job: &HlsDownloadJob,
-    key_override: Option<&KeyOverride>,
-    work_dir: &Path,
-    abort: &AtomicBool,
-    key_cache: &Mutex<HashMap<String, [u8; 16]>>,
-) -> HlsDownloadResult {
-    let mut retries = 0;
-    loop {
-        if abort.load(Ordering::Relaxed) || cancel_requested(store, &task.id) {
-            return HlsDownloadResult {
-                job: job.clone(),
-                bytes: 0,
-                retries,
-                error: Some("cancelled".into()),
-            };
-        }
-        let encrypted = job.key.is_some();
-        let download_path = if encrypted {
-            job.destination.with_extension("encrypted")
-        } else {
-            job.destination.clone()
-        };
-        let attempt = hls_curl_once(
-            store,
-            task,
-            &job.uri,
-            job.byte_range.as_ref(),
-            &download_path,
-            abort,
-        )
-        .and_then(|(bytes, _)| {
-            if let Some(specification) = &job.key {
-                let key = load_hls_key(
-                    store,
-                    task,
-                    specification,
-                    key_override,
-                    work_dir,
-                    abort,
-                    key_cache,
-                )?;
-                let iv = key_override
-                    .and_then(|value| value.iv)
-                    .map(Ok)
-                    .unwrap_or_else(|| {
-                        parse_manifest_iv(specification.iv.as_deref(), job.sequence)
-                    })?;
-                let encrypted_bytes =
-                    fs::read(&download_path).map_err(|error| error.to_string())?;
-                let decrypted = decrypt_aes128(&encrypted_bytes, &key, &iv).map_err(|error| {
-                    if job.validate_decryption {
-                        "hls_key_validation_failed".to_string()
-                    } else {
-                        error
-                    }
-                })?;
-                if job.validate_decryption && !media_header_valid(&decrypted) {
-                    return Err("hls_key_validation_failed".into());
-                }
-                if let Some(parent) = job.destination.parent() {
-                    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-                }
-                fs::write(&job.destination, &decrypted).map_err(|error| error.to_string())?;
-                let _ = fs::remove_file(&download_path);
-                Ok(decrypted.len() as u64)
-            } else {
-                Ok(bytes)
-            }
-        });
-        match attempt {
-            Ok(bytes) => {
-                return HlsDownloadResult {
-                    job: job.clone(),
-                    bytes,
-                    retries,
-                    error: None,
-                }
-            }
-            Err(error) if error == "cancelled" => {
-                return HlsDownloadResult {
-                    job: job.clone(),
-                    bytes: 0,
-                    retries,
-                    error: Some(error),
-                }
-            }
-            Err(error) if retryable_hls_error(&error) && retries < 3 => {
-                retries += 1;
-                let delay = retry_after_seconds(&error).unwrap_or(1 << (retries - 1));
-                if !wait_retry(store, &task.id, abort, delay) {
-                    return HlsDownloadResult {
-                        job: job.clone(),
-                        bytes: 0,
-                        retries,
-                        error: Some("cancelled".into()),
-                    };
-                }
-            }
-            Err(error) => {
-                return HlsDownloadResult {
-                    job: job.clone(),
-                    bytes: 0,
-                    retries,
-                    error: Some(error),
-                }
-            }
-        }
-    }
-}
-
-fn checkpoint_counts(checkpoint: &HlsCheckpoint) -> (u32, u32, u32, u32, u64) {
-    let segments = checkpoint.tracks.iter().flat_map(|track| &track.segments);
-    let total = segments.clone().count() as u32;
-    let completed = segments
-        .clone()
-        .filter(|segment| segment.state == "succeeded")
-        .count() as u32;
-    let failed = segments
-        .clone()
-        .filter(|segment| segment.state == "failed")
-        .count() as u32;
-    let retries = segments.clone().map(|segment| segment.retries).sum();
-    let bytes = segments.map(|segment| segment.bytes).sum();
-    (completed, total, failed, retries, bytes)
-}
-
-fn checkpoint_jobs(checkpoint: &mut HlsCheckpoint, work_dir: &Path) -> Vec<HlsDownloadJob> {
-    let mut jobs = Vec::new();
-    for (track_index, track) in checkpoint.tracks.iter_mut().enumerate() {
-        let track_dir = work_dir.join(&track.id);
-        for (item_index, map) in track.maps.iter_mut().enumerate() {
-            let destination = track_dir.join(&map.local_name);
-            if map.state == "succeeded" && destination.is_file() {
-                continue;
-            }
-            map.state = "pending".into();
-            map.error = None;
-            jobs.push(HlsDownloadJob {
-                track_index,
-                item_index,
-                is_map: true,
-                uri: map.uri.clone(),
-                byte_range: map.byte_range.clone(),
-                key: map.key.clone(),
-                sequence: 0,
-                destination,
-                validate_decryption: false,
-            });
-        }
-        for (item_index, segment) in track.segments.iter_mut().enumerate() {
-            let destination = track_dir.join(&segment.local_name);
-            if segment.state == "succeeded" && destination.is_file() {
-                continue;
-            }
-            segment.state = "pending".into();
-            segment.error = None;
-            jobs.push(HlsDownloadJob {
-                track_index,
-                item_index,
-                is_map: false,
-                uri: segment.uri.clone(),
-                byte_range: segment.byte_range.clone(),
-                key: segment.key.clone(),
-                sequence: segment.sequence,
-                destination,
-                validate_decryption: segment.index == 0,
-            });
-        }
-    }
-    jobs
-}
-
-fn apply_hls_result(checkpoint: &mut HlsCheckpoint, result: &HlsDownloadResult) {
-    let track = &mut checkpoint.tracks[result.job.track_index];
-    if result.job.is_map {
-        let item = &mut track.maps[result.job.item_index];
-        item.retries = item.retries.saturating_add(result.retries);
-        item.bytes = result.bytes;
-        item.error = result
-            .error
-            .as_ref()
-            .filter(|error| error.as_str() != "cancelled")
-            .cloned();
-        item.state = if result.error.as_deref() == Some("cancelled") {
-            "pending"
-        } else if result.error.is_none() {
-            "succeeded"
-        } else {
-            "failed"
-        }
-        .into();
-    } else {
-        let item = &mut track.segments[result.job.item_index];
-        item.retries = item.retries.saturating_add(result.retries);
-        item.bytes = result.bytes;
-        item.error = result
-            .error
-            .as_ref()
-            .filter(|error| error.as_str() != "cancelled")
-            .cloned();
-        item.state = if result.error.as_deref() == Some("cancelled") {
-            "pending"
-        } else if result.error.is_none() {
-            "succeeded"
-        } else {
-            "failed"
-        }
-        .into();
-    }
-}
-
-fn publish_hls_progress(
-    store: &Store,
-    writer: &Writer,
-    task_id: &str,
-    checkpoint: &HlsCheckpoint,
-    started: Instant,
-    sampled_at: &mut Instant,
-    previous_bytes: &mut u64,
-) {
-    let (completed, total, failed, retries, bytes) = checkpoint_counts(checkpoint);
-    let elapsed = sampled_at.elapsed().as_secs_f64().max(0.001);
-    let speed = ((bytes.saturating_sub(*previous_bytes)) as f64 / elapsed) as u64;
-    *previous_bytes = bytes;
-    *sampled_at = Instant::now();
-    update(store, writer, task_id, |current| {
-        current.segments_completed = completed;
-        current.segments_total = total;
-        current.failed_segments = failed;
-        current.retry_count = retries;
-        current.downloaded_bytes = bytes;
-        current.speed_bytes_per_second = speed;
-        current.progress = if total == 0 {
-            0
-        } else {
-            ((completed * 90) / total).min(89) as u8
-        };
-        current.eta_seconds = (completed > 0 && completed < total).then(|| {
-            (started.elapsed().as_secs_f64() / completed as f64 * (total - completed) as f64) as u64
-        });
-        current.message = Some(format!("已完成 {completed}/{total} 个切片"));
-    });
-}
-
-fn merge_hls_checkpoint(
-    store: &Store,
-    writer: &Writer,
-    task: &Task,
-    output: &str,
-    checkpoint: &HlsCheckpoint,
-    work_dir: &Path,
-) -> Result<usize, String> {
-    let video = checkpoint
-        .tracks
-        .iter()
-        .find(|track| track.kind == "video")
-        .ok_or_else(|| "hls_video_track_missing".to_string())?;
-    let video_playlist = local_playlist(video, &work_dir.join(&video.id))?;
-    let audio = checkpoint.tracks.iter().find(|track| track.kind == "audio");
-    let audio_playlist = audio
-        .map(|track| local_playlist(track, &work_dir.join(&track.id)))
-        .transpose()?;
-    let media_already_done = task.outputs.iter().any(|item| {
-        item.kind == "media"
-            && item.state == "succeeded"
-            && item
-                .path
-                .as_deref()
-                .is_some_and(|path| Path::new(path).is_file())
-    });
-    if !media_already_done {
-        let mut args = vec![
-            "-nostdin".into(),
-            "-y".into(),
-            "-loglevel".into(),
-            "error".into(),
-            "-protocol_whitelist".into(),
-            "file".into(),
-            "-progress".into(),
-            "pipe:1".into(),
-            "-nostats".into(),
-        ];
-        args.extend(["-i".into(), video_playlist.to_string_lossy().into_owned()]);
-        if let Some(audio) = &audio_playlist {
-            args.extend(["-i".into(), audio.to_string_lossy().into_owned()]);
-        }
-        args.extend([
-            "-map".into(),
-            "0:v:0".into(),
-            "-map".into(),
-            if audio_playlist.is_some() {
-                "1:a:0"
-            } else {
-                "0:a?"
-            }
-            .into(),
-            "-c".into(),
-            "copy".into(),
-            output.into(),
-        ]);
-        match run_ffmpeg_with_progress(
-            store,
-            writer,
-            task,
-            args,
-            checkpoint.plan.duration,
-            90,
-            10,
-            "切片下载完成，正在无转码合并",
-        ) {
-            Ok(()) => update(store, writer, &task.id, |current| {
-                set_output_state(current, "media", 0, "succeeded", None)
-            }),
-            Err(error) => {
-                if error != "cancelled" {
-                    update(store, writer, &task.id, |current| {
-                        set_output_state(current, "media", 0, "failed", Some(error.clone()))
-                    });
-                }
-                return Err(error);
-            }
-        }
-    }
-    let subtitle_count = checkpoint
-        .tracks
-        .iter()
-        .filter(|track| track.kind == "subtitle")
-        .count();
-    let mut subtitle_failures = 0;
-    for (subtitle_index, subtitle) in checkpoint
-        .tracks
-        .iter()
-        .filter(|track| track.kind == "subtitle")
-        .enumerate()
-    {
-        let Some(path) = task
-            .outputs
-            .iter()
-            .filter(|output| output.kind == "subtitle")
-            .nth(subtitle_index)
-            .and_then(|output| output.path.clone())
-        else {
-            subtitle_failures += 1;
-            continue;
-        };
-        if task
-            .outputs
-            .iter()
-            .filter(|output| output.kind == "subtitle")
-            .nth(subtitle_index)
-            .is_some_and(|output| {
-                output.state == "succeeded"
-                    && output
-                        .path
-                        .as_deref()
-                        .is_some_and(|path| Path::new(path).is_file())
-            })
-        {
-            continue;
-        }
-        update(store, writer, &task.id, |current| {
-            set_output_state(current, "subtitle", subtitle_index, "running", None)
-        });
-        let playlist = local_playlist(subtitle, &work_dir.join(&subtitle.id))?;
-        let args = vec![
-            "-nostdin".into(),
-            "-y".into(),
-            "-loglevel".into(),
-            "error".into(),
-            "-protocol_whitelist".into(),
-            "file".into(),
-            "-i".into(),
-            playlist.to_string_lossy().into_owned(),
-            "-map".into(),
-            "0:s:0".into(),
-            "-c:s".into(),
-            "webvtt".into(),
-            path,
-        ];
-        let start = 90 + ((subtitle_index * 10) / subtitle_count.max(1)) as u8;
-        let span = (10 / subtitle_count.max(1)).max(1) as u8;
-        match run_ffmpeg_with_progress(
-            store,
-            writer,
-            task,
-            args,
-            subtitle.duration,
-            start,
-            span,
-            "正在生成字幕文件",
-        ) {
-            Ok(()) => update(store, writer, &task.id, |current| {
-                set_output_state(current, "subtitle", subtitle_index, "succeeded", None)
-            }),
-            Err(error) if error == "cancelled" => return Err(error),
-            Err(error) => {
-                subtitle_failures += 1;
-                update(store, writer, &task.id, |current| {
-                    set_output_state(current, "subtitle", subtitle_index, "failed", Some(error))
-                });
-            }
-        }
-    }
-    Ok(subtitle_failures)
-}
-
-fn start_hls_checkpoint_download(
-    store: Store,
-    writer: Writer,
-    task: Task,
-    output: String,
-    runtime_plan: Option<HlsPlan>,
-) {
-    let work_dir = task_work_dir_for_store(&store, &task.id);
-    let checkpoint_file = checkpoint_path_for_store(&store, &task.id);
-    let checkpoint = if checkpoint_available(&checkpoint_file) {
-        match load_checkpoint(&checkpoint_file) {
-            Ok(value) => value,
-            Err(error) => {
-                update(&store, &writer, &task.id, |current| {
-                    current.state = "failed".into();
-                    current.phase = "failed".into();
-                    current.error = Some(error.clone());
-                    current.message = Some("HLS 检查点无效，未覆盖已有恢复数据".into());
-                    current.checkpoint_state = Some("invalid".into());
-                });
-                return;
-            }
-        }
-    } else {
-        match runtime_plan.as_ref() {
-            Some(plan) => match new_checkpoint(&task.id, plan) {
-                Ok(value) => value,
-                Err(error) => {
-                    update(&store, &writer, &task.id, |current| {
-                        current.state = "failed".into();
-                        current.phase = "failed".into();
-                        current.error = Some(error.clone());
-                        current.message = Some(
-                            match error.as_str() {
-                                "hls_live_not_supported" => "当前计划不支持直播 HLS",
-                                "hls_map_iv_required" => "加密初始化片段缺少显式 IV",
-                                "hls_encryption_unsupported" => "HLS 使用了暂不支持的加密方式",
-                                _ => "无法准备 HLS 切片检查点",
-                            }
-                            .into(),
-                        );
-                        current.checkpoint_state = Some("invalid".into());
-                    });
-                    return;
-                }
-            },
-            None => {
-                update(&store, &writer, &task.id, |current| {
-                    current.state = "failed".into();
-                    current.phase = "failed".into();
-                    current.error = Some("hls_checkpoint_missing".into());
-                    current.message = Some("HLS 检查点不存在，请重新创建任务".into());
-                    current.checkpoint_state = Some("missing".into());
-                });
-                return;
-            }
-        }
-    };
-    let runtime_plan =
-        runtime_plan.unwrap_or_else(|| runtime_plan_from_persisted(&checkpoint.plan));
-    let key_override = runtime_plan.key_override.clone();
-    if task.requires_authorization
-        && task
-            .request_headers
-            .keys()
-            .all(|name| !is_sensitive_request_header(name))
-    {
-        update(&store, &writer, &task.id, |current| {
-            current.state = "interrupted".into();
-            current.phase = "authorization_required".into();
-            current.resume_requirement = Some("authorization_required".into());
-            current.message = Some("请回到来源页面重新授权后继续下载".into());
-        });
-        return;
-    }
-    if task.requires_key_override && key_override.is_none() {
-        update(&store, &writer, &task.id, |current| {
-            current.state = "interrupted".into();
-            current.phase = "key_required".into();
-            current.resume_requirement = Some("key_required".into());
-            current.message = Some("请重新输入自定义密钥后继续下载".into());
-        });
-        return;
-    }
-    let mut checkpoint = checkpoint;
-    if task.live_recording && !stop_requested(&store, &task.id) {
-        if let Err(error) = refresh_live_checkpoint(&store, &task, &mut checkpoint, &work_dir) {
-            let authorization = authorization_hls_error(&error);
-            update(&store, &writer, &task.id, |current| {
-                current.state = if authorization { "interrupted" } else { "failed" }.into();
-                current.phase = if authorization {
-                    "authorization_required"
-                } else {
-                    "failed"
-                }
-                .into();
-                current.error = Some(error.clone());
-                current.checkpoint_state = Some("recoverable".into());
-                current.resume_requirement =
-                    authorization.then(|| "authorization_required".into());
-                current.message = Some("无法读取最新直播清单，可重试继续录制".into());
-            });
-            return;
-        }
-    }
-    let checkpoint = Arc::new(Mutex::new(checkpoint));
-    let jobs = {
-        let mut checkpoint = checkpoint.lock().unwrap();
-        let jobs = checkpoint_jobs(&mut checkpoint, &work_dir);
-        if let Err(error) = save_checkpoint(&checkpoint_file, &checkpoint) {
-            update(&store, &writer, &task.id, |current| {
-                current.state = "failed".into();
-                current.error = Some(error.clone());
-                current.message = Some("无法保存 HLS 检查点".into());
-            });
-            return;
-        }
-        jobs
-    };
-    let abort = Arc::new(AtomicBool::new(false));
-    let key_cache = Arc::new(Mutex::new(HashMap::new()));
-    let mut jobs = jobs;
-    if let Some(index) = jobs
-        .iter()
-        .position(|job| job.validate_decryption && job.key.is_some())
-    {
-        let validation_job = jobs.remove(index);
-        update(&store, &writer, &task.id, |current| {
-            current.state = "starting".into();
-            current.phase = "validating_key".into();
-            current.active_connections = 1;
-            current.message = Some("正在验证 AES-128 密钥和首个媒体切片".into());
-        });
-        let result = execute_hls_job(
-            &store,
-            &task,
-            &validation_job,
-            key_override.as_ref(),
-            &work_dir,
-            &abort,
-            &key_cache,
-        );
-        {
-            let mut checkpoint = checkpoint.lock().unwrap();
-            apply_hls_result(&mut checkpoint, &result);
-            if let Err(error) = save_checkpoint(&checkpoint_file, &checkpoint) {
-                update(&store, &writer, &task.id, |current| {
-                    current.state = "failed".into();
-                    current.phase = "failed".into();
-                    current.error = Some(format!("hls_checkpoint_save_failed:{error}"));
-                    current.active_connections = 0;
-                    current.checkpoint_state = Some("invalid".into());
-                    current.message = Some("无法保存密钥验证检查点".into());
-                });
-                return;
-            }
-        }
-        if let Some(error) = result.error {
-            if error == "cancelled" {
-                mark_stopped(&store, &writer, &task.id);
-                return;
-            }
-            update(&store, &writer, &task.id, |current| {
-                if authorization_hls_error(&error) {
-                    current.requires_authorization = true;
-                }
-                current.state = if authorization_hls_error(&error) {
-                    "interrupted"
-                } else {
-                    "failed"
-                }
-                .into();
-                current.phase = if authorization_hls_error(&error) {
-                    "authorization_required"
-                } else {
-                    "failed"
-                }
-                .into();
-                current.error = Some(error.clone());
-                current.active_connections = 0;
-                current.checkpoint_state = Some("recoverable".into());
-                current.resume_requirement =
-                    authorization_hls_error(&error).then(|| "authorization_required".into());
-                current.message = Some(if error == "hls_key_validation_failed" {
-                    "AES-128 密钥验证失败，尚未开始批量下载".into()
-                } else if authorization_hls_error(&error) {
-                    "资源授权已经失效，请从来源页面重新授权".into()
-                } else {
-                    "无法验证首个加密切片".into()
-                });
-            });
-            return;
-        }
-    }
-    let expected_results = jobs.len();
-    let queue = Arc::new(Mutex::new(VecDeque::from(jobs)));
-    let (sender, receiver) = mpsc::channel();
-    let worker_count = usize::from(task.download_threads)
-        .max(1)
-        .min(queue.lock().unwrap().len().max(1));
-    update(&store, &writer, &task.id, |current| {
-        current.state = "running".into();
-        current.phase = "downloading_segments".into();
-        current.active_connections = worker_count as u8;
-        current.checkpoint_state = Some("active".into());
-        current.resume_requirement = None;
-        current.message = Some(format!("正在下载 HLS 切片（{worker_count} 路）"));
-    });
-    let mut workers = Vec::new();
-    for _ in 0..worker_count {
-        let sender = sender.clone();
-        let queue = queue.clone();
-        let store = store.clone();
-        let task = task.clone();
-        let abort = abort.clone();
-        let key_cache = key_cache.clone();
-        let work_dir = work_dir.clone();
-        let key_override = key_override.clone();
-        workers.push(thread::spawn(move || loop {
-            let job = queue.lock().unwrap().pop_front();
-            let Some(job) = job else { break };
-            if abort.load(Ordering::Relaxed) {
-                break;
-            }
-            let result = execute_hls_job(
-                &store,
-                &task,
-                &job,
-                key_override.as_ref(),
-                &work_dir,
-                &abort,
-                &key_cache,
-            );
-            let failed = result
-                .error
-                .as_deref()
-                .is_some_and(|error| error != "cancelled");
-            if sender.send(result).is_err() {
-                break;
-            }
-            if failed {
-                abort.store(true, Ordering::Relaxed);
-                break;
-            }
-        }));
-    }
-    drop(sender);
-    let started = Instant::now();
-    let mut previous_bytes = 0_u64;
-    let mut sampled_at = Instant::now();
-    let mut last_checkpoint_save = Instant::now();
-    let mut last_ui_update = Instant::now();
-    let mut dirty_results = 0_usize;
-    let mut received_results = 0_usize;
-    let mut failure = None;
-    for result in receiver {
-        received_results += 1;
-        let terminal_result = result.error.is_some();
-        let last_result = received_results == expected_results;
-        {
-            let mut checkpoint = checkpoint.lock().unwrap();
-            apply_hls_result(&mut checkpoint, &result);
-            dirty_results += 1;
-            if dirty_results >= 16
-                || last_checkpoint_save.elapsed() >= Duration::from_secs(1)
-                || terminal_result
-                || last_result
-            {
-                if let Err(error) = save_checkpoint(&checkpoint_file, &checkpoint) {
-                    failure = Some(format!("hls_checkpoint_save_failed:{error}"));
-                    abort.store(true, Ordering::Relaxed);
-                }
-                dirty_results = 0;
-                last_checkpoint_save = Instant::now();
-            }
-            if last_ui_update.elapsed() >= Duration::from_millis(250)
-                || terminal_result
-                || last_result
-            {
-                publish_hls_progress(
-                    &store,
-                    &writer,
-                    &task.id,
-                    &checkpoint,
-                    started,
-                    &mut sampled_at,
-                    &mut previous_bytes,
-                );
-                last_ui_update = Instant::now();
-            }
-        }
-        if let Some(error) = &result.error {
-            if error != "cancelled" {
-                failure = Some(error.clone());
-                abort.store(true, Ordering::Relaxed);
-                stop_process(&store, &task.id);
-            }
-        }
-    }
-    for worker in workers {
-        let _ = worker.join();
-    }
-    {
-        let checkpoint = checkpoint.lock().unwrap();
-        if dirty_results > 0 {
-            if let Err(error) = save_checkpoint(&checkpoint_file, &checkpoint) {
-                failure.get_or_insert_with(|| format!("hls_checkpoint_save_failed:{error}"));
-            }
-        }
-        publish_hls_progress(
-            &store,
-            &writer,
-            &task.id,
-            &checkpoint,
-            started,
-            &mut sampled_at,
-            &mut previous_bytes,
-        );
-    }
-    unregister_all_processes(&store, &task.id);
+fn run_download(store: Store, writer: Writer, task: Task) {
     if cancel_requested(&store, &task.id) {
         mark_stopped(&store, &writer, &task.id);
         return;
     }
-    if let Some(error) = failure {
-        let authorization = authorization_hls_error(&error);
-        update(&store, &writer, &task.id, |current| {
-            if authorization {
-                current.requires_authorization = true;
-            }
-            current.state = if authorization {
-                "interrupted"
-            } else {
-                "failed"
-            }
-            .into();
-            current.phase = if authorization {
-                "authorization_required"
-            } else {
-                "failed"
-            }
-            .into();
-            current.error = Some(error.clone());
-            current.active_connections = 0;
-            current.checkpoint_state = Some("recoverable".into());
-            current.resume_requirement = authorization.then(|| "authorization_required".into());
-            current.message = Some(if authorization {
-                "资源授权已经失效，请从来源页面重新授权".into()
-            } else if error == "hls_key_validation_failed" {
-                "AES-128 密钥验证失败，未继续下载其他切片".into()
-            } else {
-                "部分 HLS 切片下载失败，可重试继续".into()
-            });
+    let Some(output) = task.output.clone() else {
+        update(&store, &writer, &task.id, |t| {
+            t.state = "failed".into();
+            t.phase = "failed".into();
+            t.error = Some("output_missing".into());
+        });
+        return;
+    };
+    if let Some(parent) = Path::new(&output).parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if task.hls_plan_version >= 2 {
+        let plan = task.hls_plan.clone();
+        start_hls_checkpoint_download(store, writer, task, output, plan);
+        return;
+    }
+    if task.hls_selection
+        || task.inline_manifest.is_some()
+        || task.url.to_ascii_lowercase().contains(".m3u8")
+        || task.mime.as_deref().unwrap_or("").contains("mpegurl")
+    {
+        update(&store, &writer, &task.id, |task| {
+            task.state = "failed".into();
+            task.phase = "failed".into();
+            task.error = Some("hls_plan_required".into());
+            task.message = Some("请重新解析 HLS 并创建切片下载任务".into());
         });
         return;
     }
-    if task.live_recording && !stop_requested(&store, &task.id) {
-        let poll_seconds = {
-            let checkpoint = checkpoint.lock().unwrap();
-            let video = checkpoint.tracks.iter().find(|track| track.kind == "video");
-            if video.is_some_and(|track| track.end_list) {
-                0
-            } else {
-                runtime_plan
-                    .poll_interval_seconds
-                    .or_else(|| {
-                        video
-                            .and_then(|track| track.target_duration)
-                            .map(|seconds| (seconds / 2.0).ceil() as u64)
-                    })
-                    .unwrap_or(3)
-                    .clamp(1, 30)
-            }
-        };
-        if poll_seconds > 0 {
-            let checkpoint_value = checkpoint.lock().unwrap().clone();
-            let video = checkpoint_value
-                .tracks
-                .iter()
-                .find(|track| track.kind == "video");
-            update(&store, &writer, &task.id, |current| {
-                current.state = "running".into();
-                current.phase = "recording".into();
-                current.progress = 0;
-                current.active_connections = 0;
-                current.eta_seconds = None;
-                current.recorded_duration = video.map(|track| track.duration).unwrap_or(0.0);
-                current.last_media_sequence = video
-                    .and_then(|track| track.segments.last())
-                    .map(|segment| segment.sequence);
-                current.message = Some("直播录制中，正在等待新的媒体切片".into());
-            });
-            for _ in 0..poll_seconds * 10 {
-                if cancel_requested(&store, &task.id) {
-                    mark_stopped(&store, &writer, &task.id);
-                    return;
-                }
-                if stop_requested(&store, &task.id) {
-                    break;
-                }
-                thread::sleep(Duration::from_millis(100));
-            }
-            if !stop_requested(&store, &task.id) {
-                let refreshed = {
-                    let mut checkpoint = checkpoint.lock().unwrap();
-                    let result = refresh_live_checkpoint(&store, &task, &mut checkpoint, &work_dir);
-                    if result.is_ok() {
-                        let _ = save_checkpoint(&checkpoint_file, &checkpoint);
-                    }
-                    result
-                };
-                if let Err(error) = refreshed {
-                    let authorization = authorization_hls_error(&error);
-                    update(&store, &writer, &task.id, |current| {
-                        current.state = if authorization {
-                            "interrupted"
-                        } else {
-                            "failed"
-                        }
-                        .into();
-                        current.phase = if authorization {
-                            "authorization_required"
-                        } else {
-                            "failed"
-                        }
-                        .into();
-                        current.error = Some(error.clone());
-                        current.checkpoint_state = Some("recoverable".into());
-                        current.resume_requirement =
-                            authorization.then(|| "authorization_required".into());
-                        current.message = Some(if authorization {
-                            "直播授权已经失效，请从来源页面重新授权".into()
-                        } else {
-                            "直播清单刷新失败，可重试继续录制".into()
-                        });
-                    });
-                    return;
-                }
-            }
-            let next_task = store
-                .tasks
-                .lock()
-                .unwrap()
-                .iter()
-                .find(|current| current.id == task.id)
-                .cloned()
-                .map(|mut current| {
-                    current.hls_plan = Some(runtime_plan.clone());
-                    current
-                })
-                .unwrap_or(task.clone());
-            thread::spawn(move || {
-                start_hls_checkpoint_download(store, writer, next_task, output, Some(runtime_plan))
-            });
-            return;
-        }
+    let is_stream = task.url.to_ascii_lowercase().contains(".mpd")
+        || task.mime.as_deref().unwrap_or("").contains("dash+xml");
+    if !is_stream {
+        start_http_download(store, writer, task, output);
+        return;
     }
-    let checkpoint_value = checkpoint.lock().unwrap().clone();
-    let final_video = checkpoint_value
-        .tracks
-        .iter()
-        .find(|track| track.kind == "video");
-    update(&store, &writer, &task.id, |current| {
-        current.phase = "merging".into();
-        current.active_connections = 0;
-        current.progress = 90;
-        if task.live_recording {
-            current.recorded_duration = final_video.map(|track| track.duration).unwrap_or(0.0);
-            current.last_media_sequence = final_video
-                .and_then(|track| track.segments.last())
-                .map(|segment| segment.sequence);
-        }
-        current.message = Some("切片下载完成，正在合并".into());
+    update(&store, &writer, &task.id, |t| {
+        t.state = "running".into();
+        t.phase = "fetching".into();
+        t.message = Some("正在读取流媒体清单，需要 FFmpeg".into());
     });
-    match merge_hls_checkpoint(
-        &store,
-        &writer,
-        &task,
-        &output,
-        &checkpoint_value,
-        &work_dir,
-    ) {
-        Ok(0) => {
-            let _ = fs::remove_dir_all(&work_dir);
-            update(&store, &writer, &task.id, |current| {
-                current.state = "succeeded".into();
-                current.phase = "completed".into();
-                current.progress = 100;
-                current.active_connections = 0;
-                current.eta_seconds = Some(0);
-                current.checkpoint_state = Some("cleaned".into());
-                current.resume_requirement = None;
-                current.error = None;
-                current.message = Some(if task.live_recording {
-                    "直播录制已停止并保存".into()
-                } else {
-                    "HLS 视频和所选字幕下载完成".into()
-                });
-            });
-            clear_stop(&store, &task.id);
-        }
-        Ok(subtitle_failures) => update(&store, &writer, &task.id, |current| {
-            current.state = "partial".into();
-            current.phase = "partial".into();
-            current.progress = 100;
-            current.active_connections = 0;
-            current.eta_seconds = Some(0);
-            current.checkpoint_state = Some("recoverable".into());
-            current.error = Some("subtitle_output_failed".into());
-            current.message = Some(format!(
-                "视频已完成，{subtitle_failures} 条字幕生成失败，可重试"
-            ));
-        }),
-        Err(error) if error == "cancelled" => mark_stopped(&store, &writer, &task.id),
-        Err(error) => update(&store, &writer, &task.id, |current| {
-            current.state = "failed".into();
-            current.phase = "failed".into();
-            current.error = Some(error.clone());
-            current.checkpoint_state = Some("recoverable".into());
-            current.message = Some("切片已保存，但 FFmpeg 合并失败".into());
-        }),
-    }
-}
-
-fn fetch_live_manifest(
-    store: &Store,
-    task: &Task,
-    url: &str,
-    destination: &Path,
-) -> Result<PersistedManifest, String> {
-    let abort = AtomicBool::new(false);
-    let mut retries = 0;
-    loop {
-        match hls_curl_once(store, task, url, None, destination, &abort) {
-            Ok(_) => break,
-            Err(error) if retryable_hls_error(&error) && retries < 3 => {
-                retries += 1;
-                if !wait_retry(
-                    store,
-                    &task.id,
-                    &abort,
-                    retry_after_seconds(&error).unwrap_or(retries),
-                ) {
-                    return Err("cancelled".into());
-                }
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    let text = fs::read_to_string(destination).map_err(|error| error.to_string())?;
-    let _ = fs::remove_file(destination);
-    Ok(PersistedManifest {
-        text,
-        base_url: url.to_string(),
-    })
-}
-
-fn refresh_live_checkpoint(
-    store: &Store,
-    task: &Task,
-    checkpoint: &mut HlsCheckpoint,
-    work_dir: &Path,
-) -> Result<usize, String> {
-    let sources: Vec<(usize, PersistedManifest)> = checkpoint
-        .tracks
-        .iter()
-        .enumerate()
-        .filter_map(|(index, track)| {
-            let manifest =
-                match track.kind.as_str() {
-                    "video" => Some(checkpoint.plan.video_manifest.clone()),
-                    "audio" => checkpoint.plan.audio_manifest.clone(),
-                    "subtitle" => checkpoint
-                        .plan
-                        .subtitles
-                        .iter()
-                        .nth(index.saturating_sub(
-                            1 + usize::from(checkpoint.plan.audio_manifest.is_some()),
-                        ))
-                        .map(|subtitle| subtitle.manifest.clone()),
-                    _ => None,
-                }?;
-            Some((index, manifest))
-        })
-        .collect();
-    let mut added = 0;
-    for (index, source) in sources {
-        let track = &checkpoint.tracks[index];
-        let manifest = fetch_live_manifest(
-            store,
-            task,
-            &source.base_url,
-            &work_dir.join(format!("playlist-{index}.m3u8")),
-        )?;
-        let window = parse_live_media_playlist_after(track, &manifest)?;
-        added += merge_live_window(&mut checkpoint.tracks[index], window)?;
-        match checkpoint.tracks[index].kind.as_str() {
-            "video" => checkpoint.plan.video_manifest = manifest,
-            "audio" => checkpoint.plan.audio_manifest = Some(manifest),
-            "subtitle" => {
-                let subtitle_index =
-                    index.saturating_sub(1 + usize::from(checkpoint.plan.audio_manifest.is_some()));
-                if let Some(subtitle) = checkpoint.plan.subtitles.get_mut(subtitle_index) {
-                    subtitle.manifest = manifest;
-                }
-            }
-            _ => {}
-        }
-    }
-    checkpoint.plan.duration = checkpoint
-        .tracks
-        .iter()
-        .find(|track| track.kind == "video")
-        .map(|track| track.duration)
-        .unwrap_or(0.0);
-    Ok(added)
-}
-
-fn bundled_tool(name: &str) -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(|parent| parent.join(name)))
-        .filter(|path| path.is_file())
-        .unwrap_or_else(|| PathBuf::from(name))
-}
-
-fn ffmpeg_base_args() -> Vec<String> {
-    [
+    let mut ffmpeg_args: Vec<String> = [
         "-nostdin",
         "-y",
         "-loglevel",
@@ -3296,554 +873,125 @@ fn ffmpeg_base_args() -> Vec<String> {
         "1",
         "-seg_max_retry",
         "3",
-        "-protocol_whitelist",
-        "file,http,https,tcp,tls,crypto",
     ]
     .into_iter()
     .map(str::to_string)
-    .collect()
-}
-
-fn append_ffmpeg_input(args: &mut Vec<String>, task: &Task, path: &Path) {
+    .collect();
     if !task.request_headers.is_empty() {
         let headers = task
             .request_headers
             .iter()
             .map(|(name, value)| format!("{name}: {value}\r\n"))
             .collect::<String>();
-        args.extend(["-headers".into(), headers]);
+        ffmpeg_args.extend(["-headers".into(), headers]);
     }
-    args.extend(["-i".into(), path.to_string_lossy().into_owned()]);
-}
-
-fn set_output_state(task: &mut Task, kind: &str, index: usize, state: &str, error: Option<String>) {
-    if let Some(output) = task
-        .outputs
-        .iter_mut()
-        .filter(|output| output.kind == kind)
-        .nth(index)
-    {
-        output.state = state.into();
-        output.error = error;
-    }
-}
-
-fn run_ffmpeg_with_progress(
-    store: &Store,
-    writer: &Writer,
-    task: &Task,
-    args: Vec<String>,
-    duration: f64,
-    progress_start: u8,
-    progress_span: u8,
-    message: &str,
-) -> Result<(), String> {
-    let mut child = Command::new(bundled_tool("ffmpeg.exe"))
-        .args(args)
-        .stdout(Stdio::piped())
+    ffmpeg_args.extend([
+        "-i".into(),
+        task.url.clone(),
+        "-map".into(),
+        "0:v?".into(),
+        "-map".into(),
+        "0:a?".into(),
+        "-c".into(),
+        "copy".into(),
+        output.clone(),
+    ]);
+    let child = match Command::new(bundled_tool("ffmpeg.exe"))
+        .args(ffmpeg_args)
+        .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|error| error.to_string())?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "ffmpeg_progress_unavailable".to_string())?;
-    let child = register_process(store, &task.id, child);
-    let position = Arc::new(Mutex::new(0.0_f64));
-    let reader_position = position.clone();
-    thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if let Some(value) = line
-                .strip_prefix("out_time_us=")
-                .or_else(|| line.strip_prefix("out_time_ms="))
-            {
-                if let Ok(value) = value.parse::<f64>() {
-                    if let Ok(mut current) = reader_position.lock() {
-                        *current = value / 1_000_000.0;
-                    }
-                }
-            }
+    {
+        Ok(child) => child,
+        Err(error) => {
+            update(&store, &writer, &task.id, |t| {
+                t.state = "failed".into();
+                t.phase = "failed".into();
+                t.error = Some(error.to_string());
+                t.message = Some("未找到 FFmpeg".into());
+            });
+            return;
         }
+    };
+    let child = register_process(&store, &task.id, child);
+    update(&store, &writer, &task.id, |t| {
+        t.active_connections = 1;
+        t.message = Some("FFmpeg 正在使用持久连接下载并合并流媒体".into());
     });
-    let mut last_bytes = 0;
+    let mut last_bytes = 0u64;
     let mut sampled_at = Instant::now();
-    let started_at = Instant::now();
     loop {
-        thread::sleep(Duration::from_millis(250));
-        if cancel_requested(store, &task.id) {
-            if let Ok(mut process) = child.lock() {
-                let _ = process.kill();
-                let _ = process.wait();
+        thread::sleep(Duration::from_millis(500));
+        if cancel_requested(&store, &task.id) {
+            if let Ok(mut child) = child.lock() {
+                let _ = child.kill();
+                let _ = child.wait();
             }
-            unregister_process(store, &task.id, &child);
-            return Err("cancelled".into());
+            mark_stopped(&store, &writer, &task.id);
+            return;
         }
-        let bytes = task
-            .output
-            .as_deref()
-            .and_then(|path| fs::metadata(path).ok())
-            .map(|metadata| metadata.len())
-            .unwrap_or(last_bytes);
+        let bytes = fs::metadata(&output).map(|m| m.len()).unwrap_or(last_bytes);
         let speed = (bytes.saturating_sub(last_bytes) as f64
             / sampled_at.elapsed().as_secs_f64().max(0.001)) as u64;
         last_bytes = bytes;
         sampled_at = Instant::now();
-        let seconds = position.lock().map(|value| *value).unwrap_or(0.0);
-        let stage = if duration > 0.0 {
-            (seconds / duration).clamp(0.0, 0.99)
-        } else {
-            0.0
-        };
-        update(store, writer, &task.id, |current| {
-            current.state = "running".into();
-            current.phase = "merging".into();
-            current.progress = progress_start
-                .saturating_add((stage * progress_span as f64) as u8)
-                .min(99);
-            current.downloaded_bytes = bytes;
-            current.speed_bytes_per_second = speed;
-            current.eta_seconds = (seconds > 0.0 && duration > seconds).then(|| {
-                ((duration - seconds) / (seconds / started_at.elapsed().as_secs_f64().max(0.25)))
-                    as u64
-            });
-            current.message = Some(message.into());
-        });
-        match child
-            .lock()
-            .map_err(|_| "process_lock_poisoned".to_string())
-            .and_then(|mut process| process.try_wait().map_err(|error| error.to_string()))?
-        {
-            Some(status) => {
-                unregister_process(store, &task.id, &child);
-                return if status.success() {
-                    Ok(())
-                } else {
-                    Err("ffmpeg_unavailable_or_failed".into())
-                };
-            }
-            None => {}
-        }
-    }
-}
-
-fn start_hls_plan_download(
-    store: Store,
-    writer: Writer,
-    task: Task,
-    output: String,
-    plan: HlsPlan,
-) {
-    let video_already_done = task
-        .outputs
-        .iter()
-        .find(|item| item.kind == "media")
-        .is_some_and(|item| {
-            item.state == "succeeded"
-                && item
-                    .path
-                    .as_deref()
-                    .is_some_and(|path| Path::new(path).is_file())
-        });
-    if !video_already_done {
-        update(&store, &writer, &task.id, |current| {
-            current.state = "starting".into();
-            current.phase = "starting".into();
-            current.message = Some("正在准备选定的 HLS 轨道".into());
-            set_output_state(current, "media", 0, "starting", None);
-        });
-        let video_file = match write_named_manifest(&task.id, "video", &plan.video_manifest) {
-            Ok(file) => file,
-            Err(error) => {
-                update(&store, &writer, &task.id, |current| {
-                    current.state = "failed".into();
-                    current.error = Some(error.to_string());
-                    set_output_state(current, "media", 0, "failed", Some(error.to_string()));
-                });
-                return;
-            }
-        };
-        let audio_file = match plan.audio_manifest.as_ref() {
-            Some(manifest) => match write_named_manifest(&task.id, "audio", manifest) {
-                Ok(file) => Some(file),
-                Err(error) => {
-                    update(&store, &writer, &task.id, |current| {
-                        current.state = "failed".into();
-                        current.phase = "failed".into();
-                        current.error = Some(error.to_string());
-                        current.message = Some("无法准备所选音轨".into());
-                        set_output_state(current, "media", 0, "failed", Some(error.to_string()));
-                    });
-                    return;
-                }
-            },
-            None => None,
-        };
-        let mut args = ffmpeg_base_args();
-        args.extend(["-progress".into(), "pipe:1".into(), "-nostats".into()]);
-        append_ffmpeg_input(&mut args, &task, video_file.path());
-        if let Some(audio) = &audio_file {
-            append_ffmpeg_input(&mut args, &task, audio.path());
-        }
-        args.extend([
-            "-map".into(),
-            "0:v:0".into(),
-            "-map".into(),
-            if audio_file.is_some() {
-                "1:a:0".into()
-            } else {
-                "0:a?".into()
-            },
-            "-c".into(),
-            "copy".into(),
-            output.clone(),
-        ]);
-        let media_span = if plan.subtitles.is_empty() { 100 } else { 90 };
-        match run_ffmpeg_with_progress(
-            &store,
-            &writer,
-            &task,
-            args,
-            plan.duration,
-            0,
-            media_span,
-            "正在下载所选画质和音轨",
-        ) {
-            Ok(()) => update(&store, &writer, &task.id, |current| {
-                set_output_state(current, "media", 0, "succeeded", None);
-                current.progress = media_span;
-            }),
-            Err(error) if error == "cancelled" => {
-                mark_stopped(&store, &writer, &task.id);
-                return;
-            }
-            Err(error) => {
-                update(&store, &writer, &task.id, |current| {
-                    current.state = "failed".into();
-                    current.phase = "failed".into();
-                    current.error = Some(error.clone());
-                    current.message = Some("FFmpeg 无法处理所选媒体轨道".into());
-                    set_output_state(current, "media", 0, "failed", Some(error));
-                });
-                return;
-            }
-        }
-    }
-    let subtitle_count = plan.subtitles.len();
-    let mut subtitle_failures = 0;
-    for (index, subtitle) in plan.subtitles.iter().enumerate() {
-        let output_item = task
-            .outputs
-            .iter()
-            .filter(|item| item.kind == "subtitle")
-            .nth(index);
-        if output_item.is_some_and(|item| {
-            item.state == "succeeded"
-                && item
-                    .path
-                    .as_deref()
-                    .is_some_and(|path| Path::new(path).is_file())
-        }) {
-            continue;
-        }
-        let Some(path) = output_item.and_then(|item| item.path.clone()) else {
-            subtitle_failures += 1;
-            continue;
-        };
-        update(&store, &writer, &task.id, |current| {
-            set_output_state(current, "subtitle", index, "running", None);
-            current.message = Some(format!(
-                "正在保存字幕：{}",
-                subtitle
-                    .label
-                    .as_deref()
-                    .or(subtitle.language.as_deref())
-                    .unwrap_or("未命名")
-            ));
-        });
-        let manifest_file = match write_named_manifest(
-            &task.id,
-            &format!("subtitle-{index}"),
-            &subtitle.manifest,
-        ) {
-            Ok(file) => file,
-            Err(error) => {
-                subtitle_failures += 1;
-                update(&store, &writer, &task.id, |current| {
-                    set_output_state(
-                        current,
-                        "subtitle",
-                        index,
-                        "failed",
-                        Some(error.to_string()),
-                    )
-                });
-                continue;
-            }
-        };
-        let mut args = ffmpeg_base_args();
-        args.extend(["-progress".into(), "pipe:1".into(), "-nostats".into()]);
-        append_ffmpeg_input(&mut args, &task, manifest_file.path());
-        args.extend([
-            "-map".into(),
-            "0:s:0".into(),
-            "-c:s".into(),
-            "webvtt".into(),
-            path,
-        ]);
-        let start = 90 + ((index * 10) / subtitle_count.max(1)) as u8;
-        let span = (10 / subtitle_count.max(1)).max(1) as u8;
-        match run_ffmpeg_with_progress(
-            &store,
-            &writer,
-            &task,
-            args,
-            plan.duration,
-            start,
-            span,
-            "正在下载字幕",
-        ) {
-            Ok(()) => update(&store, &writer, &task.id, |current| {
-                set_output_state(current, "subtitle", index, "succeeded", None)
-            }),
-            Err(error) if error == "cancelled" => {
-                mark_stopped(&store, &writer, &task.id);
-                return;
-            }
-            Err(error) => {
-                subtitle_failures += 1;
-                update(&store, &writer, &task.id, |current| {
-                    set_output_state(current, "subtitle", index, "failed", Some(error))
-                });
-            }
-        }
-    }
-    update(&store, &writer, &task.id, |current| {
-        current.progress = 100;
-        current.active_connections = 0;
-        current.speed_bytes_per_second = 0;
-        current.eta_seconds = Some(0);
-        current.downloaded_bytes = fs::metadata(&output)
-            .map(|metadata| metadata.len())
-            .unwrap_or(current.downloaded_bytes);
-        current.total_bytes = Some(current.downloaded_bytes);
-        if subtitle_failures == 0 {
-            current.state = "succeeded".into();
-            current.phase = "completed".into();
-            current.error = None;
-            current.message = Some("视频和字幕下载完成".into());
-        } else {
-            current.state = "partial".into();
-            current.phase = "partial".into();
-            current.error = Some("subtitle_output_failed".into());
-            current.message = Some(format!("视频已完成，{subtitle_failures} 条字幕失败"));
-        }
-    });
-}
-
-fn start_download(store: Store, writer: Writer, task: Task) {
-    thread::spawn(move || {
-        if cancel_requested(&store, &task.id) {
-            mark_stopped(&store, &writer, &task.id);
-            return;
-        }
-        let Some(output) = task.output.clone() else {
-            update(&store, &writer, &task.id, |t| {
-                t.state = "failed".into();
-                t.phase = "failed".into();
-                t.error = Some("output_missing".into());
-            });
-            return;
-        };
-        if let Some(parent) = Path::new(&output).parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        if task.hls_plan_version == 3 {
-            let plan = task.hls_plan.clone();
-            start_hls_checkpoint_download(store, writer, task, output, plan);
-            return;
-        }
-        if task.hls_plan_version >= 2 {
-            let plan = task.hls_plan.clone();
-            start_hls_checkpoint_download(store, writer, task, output, plan);
-            return;
-        }
-        if let Some(plan) = task.hls_plan.clone() {
-            start_hls_plan_download(store, writer, task, output, plan);
-            return;
-        }
-        let is_stream = task.inline_manifest.is_some()
-            || task.url.to_ascii_lowercase().contains(".m3u8")
-            || task.url.to_ascii_lowercase().contains(".mpd")
-            || task.mime.as_deref().unwrap_or("").contains("mpegurl")
-            || task.mime.as_deref().unwrap_or("").contains("dash+xml");
-        if !is_stream {
-            start_http_download(store, writer, task, output);
-            return;
-        }
         update(&store, &writer, &task.id, |t| {
             t.state = "running".into();
-            t.phase = "fetching".into();
-            t.message = Some("正在读取流媒体清单，需要 FFmpeg".into());
+            t.phase = "merging".into();
+            t.downloaded_bytes = bytes;
+            t.speed_bytes_per_second = speed;
+            t.message = Some("正在下载流媒体分片并合并".into());
         });
-        let manifest_file = match task.inline_manifest.as_ref() {
-            Some(manifest) => match write_inline_manifest(&task.id, manifest) {
-                Ok(file) => Some(file),
-                Err(error) => {
-                    update(&store, &writer, &task.id, |t| {
-                        t.state = "failed".into();
-                        t.phase = "failed".into();
-                        t.error = Some(error.to_string());
-                        t.message = Some("无法创建临时流媒体清单".into());
-                    });
+        let process_status = child
+            .lock()
+            .map_err(|_| io::Error::other("process_lock_poisoned"))
+            .and_then(|mut child| child.try_wait());
+        match process_status {
+            Ok(Some(status)) if status.success() => {
+                unregister_process(&store, &task.id, &child);
+                if cancel_requested(&store, &task.id) {
+                    mark_stopped(&store, &writer, &task.id);
                     return;
                 }
-            },
-            None => None,
-        };
-        let input = manifest_file
-            .as_ref()
-            .map(|file| file.path().to_string_lossy().into_owned())
-            .unwrap_or_else(|| task.url.clone());
-        let mut ffmpeg_args: Vec<String> = [
-            "-nostdin",
-            "-y",
-            "-loglevel",
-            "error",
-            "-http_multiple",
-            "1",
-            "-http_persistent",
-            "1",
-            "-http_seekable",
-            "1",
-            "-seg_max_retry",
-            "3",
-        ]
-        .into_iter()
-        .map(str::to_string)
-        .collect();
-        if manifest_file.is_some() {
-            ffmpeg_args.extend([
-                "-protocol_whitelist".into(),
-                "file,http,https,tcp,tls,crypto".into(),
-            ]);
-        }
-        if !task.request_headers.is_empty() {
-            let headers = task
-                .request_headers
-                .iter()
-                .map(|(name, value)| format!("{name}: {value}\r\n"))
-                .collect::<String>();
-            ffmpeg_args.extend(["-headers".into(), headers]);
-        }
-        ffmpeg_args.extend([
-            "-i".into(),
-            input,
-            "-map".into(),
-            "0:v?".into(),
-            "-map".into(),
-            "0:a?".into(),
-            "-c".into(),
-            "copy".into(),
-            output.clone(),
-        ]);
-        let child = match Command::new(bundled_tool("ffmpeg.exe"))
-            .args(ffmpeg_args)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-        {
-            Ok(child) => child,
+                update(&store, &writer, &task.id, |t| {
+                    t.state = "succeeded".into();
+                    t.phase = "completed".into();
+                    t.progress = 100;
+                    t.downloaded_bytes = fs::metadata(&output).map(|m| m.len()).unwrap_or(bytes);
+                    t.total_bytes = Some(t.downloaded_bytes);
+                    t.active_connections = 0;
+                    t.message = Some("流媒体下载完成".into());
+                });
+                break;
+            }
+            Ok(Some(_)) => {
+                unregister_process(&store, &task.id, &child);
+                if cancel_requested(&store, &task.id) {
+                    mark_stopped(&store, &writer, &task.id);
+                    return;
+                }
+                update(&store, &writer, &task.id, |t| {
+                    t.state = "failed".into();
+                    t.phase = "failed".into();
+                    t.error = Some("ffmpeg_unavailable_or_failed".into());
+                    t.active_connections = 0;
+                    t.message = Some("FFmpeg 无法处理此资源".into());
+                });
+                break;
+            }
             Err(error) => {
+                unregister_process(&store, &task.id, &child);
                 update(&store, &writer, &task.id, |t| {
                     t.state = "failed".into();
                     t.phase = "failed".into();
                     t.error = Some(error.to_string());
-                    t.message = Some("未找到 FFmpeg".into());
+                    t.active_connections = 0;
                 });
-                return;
+                break;
             }
-        };
-        let child = register_process(&store, &task.id, child);
-        update(&store, &writer, &task.id, |t| {
-            t.active_connections = 1;
-            t.message = Some("FFmpeg 正在使用持久连接下载并合并流媒体".into());
-        });
-        let mut last_bytes = 0u64;
-        let mut sampled_at = Instant::now();
-        loop {
-            thread::sleep(Duration::from_millis(500));
-            if cancel_requested(&store, &task.id) {
-                if let Ok(mut child) = child.lock() {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                }
-                mark_stopped(&store, &writer, &task.id);
-                return;
-            }
-            let bytes = fs::metadata(&output).map(|m| m.len()).unwrap_or(last_bytes);
-            let speed = (bytes.saturating_sub(last_bytes) as f64
-                / sampled_at.elapsed().as_secs_f64().max(0.001)) as u64;
-            last_bytes = bytes;
-            sampled_at = Instant::now();
-            update(&store, &writer, &task.id, |t| {
-                t.state = "running".into();
-                t.phase = "merging".into();
-                t.downloaded_bytes = bytes;
-                t.speed_bytes_per_second = speed;
-                t.message = Some("正在下载流媒体分片并合并".into());
-            });
-            let process_status = child
-                .lock()
-                .map_err(|_| io::Error::other("process_lock_poisoned"))
-                .and_then(|mut child| child.try_wait());
-            match process_status {
-                Ok(Some(status)) if status.success() => {
-                    unregister_process(&store, &task.id, &child);
-                    if cancel_requested(&store, &task.id) {
-                        mark_stopped(&store, &writer, &task.id);
-                        return;
-                    }
-                    update(&store, &writer, &task.id, |t| {
-                        t.state = "succeeded".into();
-                        t.phase = "completed".into();
-                        t.progress = 100;
-                        t.downloaded_bytes =
-                            fs::metadata(&output).map(|m| m.len()).unwrap_or(bytes);
-                        t.total_bytes = Some(t.downloaded_bytes);
-                        t.active_connections = 0;
-                        t.message = Some("流媒体下载完成".into());
-                    });
-                    break;
-                }
-                Ok(Some(_)) => {
-                    unregister_process(&store, &task.id, &child);
-                    if cancel_requested(&store, &task.id) {
-                        mark_stopped(&store, &writer, &task.id);
-                        return;
-                    }
-                    update(&store, &writer, &task.id, |t| {
-                        t.state = "failed".into();
-                        t.phase = "failed".into();
-                        t.error = Some("ffmpeg_unavailable_or_failed".into());
-                        t.active_connections = 0;
-                        t.message = Some("FFmpeg 无法处理此资源".into());
-                    });
-                    break;
-                }
-                Err(error) => {
-                    unregister_process(&store, &task.id, &child);
-                    update(&store, &writer, &task.id, |t| {
-                        t.state = "failed".into();
-                        t.phase = "failed".into();
-                        t.error = Some(error.to_string());
-                        t.active_connections = 0;
-                    });
-                    break;
-                }
-                Ok(None) => {}
-            }
+            Ok(None) => {}
         }
-    });
+    }
 }
 
 fn resume_recoverable_hls_tasks(store: &Store, writer: &Writer) {
@@ -3853,26 +1001,31 @@ fn resume_recoverable_hls_tasks(store: &Store, writer: &Writer) {
         .unwrap()
         .iter()
         .filter(|task| {
-            task.hls_plan_version >= 2
-                && task.state == "interrupted"
+            task.state == "interrupted"
+                && !task.live_recording
                 && task.resume_requirement.is_none()
-                && checkpoint_available(&checkpoint_path_for_store(store, &task.id))
+                && (!task.hls_selection
+                    || checkpoint_available(&checkpoint_path_for_store(store, &task.id)))
         })
         .cloned()
-        .filter_map(|mut task| {
-            let checkpoint = load_checkpoint(&checkpoint_path_for_store(store, &task.id)).ok()?;
-            task.hls_plan = Some(runtime_plan_from_persisted(&checkpoint.plan));
-            Some(task)
-        })
         .collect();
-    for task in resumable {
+    for mut task in resumable {
+        if task.hls_selection {
+            let Ok(checkpoint) = load_checkpoint(&checkpoint_path_for_store(store, &task.id))
+            else {
+                continue;
+            };
+            task.hls_plan = Some(runtime_plan_from_persisted(&checkpoint.plan));
+        }
         update(store, writer, &task.id, |current| {
-            current.state = "retrying".into();
+            current.state = "queued".into();
             current.phase = "recovering".into();
+            current.hls_plan = task.hls_plan.clone();
             current.attempt = current.attempt.saturating_add(1);
             current.error = None;
-            current.message = Some("正在从 HLS 检查点自动恢复".into());
+            current.message = Some("已重新排队，等待恢复下载".into());
         });
+        task.state = "queued".into();
         start_download(store.clone(), writer.clone(), task);
     }
 }
@@ -3885,63 +1038,6 @@ fn start_recovery_once(store: &Store, writer: &Writer) {
     {
         resume_recoverable_hls_tasks(store, writer);
     }
-}
-
-fn main() -> io::Result<()> {
-    cleanup_stale_inline_manifests();
-    let store = load_store(&state_path());
-    let writer: Writer = Arc::new(Mutex::new(io::BufWriter::new(io::stdout())));
-    let mut input = io::stdin().lock();
-    loop {
-        let message = match read_message(&mut input) {
-            Ok(value) => value,
-            Err(_) => break,
-        };
-        let id = message["id"].clone();
-        let message_type = message["type"].as_str().unwrap_or("");
-        let response = match message_type {
-            "host.info" => {
-                json!({"version":1,"id":id,"ok":true,"protocolVersion":3,"supportedProtocolVersions":[2,3],"hostVersion":"0.9.0","capabilities":["inline-hls-v1","task-control-v1","task-pause-resume-v1","hls-selection-v1","hls-subtitle-sidecar-v1","task-output-group-v1","hls-segment-engine-v1","hls-checkpoint-v1","hls-aes128-v1","hls-key-override-v1","hls-reauthorize-v1","hls-live-engine-v1"]})
-            }
-            "task.create" => match create_task(&store, &message["payload"]) {
-                Ok(task) => {
-                    start_download(store.clone(), writer.clone(), task.clone());
-                    json!({"version":1,"id":id,"ok":true,"task":sanitized_task(&task)})
-                }
-                Err(error) => json!({"version":1,"id":id,"ok":false,"error":error}),
-            },
-            "task.prepare" => match prepare_task(&message["payload"]) {
-                Ok(value) => json!({"version":1,"id":id,"ok":true,"payload":value}),
-                Err(error) => json!({"version":1,"id":id,"ok":false,"error":error}),
-            },
-            "task.delete" => match delete_task(&store, &writer, &message["payload"]) {
-                Ok(value) => json!({"version":1,"id":id,"ok":true,"payload":value}),
-                Err(error) => json!({"version":1,"id":id,"ok":false,"error":error}),
-            },
-            "task.control" => match task_control(&store, &writer, &message["payload"]) {
-                Ok(task) => json!({"version":1,"id":id,"ok":true,"task":task}),
-                Err(error) => json!({"version":1,"id":id,"ok":false,"error":error}),
-            },
-            "task.list" => {
-                let tasks = store.tasks.lock().unwrap();
-                json!({"version":1,"id":id,"ok":true,"tasks":sanitized_tasks(&tasks)})
-            }
-            "path.validate" => match message["payload"]["path"]
-                .as_str()
-                .ok_or("path_empty")
-                .and_then(validate_dir)
-            {
-                Ok(path) => json!({"version":1,"id":id,"ok":true,"path":path.to_string_lossy()}),
-                Err(error) => json!({"version":1,"id":id,"ok":false,"error":error}),
-            },
-            _ => json!({"version":1,"id":id,"ok":false,"error":"unsupported_message"}),
-        };
-        emit(&writer, response);
-        if matches!(message_type, "host.info" | "task.list") {
-            start_recovery_once(&store, &writer);
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -3969,7 +1065,7 @@ mod tests {
                 "referer":"https://example.test/page"
             },
             "hlsPlan":{
-                "version":1,
+                "version":2,
                 "duration":2.0,
                 "container":"mkv",
                 "videoManifest":manifest_value("video"),
@@ -4119,6 +1215,8 @@ mod tests {
         fs::write(dir.join("视频.mp4"), b"existing").unwrap();
         let tasks = vec![Task {
             id: "reserved".into(),
+            revision: 1,
+            request_id: None,
             url: "https://example.test/a.mp4".into(),
             title: "reserved".into(),
             state: "queued".into(),
@@ -4293,7 +1391,7 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
-    fn restarted_hls_selection_task_loses_runtime_plan_and_interrupts_outputs() {
+    fn queued_hls_task_persists_a_recoverable_plan_before_execution() {
         let root =
             std::env::temp_dir().join(format!("streamfirefly-hls-restart-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
@@ -4313,10 +1411,7 @@ mod tests {
         assert_eq!(task.state, "interrupted");
         assert!(task.hls_plan.is_none());
         assert!(task.hls_selection);
-        assert_eq!(
-            ensure_restart_context(&reloaded, &task),
-            Err("hls_plan_expired")
-        );
+        assert_eq!(ensure_restart_context(&reloaded, &task), Ok(()));
         assert!(task
             .outputs
             .iter()
@@ -4372,27 +1467,6 @@ mod tests {
         assert_eq!(retry_after_seconds("http_status_500"), None);
     }
     #[test]
-    fn ffmpeg_headers_are_scoped_to_each_input() {
-        let task: Task = serde_json::from_value(json!({
-            "id":"headers","url":"https://example.test/a.m3u8","title":"headers",
-            "state":"queued","progress":0,"output":null,"error":null,"mime":"application/vnd.apple.mpegurl",
-            "request_headers":{"referer":"https://example.test/page"}
-        })).unwrap();
-        let mut args = ffmpeg_base_args();
-        append_ffmpeg_input(&mut args, &task, Path::new("video.m3u8"));
-        append_ffmpeg_input(&mut args, &task, Path::new("audio.m3u8"));
-        assert_eq!(
-            args.iter()
-                .filter(|value| value.as_str() == "-headers")
-                .count(),
-            2
-        );
-        assert_eq!(
-            args.iter().filter(|value| value.as_str() == "-i").count(),
-            2
-        );
-    }
-    #[test]
     fn inline_hls_rejects_local_file_uris() {
         let result = inline_manifest(&json!({
             "inlineManifest": {
@@ -4402,19 +1476,6 @@ mod tests {
             }
         }));
         assert_eq!(result.unwrap_err(), "inline_manifest_unsafe_uri");
-    }
-    #[test]
-    fn inline_hls_temp_file_is_removed_on_drop() {
-        let manifest = InlineManifest {
-            text: "#EXTM3U\n#EXTINF:2,\nhttps://cdn.example.test/one.ts\n".into(),
-            base_url: "https://example.test/player".into(),
-        };
-        let id = Uuid::new_v4().to_string();
-        let file = write_inline_manifest(&id, &manifest).unwrap();
-        let path = file.path().to_path_buf();
-        assert_eq!(fs::read_to_string(&path).unwrap(), manifest.text);
-        drop(file);
-        assert!(!path.exists());
     }
     #[test]
     fn delete_output_rejects_directories_and_accepts_missing_files() {

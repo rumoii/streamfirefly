@@ -1,4 +1,5 @@
 const api = (globalThis as any).browser ?? (globalThis as any).chrome;
+import type { CoreRequests, CoreResponses } from "./protocol";
 
 export function extensionApi() { return api; }
 
@@ -18,6 +19,10 @@ export function surfaceFromUrl(): UiSurface {
   if ((globalThis as any).__STREAMFIREFLY_SURFACE__ === "workspace") return "workspace";
   const surface = new URLSearchParams(location.search).get("surface");
   return surface === "options" ? "options" : surface === "workspace" ? "workspace" : "sidebar";
+}
+
+export function sendCore<K extends keyof CoreRequests>(message: CoreRequests[K] & { type: K }): Promise<CoreResponses[K]> {
+  return sendMessage<CoreResponses[K]>(message);
 }
 
 export async function currentWindowId(): Promise<number | null> {

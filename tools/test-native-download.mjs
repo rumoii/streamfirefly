@@ -74,6 +74,7 @@ child.stdout.on('data', chunk => {
 });
 function send(type, messagePayload = {}) {
   const id = `e2e-${++sequence}`;
+  if (type === "task.create") messagePayload = { requestId: id, ...messagePayload };
   const value = Buffer.from(JSON.stringify({ version: 1, id, type, payload: messagePayload }));
   child.stdin.write(Buffer.concat([Buffer.from([value.length & 255, value.length >> 8 & 255, value.length >> 16 & 255, value.length >> 24 & 255]), value]));
   return new Promise(resolve => pending.set(id, resolve));

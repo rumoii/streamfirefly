@@ -2,6 +2,8 @@
 
 Status: proposed
 
+本记录中的协议 v2 兼容与单端回滚约定已由 `2026-09-07-unified-download-queue-and-atomic-upgrade.md` 取代。后续录制数据通道仍为提案，不属于当前已实现能力。
+
 ## Problem
 
 流萤原有弹窗适合快速下载，但无法稳定承载媒体解析、批量操作、长时间任务和录制。Native Messaging v2 只有任务创建、查询和删除，也不能把持续的大块媒体数据作为 JSON 消息可靠传输。

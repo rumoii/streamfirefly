@@ -29,6 +29,8 @@ export interface ResourceViewState {
   type: "all" | "video" | "audio" | "image";
   minMb: string;
   maxMb: string;
+  minDuration: string;
+  maxDuration: string;
   sortMode: "detected" | "size" | "duration" | "type";
   collapsed: boolean;
   expandedId: string;
@@ -58,6 +60,8 @@ export interface TaskOutput {
 
 export interface DownloadTask {
   id: string;
+  revision?: number;
+  request_id?: string | null;
   url?: string;
   title: string;
   state: string;

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'extension');
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
-const background = fs.readFileSync(path.join(root, 'background.js'), 'utf8');
+const background = ["background-native.js","background-workspace.js","background-preview.js","background-resources.js","background.js"].map(file => fs.readFileSync(path.join(root, file), 'utf8')).join('\n');
 const required = JSON.parse(fs.readFileSync(path.join(root, '..', 'tools', 'extension-package-files.json'), 'utf8'));
 const missing = required.filter(file => !fs.existsSync(path.join(root, file)));
 if (manifest.manifest_version !== 3) throw new Error('manifest_version must be 3');

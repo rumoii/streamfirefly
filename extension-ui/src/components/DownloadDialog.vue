@@ -1,63 +1,38 @@
 <script setup lang="ts">
-import { computed, reactive, watch } from "vue";
+import { vModalFocus } from "../modal-focus";
+import { computed, onBeforeUnmount, reactive, watch } from "vue";
 import type { MediaCandidate } from "../types";
 import { sendMessage } from "../api";
 import { humanError } from "../store";
-import { defaultAudio, defaultVariant, deriveMediaPlaylist, parseHls } from "../media";
+import { createDownload, prepareCandidate } from "../download-client";
 
-const props = defineProps<{ candidate: MediaCandidate | null; saveDir: string; downloadThreads: number; sourceContextId: string | null; sourceTabId: number | null; capabilities: string[] }>();
+const props = defineProps<{ candidate: MediaCandidate | null; saveDir: string; downloadThreads: number; sourceContextId: string | null; sourceTabId: number | null; capabilities: string[]; connected?: boolean }>();
 const emit = defineEmits<{ close: []; created: [message: string] }>();
-const form = reactive({ name: "", extension: "mp4", busy: false, error: "" });
-let preparedHlsPlan: any = null;
-
-function payload(extra: Record<string, any> = {}) {
-  const item = props.candidate!;
-  return { url: item.url, title: item.title || item.pageTitle || "streamfirefly-download", mime: item.mime || null, contentDisposition: item.contentDisposition || null, referer: item.referer || item.pageUrl || null, requestHeaders: item.requestHeaders || {}, inlineManifest: item.inlineManifest || null, downloadThreads: props.downloadThreads, sourceContextId: props.sourceContextId, ...extra };
-}
-
-async function fetchManifest(url: string) {
-  const item = props.candidate!;
-  if (item.inlineManifest && url === item.url) return { text: item.inlineManifest.text, url: item.inlineManifest.baseUrl || item.url };
-  const result: any = await sendMessage({ type: "media.fetchText", tabId: props.sourceTabId, id: item.id, url });
-  if (!result?.ok) throw new Error(result?.error || "media_fetch_failed");
-  return { text: result.text, url: result.url || url };
-}
-
-async function prepareQuickHls() {
-  if (!props.capabilities.includes("hls-selection-v1")) throw new Error("hls_selection_native_upgrade_required");
-  const root = await fetchManifest(props.candidate!.url);
-  const master = parseHls(root.text, root.url);
-  if (master.live) throw new Error("直播清单请使用解析页面开始录制");
-  const variant = defaultVariant(master.variants);
-  const mediaResponse = variant ? await fetchManifest(variant.uri) : root;
-  const media = parseHls(mediaResponse.text, mediaResponse.url);
-  if (media.live) throw new Error("直播清单请使用解析页面开始录制");
-  const selected = deriveMediaPlaylist(media, 0, media.segments.length - 1);
-  const audioTrack = variant ? defaultAudio(master.tracks, variant.audioGroup) : null;
-  let audioManifest = null;
-  if (audioTrack?.uri) {
-    const audioResponse = await fetchManifest(audioTrack.uri);
-    const audio = parseHls(audioResponse.text, audioResponse.url);
-    const derived = deriveMediaPlaylist(audio, 0, audio.segments.length - 1);
-    audioManifest = { format: "hls", baseUrl: derived.baseUrl, text: derived.text };
-  }
-  const container = !variant?.codecs || /avc1|hvc1|hev1|mp4a/i.test(variant.codecs) ? "mp4" : "mkv";
-  preparedHlsPlan = { version: 1, duration: selected.actualEnd - selected.actualStart, container, range: { requestedStart: 0, requestedEnd: selected.actualEnd, actualStart: selected.actualStart, actualEnd: selected.actualEnd, firstSegment: selected.first, lastSegment: selected.last }, videoManifest: { format: "hls", baseUrl: selected.baseUrl, text: selected.text }, audioManifest, subtitles: [] };
-  form.extension = container;
-}
+const form = reactive({ name: "", extension: "mp4", busy: false, preparing: false, ready: false, error: "" });
+let prepared: Record<string, unknown> | null = null;
+let preparation = 0;
+let requestId = "";
 
 watch(() => props.candidate, async candidate => {
-  form.error = "";
-  preparedHlsPlan = null;
+  const token = ++preparation;
+  requestId = crypto.randomUUID();
+  prepared = null;
+  Object.assign(form, { name: "", extension: "mp4", ready: false, preparing: Boolean(candidate), error: "" });
   if (!candidate) return;
   try {
-    if (candidate.type === "hls") await prepareQuickHls();
-    const result: any = await sendMessage({ type: "task.prepare", payload: payload(preparedHlsPlan ? { hlsPlan: preparedHlsPlan, inlineManifest: null } : {}) });
+    const payload = await prepareCandidate(candidate, props.sourceTabId);
+    if (token !== preparation) return;
+    const result = await sendMessage({ type: "task.prepare", payload });
+    if (token !== preparation) return;
     if (!result?.ok) throw new Error(result?.error || "task_prepare_failed");
+    prepared = payload;
     form.name = result.payload.fileName;
     form.extension = result.payload.extension;
-  } catch (reason: any) { form.error = humanError(reason?.message); }
+    form.ready = true;
+  } catch (reason: any) { if (token === preparation) form.error = humanError(reason?.message); }
+  finally { if (token === preparation) form.preparing = false; }
 }, { immediate: true });
+onBeforeUnmount(() => { preparation++; });
 
 const validation = computed(() => {
   const value = form.name.trim().replace(/[. ]+$/g, "");
@@ -67,11 +42,11 @@ const validation = computed(() => {
 });
 
 async function create() {
-  if (!props.candidate || validation.value) return;
+  if (!props.candidate || validation.value || !form.ready || form.busy || !prepared || props.connected === false) return;
   form.busy = true; form.error = "";
   try {
-    const result: any = await sendMessage({ type: "task.create", payload: { ...payload(preparedHlsPlan ? { hlsPlan: preparedHlsPlan, inlineManifest: null } : {}), fileName: form.name.trim(), saveDir: props.saveDir || null } });
-    if (!result?.ok) throw new Error(result?.error || "task_create_failed");
+    const task = await createDownload({ ...prepared, downloadThreads: props.downloadThreads, sourceContextId: props.sourceContextId, fileName: form.name.trim(), saveDir: props.saveDir || null }, requestId);
+    const result = { task };
     emit("created", `任务已创建：${result.task?.title || form.name}`);
     emit("close");
   } catch (reason: any) { form.error = humanError(reason?.message); }
@@ -82,11 +57,11 @@ async function create() {
 <template>
   <Transition name="fade">
     <div v-if="candidate" class="dialog-backdrop" @click.self="$emit('close')">
-      <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="download-title">
+      <section v-modal-focus="() => emit('close')" class="dialog" role="dialog" aria-modal="true" aria-labelledby="download-title">
         <div class="dialog-heading"><div><h2 id="download-title">开始下载</h2><p>确认文件名称与保存位置</p></div><button class="icon-button" type="button" aria-label="关闭" @click="$emit('close')">×</button></div>
-        <label class="field"><span>文件名称</span><div class="filename"><input v-model="form.name" maxlength="100" @keydown.enter="create"><b>.{{ form.extension }}</b></div><small class="error-text">{{ validation || form.error }}</small></label>
+        <label class="field"><span>文件名称</span><div class="filename"><input v-model="form.name" maxlength="100" @keydown.enter="create"><b>.{{ form.extension }}</b></div><small class="error-text">{{ form.preparing ? "正在准备下载…" : form.error || validation }}</small></label>
         <div class="path-summary"><span>保存目录</span><strong>{{ saveDir || '系统默认目录' }}</strong></div>
-        <div class="dialog-actions"><button class="button" type="button" @click="$emit('close')">取消</button><button class="button primary" type="button" :disabled="Boolean(validation) || form.busy" @click="create">{{ form.busy ? '正在创建…' : '开始下载' }}</button></div>
+        <div class="dialog-actions"><button class="button" type="button" @click="$emit('close')">取消</button><button class="button primary" type="button" :disabled="Boolean(validation) || form.busy || !form.ready || connected === false" @click="create">{{ form.busy ? '正在创建…' : '开始下载' }}</button></div>
       </section>
     </div>
   </Transition>

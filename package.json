@@ -6,9 +6,10 @@
     "build:extension": "vite build && vite build --config vite.workspace.config.ts",
     "typecheck": "vue-tsc --noEmit",
     "test:ui": "vitest run",
+    "test:ui:browser": "node tools/test-ui-playwright.mjs",
     "validate:extension": "npm run build:extension && node tools/validate-extension.mjs && node tools/validate-firefox-extension.mjs",
     "test:unit": "npm run test:ui && node tools/test-extension-logic.mjs && node tools/test-page-probe.mjs && node tools/test-firefox-integration.mjs && node tools/test-internal-packaging.mjs",
-    "test:native": "node tools/test-native.mjs && node tools/test-native-download.mjs && node tools/test-native-hls.mjs",
+    "test:native": "node tools/test-native.mjs && node tools/test-native-download.mjs && node tools/test-native-hls.mjs && node tools/test-native-queue.mjs",
     "lint:firefox": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/package-firefox-extension.ps1 -LintOnly",
     "package:firefox": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/package-firefox-extension.ps1",
     "test:firefox": "node tools/test-browser-extension.mjs --browser firefox",
@@ -17,6 +18,7 @@
     "test:browsers": "npm run test:chrome && npm run test:edge && npm run test:firefox"
   },
   "devDependencies": {
+    "playwright-core": "1.61.1",
     "@vitejs/plugin-vue": "6.0.1",
     "@vue/test-utils": "2.4.6",
     "jsdom": "26.1.0",

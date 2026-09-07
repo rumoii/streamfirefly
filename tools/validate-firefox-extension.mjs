@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const extensionRoot = path.join(repositoryRoot, 'extension');
 const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'manifest.firefox.json'), 'utf8'));
-const background = fs.readFileSync(path.join(extensionRoot, 'background.js'), 'utf8');
+const background = ["background-native.js","background-workspace.js","background-preview.js","background-resources.js","background.js"].map(file => fs.readFileSync(path.join(extensionRoot, file), 'utf8')).join('\n');
 const required = JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'tools', 'extension-package-files.json'), 'utf8'));
 const missing = required.filter(file => !fs.existsSync(path.join(extensionRoot, file)));
 const gecko = manifest.browser_specific_settings?.gecko;

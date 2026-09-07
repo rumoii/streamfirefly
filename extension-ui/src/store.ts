@@ -1,7 +1,8 @@
 import { computed, onBeforeUnmount, ref } from "vue";
 import { defineStore } from "pinia";
-import { currentWindowId, extensionApi, sendMessage, surfaceFromUrl, type UiSurface } from "./api";
+import { currentWindowId, extensionApi, sendCore, sendMessage, surfaceFromUrl, type UiSurface } from "./api";
 import type { DownloadTask, MediaCandidate, ResourceViewState, UiContext } from "./types";
+import { createTaskState } from "./task-state";
 
 const activeStates = new Set(["queued", "starting", "running", "retrying", "pausing", "cancelling", "stopping"]);
 
@@ -26,6 +27,8 @@ export const DEFAULT_RESOURCE_VIEW_STATE: Readonly<ResourceViewState> = Object.f
   type: "all",
   minMb: "",
   maxMb: "",
+  minDuration: "",
+  maxDuration: "",
   sortMode: "detected",
   collapsed: false,
   expandedId: "",
@@ -42,8 +45,8 @@ export const useAppStore = defineStore("app", () => {
   const surface = ref<UiSurface>(surfaceFromUrl());
   const context = ref<UiContext | null>(null);
   const candidates = ref<MediaCandidate[]>([]);
-  const tasks = ref<DownloadTask[]>([]);
-  const capabilities = ref<string[]>([]);
+  const taskState = createTaskState(message => message.type === "native.connect" ? sendCore({ type: "native.connect" }) : sendCore({ type: "task.list" }));
+  const { tasks, capabilities, connection, connectionError } = taskState;
   const loading = ref(true);
   const error = ref("");
   const status = ref("");
@@ -53,28 +56,35 @@ export const useAppStore = defineStore("app", () => {
   let listening = false;
   let sidebarWindowId: number | null = null;
   let resourcePatchQueue: Promise<void> = Promise.resolve();
+  let contextSequence = 0;
+  let disposed = false;
+  let pendingPatches = 0;
 
   const sourceTasks = computed(() => tasks.value.filter(task => task.source_context_id && task.source_context_id === context.value?.sourceContextId));
   const activeTasks = computed(() => tasks.value.filter(task => activeStates.has(task.state)));
 
   async function loadContext() {
+    const sequence = ++contextSequence;
     if (surface.value === "options") { context.value = null; candidates.value = []; return; }
     if (surface.value === "sidebar" && sidebarWindowId == null) sidebarWindowId = await currentWindowId();
-    const result: any = await sendMessage({ type: "ui.context.get", scope: surface.value === "workspace" ? "sender" : "active", windowId: sidebarWindowId });
-    if (!result?.ok) throw new Error(result?.error || "source_tab_unavailable");
+    const result = await sendCore({ type: "ui.context.get", scope: surface.value === "workspace" ? "sender" : "active", windowId: sidebarWindowId }).catch(reason => {
+      if (disposed || sequence !== contextSequence) return null;
+      throw reason;
+    });
+    if (disposed || sequence !== contextSequence) return;
+    if (!result?.ok || !result.context) throw new Error(result?.error || "source_tab_unavailable");
     const nextContext = result.context as UiContext;
     nextContext.pageTitle = cleanSourceTitle(nextContext.pageTitle);
     nextContext.resourceViewState = { ...DEFAULT_RESOURCE_VIEW_STATE, ...(nextContext.resourceViewState || {}), sortMode: nextContext.resourceViewState?.sortMode || settings.value.candidateSort };
+    const sameContext = context.value?.sourceContextId === nextContext.sourceContextId;
     context.value = nextContext;
     candidates.value = Array.isArray(result.context?.candidates) ? result.context.candidates : [];
-    resourceViewState.value = { ...nextContext.resourceViewState };
+    if (!sameContext || (!pendingPatches && nextContext.resourceViewState.revision >= resourceViewState.value.revision)) resourceViewState.value = { ...nextContext.resourceViewState };
+    error.value = "";
     if (surface.value !== "workspace") document.title = `流萤 · ${context.value?.pageTitle || "网页媒体"}`;
   }
 
-  async function loadTasks() {
-    const result: any = await sendMessage({ type: "task.list" });
-    tasks.value = result?.tasks ?? result?.payload?.tasks ?? [];
-  }
+  const loadTasks = taskState.refresh;
 
   async function loadSettings() { settings.value = await readSettings(); }
 
@@ -88,18 +98,18 @@ export const useAppStore = defineStore("app", () => {
         candidates.value = context.value.candidates;
         resourceViewState.value = { ...context.value.resourceViewState };
         tasks.value = previewTasks();
+        connection.value = "ready";
         capabilities.value = ["hls-selection-v1", "hls-subtitle-sidecar-v1", "task-output-group-v1", "hls-segment-engine-v1", "hls-checkpoint-v1", "hls-aes128-v1", "hls-key-override-v1", "hls-reauthorize-v1", "hls-live-engine-v1"];
       } else {
-        const operations: Promise<unknown>[] = [loadSettings()];
-        if (surface.value !== "options") {
-          const native: any = await sendMessage({ type: "native.connect" });
-          capabilities.value = native?.capabilities || [];
-          operations.push(loadContext(), loadTasks());
-        }
-        await Promise.all(operations);
+        await loadSettings();
+        if (disposed) return;
         const api = extensionApi();
         if (!listening) { api.runtime.onMessage.addListener(onRuntimeMessage); listening = true; }
-        if (surface.value !== "options" && timer == null) timer = window.setInterval(() => { void refresh(); }, 1000);
+        if (surface.value !== "options") {
+          document.addEventListener("visibilitychange", onVisibilityChange);
+          await refresh();
+          scheduleRefresh();
+        }
       }
     } catch (reason: any) {
       error.value = humanError(reason?.message || String(reason));
@@ -109,8 +119,18 @@ export const useAppStore = defineStore("app", () => {
   }
 
   async function refresh() {
-    if (!extensionApi()?.runtime?.sendMessage || surface.value === "options") return;
-    try { await Promise.all([loadContext(), loadTasks()]); } catch (_) {}
+    if (disposed || !extensionApi()?.runtime?.sendMessage || surface.value === "options") return;
+    await Promise.all([loadContext().catch(reason => { if (!disposed) error.value = humanError(reason?.message); }), loadTasks()]);
+  }
+
+  function scheduleRefresh() {
+    if (disposed || document.hidden || timer != null) return;
+    timer = window.setTimeout(async () => { timer = null; await refresh(); scheduleRefresh(); }, 1000);
+  }
+
+  function onVisibilityChange() {
+    if (timer != null) { clearTimeout(timer); timer = null; }
+    if (!document.hidden) void refresh().finally(scheduleRefresh);
   }
 
   async function toggleSniffing() {
@@ -127,6 +147,7 @@ export const useAppStore = defineStore("app", () => {
   }
 
   async function closeWorkspace() {
+    if (!window.dispatchEvent(new Event("streamfirefly-workspace-before-close", { cancelable: true }))) return;
     const result: any = await sendMessage({ type: "workspace.close" });
     if (!result?.ok) throw new Error(result?.error || "workspace_close_failed");
   }
@@ -149,12 +170,14 @@ export const useAppStore = defineStore("app", () => {
     }
     if (!extensionApi()?.runtime?.sendMessage) return Promise.resolve();
     const tabId = context.value.sourceTabId;
+    pendingPatches++;
     const operation = resourcePatchQueue.catch(() => {}).then(async () => {
+      if (disposed || context.value?.sourceContextId !== sourceContextId) return;
       await sortPersistence;
-      const result: any = await sendMessage({ type: "ui.resource-state.patch", scope: surface.value === "workspace" ? "sender" : "active", tabId, windowId: sidebarWindowId, sourceContextId, patch });
+      const result = await sendCore({ type: "ui.resource-state.patch", scope: surface.value === "workspace" ? "sender" : "active", tabId, windowId: sidebarWindowId, sourceContextId, patch });
       if (!result?.ok) throw new Error(result?.error || "resource_view_update_failed");
-      if (context.value?.sourceContextId === sourceContextId && result.state?.revision >= resourceViewState.value.revision) resourceViewState.value = result.state;
-    });
+      if (!disposed && context.value?.sourceContextId === sourceContextId && result.state && result.state.revision >= resourceViewState.value.revision) resourceViewState.value = result.state;
+    }).finally(() => { pendingPatches--; });
     resourcePatchQueue = operation.catch(() => {});
     return operation;
   }
@@ -192,36 +215,36 @@ export const useAppStore = defineStore("app", () => {
     }
     const result: any = await sendMessage({ type: "task.control", payload: { id: task.id, action, resumeContext: Object.keys(resumeContext).length ? resumeContext : null } });
     if (!result?.ok) throw new Error(result?.error || "task_control_failed");
-    const index = tasks.value.findIndex(item => item.id === task.id);
-    if (index >= 0 && result.task) tasks.value[index] = result.task;
+    if (result.task) taskState.receive({ type: "task.progress", task: result.task });
   }
 
   async function deleteTask(task: DownloadTask, deleteFile: boolean) {
     const result: any = await sendMessage({ type: "task.delete", payload: { id: task.id, deleteFile } });
     if (!result?.ok) throw new Error(result?.error || "task_delete_failed");
-    tasks.value = tasks.value.filter(item => item.id !== task.id);
+    taskState.receive({ type: "task.deleted", id: task.id });
   }
 
   function onRuntimeMessage(message: any) {
+    if (disposed) return;
+    taskState.receive(message);
     if (message?.type === "ui.context.changed") {
       const belongsToSidebar = surface.value === "sidebar" && (message.windowId == null || sidebarWindowId == null || message.windowId === sidebarWindowId);
       const belongsToWorkspace = surface.value === "workspace" && message.tabId === context.value?.sourceTabId;
       if (belongsToSidebar || belongsToWorkspace) void loadContext().catch(() => {});
     }
     if (message?.type === "ui.resource-state.changed" && message.sourceContextId === context.value?.sourceContextId && message.state?.revision >= resourceViewState.value.revision) resourceViewState.value = message.state;
-    if (message?.type === "task.deleted" && message.id) tasks.value = tasks.value.filter(item => item.id !== message.id);
-    if (message?.type === "task.progress" && message.task) {
-      const index = tasks.value.findIndex(item => item.id === message.task.id);
-      if (index >= 0) tasks.value[index] = message.task; else tasks.value.push(message.task);
-    }
   }
 
   onBeforeUnmount(() => {
-    if (timer != null) { clearInterval(timer); timer = null; }
+    disposed = true;
+    contextSequence++;
+    taskState.dispose();
+    document.removeEventListener("visibilitychange", onVisibilityChange);
+    if (timer != null) { clearTimeout(timer); timer = null; }
     if (listening) { extensionApi()?.runtime?.onMessage?.removeListener?.(onRuntimeMessage); listening = false; }
   });
 
-  return { surface, context, candidates, tasks, capabilities, loading, error, status, settings, resourceViewState, sourceTasks, activeTasks, initialize, refresh, toggleSniffing, openWorkspace, closeWorkspace, removeCandidates, patchResourceView, updateCandidateMetadata, saveSettings, controlTask, deleteTask };
+  return { surface, context, candidates, tasks, capabilities, connection, connectionError, loading, error, status, settings, resourceViewState, sourceTasks, activeTasks, initialize, refresh, toggleSniffing, openWorkspace, closeWorkspace, removeCandidates, patchResourceView, updateCandidateMetadata, saveSettings, controlTask, deleteTask };
 });
 
 export function cleanSourceTitle(value: string): string {
@@ -235,6 +258,11 @@ export function humanError(value: string): string {
     workspace_injection_failed: "无法在当前页面展开工作区，请检查页面权限后重试。",
     workspace_close_failed: "工作区未能正常收起，请刷新页面后重试。",
     native_host_unavailable: "未连接到本地助手，请安装或重新启动流萤本地助手。",
+    native_host_incompatible: "请同时更新扩展与本地助手，不支持旧版混用。",
+    native_host_disconnected: "任务记录已保留。请启动本地助手后重新连接。",
+    task_store_write_failed: "任务状态未能保存，请检查磁盘空间和权限。",
+    task_store_format_unsupported: "任务文件格式不支持，原文件未改动；请单独备份或重置。",
+    live_capacity_unavailable: "下载名额已满，请暂停一个任务后再开始直播录制。",
     native_host_timeout: "本地助手响应超时，请重启后重试。",
     hls_selection_native_upgrade_required: "本地助手版本过旧，请安装 0.9.0 Beta 3 后重试。",
     inline_hls_native_upgrade_required: "本地助手版本过旧，请安装 0.9.0 Beta 3 后重试。",

@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { surfaceFromUrl } from "./api";
 import { useAppStore, humanError } from "./store";
 import type { MediaCandidate } from "./types";
 import AppHeader from "./components/AppHeader.vue";
 import ResourcesView from "./components/ResourcesView.vue";
+import BatchDownloadDialog from "./components/BatchDownloadDialog.vue";
+import ConnectionBanner from "./components/ConnectionBanner.vue";
 import SettingsView from "./components/SettingsView.vue";
 import DownloadDialog from "./components/DownloadDialog.vue";
 import TaskOverview from "./components/TaskOverview.vue";
@@ -13,6 +15,8 @@ const store = useAppStore();
 const surface = surfaceFromUrl();
 const isOptions = computed(() => surface === "options");
 const downloadCandidate = ref<MediaCandidate | null>(null);
+const batchCandidates = ref<MediaCandidate[] | null>(null);
+watch(() => store.context?.sourceContextId, (next, previous) => { if (previous && next !== previous) downloadCandidate.value = null; });
 const toast = ref("");
 let toastTimer = 0;
 
@@ -22,6 +26,7 @@ async function resetSettings() { const next = { saveDir: "", downloadThreads: 6,
 function openParser(candidate: MediaCandidate) { void guard(() => store.openWorkspace(candidate.type === "hls" ? "parser" : "resources", candidate.id)); }
 
 onMounted(() => store.initialize(surface));
+onBeforeUnmount(() => clearTimeout(toastTimer));
 </script>
 
 <template>
@@ -32,13 +37,14 @@ onMounted(() => store.initialize(surface));
   <div v-else class="app-shell sidebar-shell">
     <AppHeader :context="store.context" :loading="store.loading" compact @refresh="store.refresh" @toggle-sniffing="guard(store.toggleSniffing)" />
     <main class="sidebar-content">
+      <ConnectionBanner :state="store.connection" :error="store.connectionError" @retry="store.refresh" />
       <div v-if="store.error" class="status-banner error">{{ store.error }}</div>
       <div v-else-if="store.context && !store.context.supported" class="restricted-state">
         <span>⌁</span><h2>当前页面不支持嗅探</h2><p>浏览器内部页面、扩展页面和本地受限页面不能读取媒体请求，也不能展开工作区。</p>
       </div>
       <template v-else>
         <div class="sidebar-source-summary"><strong>{{ store.candidates.filter(item => item.type !== 'segment').length }}</strong><span>个媒体资源</span><i></i><strong>{{ store.activeTasks.length }}</strong><span>个活动任务</span></div>
-        <ResourcesView :candidates="store.candidates" :loading="store.loading" :view-state="store.resourceViewState" compact @download="downloadCandidate = $event" @parse="openParser" @remove="guard(() => store.removeCandidates($event), '已从列表移除资源')" @update-view-state="patch => guard(() => store.patchResourceView(patch))" @metadata="(candidate, metadata) => guard(() => store.updateCandidateMetadata(candidate, metadata))" />
+        <ResourcesView :connected="store.connection === 'ready'" @batch-download="batchCandidates = $event" :candidates="store.candidates" :loading="store.loading" :view-state="store.resourceViewState" compact @download="downloadCandidate = $event" @parse="openParser" @remove="guard(() => store.removeCandidates($event), '已从列表移除资源')" @update-view-state="patch => guard(() => store.patchResourceView(patch))" @metadata="(candidate, metadata) => guard(() => store.updateCandidateMetadata(candidate, metadata))" />
         <TaskOverview :source-tasks="store.sourceTasks" :active-tasks="store.activeTasks" />
       </template>
     </main>
@@ -46,7 +52,8 @@ onMounted(() => store.initialize(surface));
       <button class="button primary" type="button" :disabled="!store.context?.supported" @click="guard(() => store.openWorkspace('resources'))">展开工作区</button>
       <button class="button subtle" type="button" :disabled="!store.context?.supported" @click="guard(() => store.openWorkspace('settings'))">设置</button>
     </footer>
-    <DownloadDialog :candidate="downloadCandidate" :save-dir="store.settings.saveDir" :download-threads="store.settings.downloadThreads" :source-context-id="store.context?.sourceContextId || null" :source-tab-id="store.context?.sourceTabId ?? null" :capabilities="store.capabilities" @close="downloadCandidate = null" @created="message => { showToast(message); downloadCandidate = null; }" />
+    <BatchDownloadDialog :candidates="batchCandidates" :save-dir="store.settings.saveDir" :download-threads="store.settings.downloadThreads" :source-context-id="store.context?.sourceContextId || null" :source-tab-id="store.context?.sourceTabId ?? null" :connected="store.connection === 'ready'" @close="batchCandidates = null" @inspect="candidate => { batchCandidates = null; openParser(candidate); }" />
+    <DownloadDialog :connected="store.connection === 'ready'" :candidate="downloadCandidate" :save-dir="store.settings.saveDir" :download-threads="store.settings.downloadThreads" :source-context-id="store.context?.sourceContextId || null" :source-tab-id="store.context?.sourceTabId ?? null" :capabilities="store.capabilities" @close="downloadCandidate = null" @created="message => { showToast(message); downloadCandidate = null; }" />
     <Transition name="toast"><div v-if="toast" class="toast" role="status">{{ toast }}</div></Transition>
   </div>
 </template>

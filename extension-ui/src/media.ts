@@ -212,13 +212,19 @@ export function sortCandidates(items: MediaCandidate[], mode: string): MediaCand
 
 function candidateSize(item: MediaCandidate): number { return item.sizeKind === "manifest" ? -1 : Number(item.size) || 0; }
 
-export function filterCandidates(items: MediaCandidate[], pattern: string, type: string, minMb: string, maxMb: string): { items: MediaCandidate[]; error: string } {
+export function filterCandidates(items: MediaCandidate[], pattern: string, type: string, minMb: string, maxMb: string, minDuration = "", maxDuration = ""): { items: MediaCandidate[]; error: string } {
   let regex: RegExp | null = null;
   if (pattern.trim()) { try { regex = new RegExp(pattern.trim(), "i"); } catch { return { items: [], error: "正则表达式无效" }; } }
   const min = minMb === "" ? null : Number(minMb) * 1024 * 1024;
   const max = maxMb === "" ? null : Number(maxMb) * 1024 * 1024;
   if (min != null && max != null && min > max) return { items: [], error: "最小大小不能大于最大大小" };
+  const minSeconds = minDuration === "" ? null : Number(minDuration);
+  const maxSeconds = maxDuration === "" ? null : Number(maxDuration);
+  if ([minSeconds, maxSeconds].some(value => value != null && (!Number.isFinite(value) || value < 0))) return { items: [], error: "时长必须是非负秒数" };
+  if (minSeconds != null && maxSeconds != null && minSeconds > maxSeconds) return { items: [], error: "最短时长不能大于最长时长" };
   return { items: items.filter(item => {
+    if ((minSeconds != null || maxSeconds != null) && (item.duration == null || !Number.isFinite(item.duration))) return false;
+    if (minSeconds != null && item.duration! < minSeconds || maxSeconds != null && item.duration! > maxSeconds) return false;
     if (type !== "all" && (type === "video" ? !["video", "hls", "dash"].includes(item.type) : item.type !== type)) return false;
     const text = `${item.title || ""}\n${item.pageTitle || ""}\n${item.url}\n${item.mime || ""}`;
     if (regex && !regex.test(text)) return false;

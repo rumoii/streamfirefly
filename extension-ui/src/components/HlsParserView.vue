@@ -1,12 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import type { MediaCandidate, UiContext } from "../types";
 import { chooseHlsContainer, defaultAudio, defaultVariant, deriveMediaPlaylist, hlsEncryptionMethods, parseHls, segmentRangeForTime, validateHlsKeyOverride, type HlsKeyOverrideKind, type HlsManifest, type HlsTrack } from "../media";
 import { formatDuration } from "../format";
 import { extensionApi, sendMessage } from "../api";
 import { humanError } from "../store";
+import { buildHlsPlan } from "../download-plan";
+import { createDownload } from "../download-client";
+const requestId = ref(crypto.randomUUID());
 
-const props = defineProps<{ candidate: MediaCandidate; context: UiContext; capabilities: string[]; saveDir: string; downloadThreads: number }>();
+const props = defineProps<{ candidate: MediaCandidate; context: UiContext; capabilities: string[]; saveDir: string; downloadThreads: number; connected?: boolean }>();
 const emit = defineEmits<{ back: []; created: [message: string] }>();
 const loading = ref(true);
 const error = ref("");
@@ -21,6 +24,9 @@ const form = reactive({ name: "", extension: "mp4", container: "mp4", busy: fals
 const keyMode = ref<"auto" | "manual">("auto");
 const keyForm = reactive<{ kind: HlsKeyOverrideKind; value: string; iv: string }>({ kind: "hex", value: "", iv: "" });
 const trackManifests = new Map<string, HlsManifest>();
+let variantSequence = 0;
+let disposed = false;
+onBeforeUnmount(() => { disposed = true; variantSequence++; });
 const liveSupported = computed(() => props.capabilities.includes("hls-live-engine-v1") || !extensionApi()?.runtime?.sendMessage);
 const isLive = computed(() => Boolean(master.value?.live || videoManifest.value?.live));
 
@@ -37,17 +43,11 @@ const actualRange = computed(() => {
   return { ...derived, count: derived.last - derived.first + 1 };
 });
 const advancedSupported = computed(() => props.capabilities.includes("hls-selection-v1"));
-const segmentEngineSupported = computed(() => props.capabilities.includes("hls-segment-engine-v1"));
 const keyOverrideSupported = computed(() => props.capabilities.includes("hls-key-override-v1"));
 const encryptionMethods = computed(() => hlsEncryptionMethods(videoManifest.value));
 const unsupportedEncryption = computed(() => encryptionMethods.value.find(method => method !== "AES-128") || "");
 const unsupportedLiveFeature = computed(() => videoManifest.value?.hasDrmKeyFormat ? "此直播使用 DRM 密钥格式，流萤不会尝试绕过。" : videoManifest.value?.hasLowLatencyParts ? "此直播使用 LL-HLS Part，Beta 3 暂不支持录制。" : "");
 const keyError = computed(() => keyMode.value === "manual" ? validateHlsKeyOverride(keyForm.kind, keyForm.value, keyForm.iv) : "");
-
-function ensureSupportedEncryption(manifest: HlsManifest, label: string) {
-  const method = hlsEncryptionMethods(manifest).find(value => value !== "AES-128");
-  if (method) throw new Error(`${label}使用 ${method} 加密；流萤不会绕过 DRM。`);
-}
 
 async function fetchText(url: string): Promise<{ text: string; url: string }> {
   if (!extensionApi()?.runtime?.sendMessage) return previewManifest(url);
@@ -66,19 +66,21 @@ async function loadTrack(track: HlsTrack): Promise<HlsManifest> {
 }
 
 async function loadVariant() {
+  const sequence = ++variantSequence;
   const variant = selectedVariant.value;
   if (!variant) return;
   loading.value = true; error.value = "";
   try {
     const response = await fetchText(variant.uri);
+    if (disposed || sequence !== variantSequence) return;
     videoManifest.value = parseHls(response.text, response.url);
     resetRange();
     const preferred = defaultAudio(master.value?.tracks || [], variant.audioGroup);
     selectedAudioId.value = preferred?.id || "";
     form.container = chooseHlsContainer(variant.codecs);
     form.extension = form.container;
-  } catch (reason: any) { error.value = humanError(reason?.message); }
-  finally { loading.value = false; }
+  } catch (reason: any) { if (!disposed && sequence === variantSequence) error.value = humanError(reason?.message); }
+  finally { if (!disposed && sequence === variantSequence) loading.value = false; }
 }
 
 function resetRange() {
@@ -121,40 +123,23 @@ function basePayload() {
 }
 
 async function createTask() {
-  if (!videoManifest.value || !advancedSupported.value) return;
+  if (!videoManifest.value || !advancedSupported.value || props.connected === false || loading.value || form.busy || disposed) return;
   if (isLive.value && !liveSupported.value) { error.value = "本地助手版本过旧，请安装 0.9.0 Beta 3 后录制直播。"; return; }
   if (unsupportedLiveFeature.value) { error.value = unsupportedLiveFeature.value; return; }
   if (unsupportedEncryption.value) { error.value = `暂不支持 ${unsupportedEncryption.value} 加密；流萤不会绕过 DRM。`; return; }
   if (keyMode.value === "manual" && (!keyOverrideSupported.value || keyError.value)) { error.value = keyError.value || "当前本地助手不支持自定义密钥"; return; }
   form.busy = true; error.value = "";
   try {
-    const media = isLive.value ? { text: videoManifest.value.rawText || "", baseUrl: videoManifest.value.baseUrl, actualStart: 0, actualEnd: 0, first: 0, last: 0 } : deriveMediaPlaylist(videoManifest.value, actualRange.value!.first, actualRange.value!.last);
-    const audio = audioTracks.value.find(item => item.id === selectedAudioId.value) || null;
+    const audio = audioTracks.value.find(item => item.id === selectedAudioId.value);
     const audioManifest = audio ? await loadTrack(audio) : null;
-    if (audioManifest) ensureSupportedEncryption(audioManifest, "所选音轨");
-    const audioDerived = audioManifest ? (isLive.value ? { text: audioManifest.rawText, baseUrl: audioManifest.baseUrl } : deriveMediaPlaylist(audioManifest, ...segmentRangeForTime(audioManifest, media.actualStart, media.actualEnd))) : null;
-    const subtitles = [];
-    for (const id of selectedSubtitleIds.value) {
-      const track = subtitleTracks.value.find(item => item.id === id);
-      if (!track) continue;
-      const parsed = await loadTrack(track);
-      ensureSupportedEncryption(parsed, `字幕“${track.name}”`);
-      const derived = isLive.value ? { text: parsed.rawText, baseUrl: parsed.baseUrl } : deriveMediaPlaylist(parsed, ...segmentRangeForTime(parsed, media.actualStart, media.actualEnd));
-      subtitles.push({ id: track.id, language: track.language || null, label: track.name, extension: "vtt", manifest: { format: "hls", baseUrl: derived.baseUrl, text: derived.text } });
-    }
-    const hlsPlan = {
-      version: isLive.value ? 3 : (segmentEngineSupported.value ? 2 : 1),
-      duration: media.actualEnd - media.actualStart,
-      pollIntervalSeconds: isLive.value ? Math.max(1, Math.ceil(videoManifest.value.targetDuration || 3) / 2) : null,
-      container: form.container,
-      range: { requestedStart: range.startTime, requestedEnd: range.endTime, actualStart: media.actualStart, actualEnd: media.actualEnd, firstSegment: media.first, lastSegment: media.last },
-      videoManifest: { format: "hls", baseUrl: media.baseUrl, text: media.text },
-      audioManifest: audioDerived ? { format: "hls", baseUrl: audioDerived.baseUrl, text: audioDerived.text } : null,
-      subtitles,
-      keyOverride: segmentEngineSupported.value && keyMode.value === "manual" ? { kind: keyForm.kind, value: keyForm.value.trim(), iv: keyForm.iv.trim() || null } : null
-    };
-    const result: any = await sendMessage({ type: "task.create", payload: { ...basePayload(), fileName: form.name.trim(), saveDir: props.saveDir || null, hlsPlan } });
-    if (!result?.ok) throw new Error(result?.error || "task_create_failed");
+    const subtitles = await Promise.all(selectedSubtitleIds.value.map(async id => {
+      const track = subtitleTracks.value.find(item => item.id === id)!;
+      return { id: track.id, language: track.language || null, label: track.name, manifest: await loadTrack(track) };
+    }));
+    const hlsPlan = await buildHlsPlan({ video: videoManifest.value, audio: audioManifest, subtitles, container: form.container, first: actualRange.value?.first, last: actualRange.value?.last, requestedStart: range.startTime, requestedEnd: range.endTime, keyOverride: keyMode.value === "manual" ? { kind: keyForm.kind, value: keyForm.value.trim(), iv: keyForm.iv.trim() || null } : null });
+    const task = await createDownload({ ...basePayload(), fileName: form.name.trim(), saveDir: props.saveDir || null, hlsPlan }, requestId.value);
+    const result = { task };
+    requestId.value = crypto.randomUUID();
     emit("created", `HLS 任务已创建：${result.task?.title || form.name}`);
   } catch (reason: any) { error.value = humanError(reason?.message); }
   finally { form.busy = false; }
@@ -178,7 +163,6 @@ function previewManifest(url: string) {
     <div v-if="isLive" class="status-banner warning"><strong>检测到直播清单</strong><span>流萤会持续获取新增切片；结束时点击“停止并保存”，或等待直播清单自然结束。</span></div>
     <div v-if="unsupportedLiveFeature" class="status-banner error"><strong>暂不支持录制</strong><span>{{ unsupportedLiveFeature }}</span></div>
     <div v-if="!advancedSupported" class="status-banner warning"><strong>需要升级本地助手</strong><span>安装流萤 0.9.0 Native Host 后才能按选择下载 HLS。</span></div>
-    <div v-else-if="!segmentEngineSupported" class="status-banner warning"><strong>正在使用兼容下载模式</strong><span>升级本地助手后可使用切片重试、断点恢复和手动 AES-128 密钥。</span></div>
     <div class="parser-grid">
       <section class="panel parser-options">
         <div class="panel-title"><div><h3>画质与轨道</h3><p>选择最终保存的媒体内容</p></div></div>
@@ -221,7 +205,7 @@ function previewManifest(url: string) {
     <section class="download-summary panel">
       <div><span>输出文件</span><div class="filename"><input v-model="form.name" maxlength="100"><b>.{{ form.extension }}</b></div><small>{{ saveDir || '系统默认下载目录' }}</small></div>
       <div class="summary-pills"><span>{{ selectedVariant?.height ? `${selectedVariant.height}P` : '原始画质' }}</span><span>{{ audioTracks.find(item => item.id === selectedAudioId)?.name || '内嵌音轨' }}</span><span>{{ selectedSubtitleIds.length }} 条字幕</span><span>{{ form.container.toUpperCase() }} 无转码</span></div>
-      <button class="button primary large" type="button" :disabled="loading || !videoManifest || !advancedSupported || (isLive && !liveSupported) || Boolean(unsupportedLiveFeature) || Boolean(unsupportedEncryption) || Boolean(keyError) || form.busy || !form.name.trim()" @click="createTask">{{ form.busy ? '正在创建任务…' : isLive ? '开始录制直播' : segmentEngineSupported ? '开始可靠下载' : '开始下载' }}</button>
+      <button class="button primary large" type="button" :disabled="connected === false || loading || !videoManifest || !advancedSupported || (isLive && !liveSupported) || Boolean(unsupportedLiveFeature) || Boolean(unsupportedEncryption) || Boolean(keyError) || form.busy || !form.name.trim()" @click="createTask">{{ form.busy ? '正在创建任务…' : isLive ? '开始录制直播' : '开始可靠下载' }}</button>
     </section>
   </section>
 </template>

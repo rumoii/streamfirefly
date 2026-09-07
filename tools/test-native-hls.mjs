@@ -119,6 +119,7 @@ function startHost() {
   });
   function send(type, payload = {}) {
     const id = `hls-${++sequence}`;
+    if (type === "task.create") payload = { requestId: crypto.randomUUID(), ...payload };
     const value = Buffer.from(JSON.stringify({ version: 1, id, type, payload }));
     child.stdin.write(Buffer.concat([Buffer.from([value.length & 255, value.length >> 8 & 255, value.length >> 16 & 255, value.length >> 24 & 255]), value]));
     return new Promise(resolve => pending.set(id, resolve));
@@ -193,7 +194,9 @@ host.child.kill();
 await new Promise(resolve => host.child.once('exit', resolve));
 host = startHost();
 await host.send('host.info');
-await waitFor(host, restartLive.task.id, item => item.state === 'running' && item.attempt >= 2, 'automatic live recovery', 220);
+await waitFor(host, restartLive.task.id, item => item.state === 'interrupted', 'live recovery requires explicit restart', 220);
+await host.send('task.control', { id: restartLive.task.id, action: 'retry' });
+await waitFor(host, restartLive.task.id, item => item.state === 'running' && item.attempt >= 2, 'explicit live recovery', 220);
 await host.send('task.control', { id: restartLive.task.id, action: 'stop' });
 const recoveredLive = await waitFor(host, restartLive.task.id, item => item.state === 'succeeded', 'recovered live save', 220);
 assertPlayable(recoveredLive.output, 'Recovered live HLS');

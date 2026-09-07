@@ -51,7 +51,7 @@ if (!existing) {
     }
   };
   const onKeyDown = (event: KeyboardEvent) => {
-    if (event.key !== "Escape") return;
+    if (event.key !== "Escape" || shadow.querySelector('[role="dialog"]')) return;
     event.preventDefault();
     event.stopPropagation();
     Promise.resolve(api?.runtime?.sendMessage?.({ type: "workspace.close" })).catch(dispose);
