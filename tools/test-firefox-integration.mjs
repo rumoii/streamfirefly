@@ -34,4 +34,6 @@ if (!uninstall.includes('Software\\Mozilla\\NativeMessagingHosts\\com.streamfire
 const packageFirefox = read('tools/package-firefox-extension.ps1');
 if (!packageFirefox.includes("@('dist/assets/app.js', 'dist/workspace.js') -contains $_.file")) throw new Error('Firefox lint does not narrowly scope Vue runtime warnings to both bundles');
 if (!packageFirefox.includes("'v-html|\\.innerHTML\\s*='")) throw new Error('Firefox lint warning exception has no source-level innerHTML rejection');
+const browserTest = read('tools/test-browser-extension.mjs');
+if (!browserTest.includes("runtime.connect({ name: 'streamfirefly-browser-test' })") || !browserTest.includes('runtime.onConnect.addListener')) throw new Error('Firefox MV3 browser test does not keep its background context alive');
 console.log('Firefox manifest, packaging, native registration, and uninstall contracts passed');

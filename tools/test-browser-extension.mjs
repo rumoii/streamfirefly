@@ -55,6 +55,12 @@ function reporterSource(origin) {
     probeResult = { result: message.result, tabId: sender.tab?.id, error: message.error || null };
     return false;
   });
+  const keepAlivePorts = new Set();
+  testApi.runtime.onConnect.addListener(port => {
+    if (port.name !== 'streamfirefly-browser-test') return;
+    keepAlivePorts.add(port);
+    port.onDisconnect.addListener(() => keepAlivePorts.delete(port));
+  });
 
   (async () => {
     await postEvent('reporter-started');
@@ -200,7 +206,7 @@ function stageExtension(stage, origin) {
   const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, manifestName), 'utf8'));
   const reporter = reporterSource(origin);
   fs.writeFileSync(path.join(stage, 'test-reporter.js'), reporter);
-  fs.writeFileSync(path.join(stage, 'test-content.js'), `(globalThis.browser ?? globalThis.chrome).runtime.sendMessage({ type: 'probe.install' }).then(result => (globalThis.browser ?? globalThis.chrome).runtime.sendMessage({ type: 'test.probe.result', result })).catch(error => (globalThis.browser ?? globalThis.chrome).runtime.sendMessage({ type: 'test.probe.result', error: error.message }));\n`);
+  fs.writeFileSync(path.join(stage, 'test-content.js'), `const testApi = globalThis.browser ?? globalThis.chrome;\nconst keepAlive = testApi.runtime.connect({ name: 'streamfirefly-browser-test' });\nkeepAlive.onDisconnect.addListener(() => {});\ntestApi.runtime.sendMessage({ type: 'probe.install' }).then(result => testApi.runtime.sendMessage({ type: 'test.probe.result', result })).catch(error => testApi.runtime.sendMessage({ type: 'test.probe.result', error: error.message }));\n`);
   manifest.content_scripts[0].js.push('test-content.js');
   if (browserName === 'firefox') manifest.background.scripts.push('test-reporter.js');
   else {
