@@ -99,20 +99,26 @@ function reporterSource(origin) {
         worker.postMessage('scan');
       }
     });
+    currentStage = 'rescan-dom-media';
+    await testApi.tabs.sendMessage(tab.id, { type: 'media.rescan' });
 
     currentStage = 'wait-media-candidates';
     const first = await waitFor(async () => {
       const items = await candidatesFor(tab.id);
-      const complete = has(items, '/media/direct.mp4')
-        && has(items, '/media/inline.m3u8', 'inline-script')
-        && has(items, '/media/json.m3u8')
-        && items.some(item => item.inlineManifest && item.source === 'fetch-body')
-        && items.some(item => item.inlineManifest && item.source === 'blob-manifest')
-        && has(items, '/media/advanced-json.mp4', 'json-parse')
-        && has(items, '/media/advanced-atob.m4a', 'atob')
-        && has(items, '/media/advanced-decoder.mpd', 'text-decoder')
-        && has(items, '/media/worker.m3u8', 'worker');
-      return complete ? items : null;
+      const requirements = [
+        ['direct.mp4', has(items, '/media/direct.mp4')],
+        ['inline.m3u8:inline-script', has(items, '/media/inline.m3u8', 'inline-script')],
+        ['json.m3u8', has(items, '/media/json.m3u8')],
+        ['fetch-body manifest', items.some(item => item.inlineManifest && item.source === 'fetch-body')],
+        ['blob-manifest', items.some(item => item.inlineManifest && item.source === 'blob-manifest')],
+        ['advanced-json.mp4:json-parse', has(items, '/media/advanced-json.mp4', 'json-parse')],
+        ['advanced-atob.m4a:atob', has(items, '/media/advanced-atob.m4a', 'atob')],
+        ['advanced-decoder.mpd:text-decoder', has(items, '/media/advanced-decoder.mpd', 'text-decoder')],
+        ['worker.m3u8:worker', has(items, '/media/worker.m3u8', 'worker')]
+      ];
+      const missing = requirements.filter(([, present]) => !present).map(([name]) => name);
+      if (missing.length) throw new Error('missing=' + missing.join(',') + '; captured=' + JSON.stringify(items.map(item => ({ source: item.source, url: item.url, inline: Boolean(item.inlineManifest) }))));
+      return items;
     }, 'required media candidates were not captured');
     if (first.some(item => item.type === 'image')) throw new Error('images were captured while image detection was disabled');
     if (first.some(item => String(item.url || '').includes('com.bapis.bilibili.broadcast.message.ogv'))) throw new Error('namespace-like script value was captured as media');
