@@ -1,5 +1,9 @@
 # 模块化发现、工具交接与缓存捕捉
 
+Beta 2 的当前状态、模块职责、证据边界和下一步验收顺序统一见 [捕捉与深搜 Beta 2 开发交接](capture-beta2.md)。下文保留 Beta 1 的实现与验证基线，不代表新增改动已通过安装态验收。
+
+Beta 2 将捕捉与深搜状态分别放在 `extension-ui/src/features/capture/state.ts` 和 `extension-ui/src/features/deep-search/state.ts`，通过 `extension-ui/src/features/session-client.ts` 使用 `shared/capture.ts` 的请求契约；配置面板仍负责交互和既有上下文接入。详细生命周期不在本页重复维护。
+
 ## 代码边界
 
 扩展保持模块化单体，不增加后台服务框架或旧实现兼容层。
