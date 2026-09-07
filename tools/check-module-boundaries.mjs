@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../', import.meta.url));
 function assertAcyclic(graph) {
@@ -22,7 +23,11 @@ const repository = fs.readFileSync(path.join(rustRoot, 'repository.rs'), 'utf8')
 assert.ok(!/\b(?:Child|TaskRuntime|QueueState|TcpListener)\b/.test(repository), 'Repository must not own execution resources');
 function files(directory) { return fs.readdirSync(directory, { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? files(path.join(directory, entry.name)) : /\.(?:ts|js|vue)$/.test(entry.name) && !entry.name.includes('.test.') ? [path.join(directory, entry.name)] : []); }
 const frontend = new Map();
-for (const file of ['extension/src', 'extension-ui/src', 'shared'].flatMap(directory => files(path.join(root, directory)))) {
+const frontendFiles = ['extension/src', 'extension-ui/src', 'shared'].flatMap(directory => files(path.join(root, directory)));
+const visibleFiles = new Set(execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z', '--', 'extension/src', 'extension-ui/src', 'shared'], { cwd: root, encoding: 'utf8' }).split('\0'));
+for (const file of frontendFiles) {
+  const relativeFile = path.relative(root, file).split(path.sep).join('/');
+  assert.ok(visibleFiles.has(relativeFile), `${relativeFile}: source is excluded from Git; fix the ignore rule before packaging`);
   const source = fs.readFileSync(file, 'utf8');
   const dependencies = [];
   for (const match of source.matchAll(/(?:import|export)\s+(?:[^;]*?\s+from\s+)?["'](\.[^"']+)["']/g)) {

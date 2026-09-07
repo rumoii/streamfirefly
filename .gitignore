@@ -2,7 +2,7 @@
 native-host/target/
 
 # Local runtime state and downloads
-downloads/
+/downloads/
 *.download
 *.part
 *.tmp
