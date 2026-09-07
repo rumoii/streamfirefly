@@ -30,11 +30,11 @@ function reporterSource(origin) {
 (() => {
   const testApi = globalThis.browser ?? globalThis.chrome;
   const origin = ${JSON.stringify(origin)};
-  const deadline = Date.now() + 25000;
   let probeResult;
   let workspaceReady = false;
   const pause = delay => new Promise(resolve => setTimeout(resolve, delay));
-  const waitFor = async (operation, label) => {
+  const waitFor = async (operation, label, timeoutMs = 30000) => {
+    const deadline = Date.now() + timeoutMs;
     let lastError;
     while (Date.now() < deadline) {
       try { const value = await operation(); if (value) return value; }
@@ -326,7 +326,7 @@ async function run() {
     child = spawn(process.execPath, [...common, ...browserArgs], { cwd: repositoryRoot, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     const append = chunk => { output = (output + chunk.toString()).slice(-16000); };
     child.stdout.on('data', append); child.stderr.on('data', append);
-    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error(`Timed out waiting for ${browserName} report; events=${JSON.stringify(fixture.events)}\n${output}`)), 35000));
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error(`Timed out waiting for ${browserName} report; events=${JSON.stringify(fixture.events)}\n${output}`)), 60000));
     const earlyExit = new Promise((_, reject) => child.once('exit', code => reject(new Error(`web-ext exited before reporting (code ${code})\n${output}`))));
     const result = await Promise.race([fixture.report, timeout, earlyExit]);
     if (!result?.ok) throw new Error(`StreamFirefly ${browserName} fixture failed: ${result?.error || 'unknown error'}\n${result?.stack || ''}\n${output}`);

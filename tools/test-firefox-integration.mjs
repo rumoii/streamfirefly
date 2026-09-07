@@ -36,4 +36,5 @@ if (!packageFirefox.includes("@('dist/assets/app.js', 'dist/workspace.js') -cont
 if (!packageFirefox.includes("'v-html|\\.innerHTML\\s*='")) throw new Error('Firefox lint warning exception has no source-level innerHTML rejection');
 const browserTest = read('tools/test-browser-extension.mjs');
 if (!browserTest.includes("runtime.connect({ name: 'streamfirefly-browser-test' })") || !browserTest.includes('runtime.onConnect.addListener')) throw new Error('Firefox MV3 browser test does not keep its background context alive');
+if (!browserTest.includes('waitFor = async (operation, label, timeoutMs = 30000)') || !browserTest.includes(')), 60000)')) throw new Error('Browser tests do not use independent step and process deadlines');
 console.log('Firefox manifest, packaging, native registration, and uninstall contracts passed');
