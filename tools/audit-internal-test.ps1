@@ -1,7 +1,7 @@
 param(
   [Parameter(Mandatory = $true)][string]$Archive,
   [Parameter(Mandatory = $true)][ValidateSet('x64', 'arm64')][string]$ExpectedArchitecture,
-  [Parameter(Mandatory = $true)][ValidatePattern('^\d+\.\d+\.\d+-beta\.\d+$')][string]$ExpectedBundleVersion,
+  [Parameter(Mandatory = $true)][ValidatePattern('^\d+\.\d+\.\d+(-beta\.\d+)?$')][string]$ExpectedBundleVersion,
   [Parameter(Mandatory = $true)][ValidatePattern('^[a-f0-9]{40}$')][string]$ExpectedSourceCommit,
   [switch]$AllowDirtySource
 )

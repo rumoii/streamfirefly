@@ -26,6 +26,8 @@ requireText(read('installer/StreamFirefly.iss'), `#define AppVersion "${version}
 requireText(read('native-host/src/protocol.rs'), 'env!("CARGO_PKG_VERSION")', 'Native reported version');
 const bundlePattern = packageScript.match(/\[ValidatePattern\('([^']+)'\)\]/)?.[1];
 if (!bundlePattern) throw new Error('Bundle version validation is missing');
+const auditBundlePattern = auditScript.match(/\[ValidatePattern\('([^']+)'\)\]/)?.[1];
+if (auditBundlePattern !== bundlePattern) throw new Error('Package and audit bundle version validation differ');
 const validBundleVersion = new RegExp(bundlePattern);
 for (const value of [version, '0.9.0-beta.4']) if (!validBundleVersion.test(value)) throw new Error(`Valid bundle version rejected: ${value}`);
 for (const value of ['../0.9.1', '0.9', '0.9.1/extra', '0.9.1-beta.', '0.9.1 ']) if (validBundleVersion.test(value)) throw new Error(`Unsafe bundle version accepted: ${value}`);
