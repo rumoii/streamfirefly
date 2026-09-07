@@ -88,11 +88,15 @@ async function resolveUiTab(sender, senderOnly = false, windowId = null) {
 }
 
 function notifyUiContext(tabId, windowId) {
-  api.runtime.sendMessage({ type: "ui.context.changed", tabId, windowId }).catch?.(() => {});
+  const message = { type: "ui.context.changed", tabId, windowId };
+  api.runtime.sendMessage(message).catch?.(() => {});
+  notifyWorkspaceMessage(message, tabId);
 }
 
 function notifyResourceViewState(state) {
-  api.runtime.sendMessage({ type: "ui.resource-state.changed", tabId: state.tabId, sourceContextId: state.sourceContextId, state: normalizeResourceViewState(state.resourceViewState) }).catch?.(() => {});
+  const message = { type: "ui.resource-state.changed", tabId: state.tabId, sourceContextId: state.sourceContextId, state: normalizeResourceViewState(state.resourceViewState) };
+  api.runtime.sendMessage(message).catch?.(() => {});
+  notifyWorkspaceMessage(message, state.tabId);
 }
 
 function queueTab(tabId, operation) {

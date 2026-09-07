@@ -193,6 +193,7 @@ if (!activeView.context.resourceViewState || activeView.context.resourceViewStat
 const oldSourceContextId = activeView.context.sourceContextId;
 const patchedView = await send({ type: 'ui.resource-state.patch', scope: 'active', sourceContextId: oldSourceContextId, patch: { type: 'video', pattern: 'm3u8', sortMode: 'size', collapsed: true } });
 if (!patchedView.ok || patchedView.state.type !== 'video' || patchedView.state.pattern !== 'm3u8' || patchedView.state.sortMode !== 'size' || !patchedView.state.collapsed) throw new Error(`Resource view state patch failed: ${JSON.stringify(patchedView)}`);
+if (!tabMessages.some(entry => entry.id === 7 && entry.message.type === 'ui.resource-state.changed' && entry.message.state.revision === patchedView.state.revision)) throw new Error('Resource state was not delivered to the content-script workspace');
 const sharedView = await send({ type: 'ui.context.get', scope: 'sender' }, { tab: { ...tabsById.get(7) } });
 if (sharedView.context.resourceViewState.revision !== patchedView.state.revision || sharedView.context.resourceViewState.type !== 'video') throw new Error(`Workspace did not receive sidebar resource state: ${JSON.stringify(sharedView.context.resourceViewState)}`);
 const staleView = await send({ type: 'ui.resource-state.patch', scope: 'active', sourceContextId: 'stale-context', patch: { type: 'audio' } });
@@ -222,6 +223,8 @@ const repeatedWorkspace = await send({ type: 'workspace.open', view: 'downloads'
 if (!repeatedWorkspace.ok || tabMessages.slice(messagesBeforeRepeat).some(entry => entry.id === 8 && entry.message.type === 'workspace.unmount')) throw new Error('Repeated workspace open discarded state on its own tab');
 
 const senderView = await send({ type: 'ui.context.get', scope: 'sender' }, { tab: { ...tabsById.get(8) } });
+nativeListeners.message({ type: 'task.progress', task: { id: 'workspace-progress', revision: 1 } });
+if (!tabMessages.some(entry => entry.id === 8 && entry.message.type === 'task.progress' && entry.message.task.id === 'workspace-progress')) throw new Error('Native task event was not delivered to the open workspace');
 if (!senderView.ok || senderView.context.sourceTabId !== 8) throw new Error(`Workspace context did not use its sender tab: ${JSON.stringify(senderView)}`);
 const postedBeforeStaleTask = nativePosted.length;
 const staleTask = await send({ type: 'task.create', payload: { url: 'https://video.example/file.mp4', sourceTabId: 7, sourceContextId: 'forged' } }, { tab: { ...tabsById.get(8) } });

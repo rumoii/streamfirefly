@@ -5,14 +5,16 @@ function ensureNative() {
   try {
     native.port = api.runtime.connectNative("com.streamfirefly.native");
     native.port.onMessage.addListener(message => {
-      if (["task.progress", "task.deleted", "task.persistence-error"].includes(message.type)) { api.runtime.sendMessage(message).catch?.(() => {}); return; }
+      if (["task.progress", "task.deleted", "task.persistence-error"].includes(message.type)) { api.runtime.sendMessage(message).catch?.(() => {}); notifyWorkspaceMessage(message); return; }
       const pending = native.pending.get(message.id);
       if (pending) { clearTimeout(pending.timer); native.pending.delete(message.id); pending.resolve(message); }
     });
     native.port.onDisconnect.addListener(() => {
       for (const pending of native.pending.values()) { clearTimeout(pending.timer); pending.resolve({ ok: false, error: "native_host_disconnected" }); }
       native.pending.clear(); native.port = null; native.capabilities.clear(); native.infoPromise = null;
-      api.runtime.sendMessage({ type: "native.disconnected", error: "native_host_disconnected" }).catch?.(() => {});
+      const message = { type: "native.disconnected", error: "native_host_disconnected" };
+      api.runtime.sendMessage(message).catch?.(() => {});
+      notifyWorkspaceMessage(message);
     });
   } catch (_) { native.port = null; }
 }

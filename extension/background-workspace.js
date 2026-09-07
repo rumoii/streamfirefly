@@ -1,5 +1,10 @@
 const workspaceTabsByWindow = new Map();
 
+function notifyWorkspaceMessage(message, tabId) {
+  const targets = Number.isInteger(tabId) ? [tabId] : [...new Set(workspaceTabsByWindow.values())];
+  for (const target of targets) api.tabs.sendMessage(target, message).catch?.(() => {});
+}
+
 async function unmountWorkspace(tabId) {
   if (!Number.isInteger(tabId)) return;
   try { await api.tabs.sendMessage(tabId, { type: "workspace.unmount" }); } catch (_) {}
