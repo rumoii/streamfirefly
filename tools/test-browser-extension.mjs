@@ -56,13 +56,6 @@ function reporterSource(origin) {
     probeResult = { result: message.result, tabId: sender.tab?.id, error: message.error || null };
     return false;
   });
-  const keepAlivePorts = new Set();
-  testApi.runtime.onConnect.addListener(port => {
-    if (port.name !== 'streamfirefly-browser-test') return;
-    keepAlivePorts.add(port);
-    port.onDisconnect.addListener(() => keepAlivePorts.delete(port));
-  });
-
   (async () => {
     currentStage = 'initialize-settings';
     await postEvent('reporter-started');
@@ -184,8 +177,8 @@ function reporterSource(origin) {
     const tabsAfterWorkspace = (await testApi.tabs.query({ windowId: tab.windowId })).length;
     if (tabsAfterWorkspace !== tabsBeforeWorkspace) throw new Error('workspace opening created a browser tab');
     currentStage = 'unmount-workspace';
-    await testApi.tabs.sendMessage(tab.id, { type: 'workspace.unmount' });
-    await testApi.tabs.sendMessage(tab.id, { type: 'workspace.unmount' });
+    await unmountWorkspace(tab.id);
+    await unmountWorkspace(tab.id);
     await waitFor(async () => (await testApi.scripting.executeScript({ target: { tabId: tab.id }, func: () => !document.getElementById('streamfirefly-workspace-host') }))[0]?.result, 'workspace did not unmount idempotently');
     const pageAfterUnmount = (await testApi.scripting.executeScript({ target: { tabId: tab.id }, func: () => ({ title: document.title, htmlOverflow: document.documentElement.style.overflow, bodyOverflow: document.body.style.overflow }) }))[0].result;
     if (JSON.stringify(pageAfterUnmount) !== JSON.stringify(pageBeforeWorkspace)) throw new Error('workspace did not restore source page title and scroll styles: ' + JSON.stringify({ pageBeforeWorkspace, pageAfterUnmount }));
@@ -228,7 +221,7 @@ function stageExtension(stage, origin) {
   const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, manifestName), 'utf8'));
   const reporter = reporterSource(origin);
   fs.writeFileSync(path.join(stage, 'test-reporter.js'), reporter);
-  fs.writeFileSync(path.join(stage, 'test-content.js'), `const testApi = globalThis.browser ?? globalThis.chrome;\nconst keepAlive = testApi.runtime.connect({ name: 'streamfirefly-browser-test' });\nkeepAlive.onDisconnect.addListener(() => {});\ntestApi.runtime.sendMessage({ type: 'probe.install' }).then(result => testApi.runtime.sendMessage({ type: 'test.probe.result', result })).catch(error => testApi.runtime.sendMessage({ type: 'test.probe.result', error: error.message }));\n`);
+  fs.writeFileSync(path.join(stage, 'test-content.js'), `const testApi = globalThis.browser ?? globalThis.chrome;\ntestApi.runtime.sendMessage({ type: 'probe.install' }).then(result => testApi.runtime.sendMessage({ type: 'test.probe.result', result })).catch(error => testApi.runtime.sendMessage({ type: 'test.probe.result', error: error.message }));\n`);
   manifest.content_scripts[0].js.push('test-content.js');
   if (browserName === 'firefox') manifest.background.scripts.push('test-reporter.js');
   else {
@@ -348,9 +341,12 @@ async function run() {
     child = spawn(process.execPath, [...common, ...browserArgs], { cwd: repositoryRoot, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     const append = chunk => { output = (output + chunk.toString()).slice(-16000); };
     child.stdout.on('data', append); child.stderr.on('data', append);
-    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error(`Timed out waiting for ${browserName} report; events=${JSON.stringify(fixture.events)}\n${output}`)), 60000));
+    let timeoutTimer;
+    const timeout = new Promise((_, reject) => { timeoutTimer = setTimeout(() => reject(new Error(`Timed out waiting for ${browserName} report; events=${JSON.stringify(fixture.events)}\n${output}`)), 60000); });
     const earlyExit = new Promise((_, reject) => child.once('exit', code => reject(new Error(`web-ext exited before reporting (code ${code})\n${output}`))));
-    const result = await Promise.race([fixture.report, timeout, earlyExit]);
+    let result;
+    try { result = await Promise.race([fixture.report, timeout, earlyExit]); }
+    finally { clearTimeout(timeoutTimer); }
     if (!result?.ok) throw new Error(`StreamFirefly ${browserName} fixture failed: ${result?.error || 'unknown error'}\n${result?.stack || ''}\n${output}`);
     if (resultPath) fs.writeFileSync(path.resolve(resultPath), `${JSON.stringify(result, null, 2)}\n`);
     console.log(`StreamFirefly ${browserName} browser test passed: ${result.first.length} initial candidates, ${result.afterSpa.length} after SPA navigation`);
