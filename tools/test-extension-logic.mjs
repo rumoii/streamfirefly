@@ -16,10 +16,11 @@ const windowUpdates = [];
 const localGetQueries = [];
 const executedScripts = [];
 const tabMessages = [];
+const previewRuleUpdates = [];
 let sidePanelBehavior = null;
 let nextTabId = 100;
 const tabsById = new Map([
-  [7, { id: 7, active: true, url: 'https://media.example/page', title: '媒体页面 A', lastAccessed: 2, windowId: 1 }],
+  [7, { id: 7, active: true, url: 'https://media.example/page', title: '流萤 · 流萤 · 媒体页面 A', lastAccessed: 2, windowId: 1 }],
   [8, { id: 8, active: false, url: 'https://video.example/page', title: '媒体页面 B', lastAccessed: 1, windowId: 1 }],
   [9, { id: 9, active: false, url: 'chrome://extensions', title: '扩展程序', lastAccessed: 0, windowId: 1 }]
 ]);
@@ -50,7 +51,7 @@ const api = {
     onBeforeNavigate: { addListener: listener => { listeners.beforeNavigate = listener; } },
     onHistoryStateUpdated: { addListener: listener => { listeners.history = listener; } }
   },
-  declarativeNetRequest: { updateSessionRules: async rules => { listeners.previewRules = rules; } },
+  declarativeNetRequest: { updateSessionRules: async rules => { listeners.previewRules = rules; previewRuleUpdates.push(structuredClone(rules)); } },
   runtime: {
     id: 'streamfirefly-test',
     getURL: value => `chrome-extension://streamfirefly-test/${value}`,
@@ -113,7 +114,7 @@ listeners.headers({ tabId: 7, url: 'https://media.example/a.mp4', requestId: '3'
 listeners.beforeHeaders({ tabId: 7, url: 'https://media.example/player-config', requestId: '4', requestHeaders: [{ name: 'Cookie', value: 'session=test' }, { name: 'Referer', value: 'https://media.example/page' }] });
 listeners.headers({ tabId: 7, url: 'https://media.example/player-config', requestId: '4', statusCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'application/json' }] });
 await settle();
-await send({ type: 'media.add', candidate: { url: 'https://media.example/a.mp4', mime: 'video/unknown', width: 1920, height: 1080, source: 'dom' } }, { tab: { id: 7 } });
+await send({ type: 'media.add', candidate: { url: 'https://media.example/a.mp4', mime: 'video/unknown', width: 1920, height: 1080, poster: 'https://media.example/poster.jpg', pageTitle: '流萤 · 流萤 · 媒体页面 A', source: 'dom' } }, { tab: { id: 7 } });
 await send({ type: 'media.add', candidate: { url: 'https://media.example/cover.jpg', mime: 'image/jpeg' } }, { tab: { id: 7 } });
 await send({ type: 'media.add', candidate: { url: 'https://media.example/chunk-1.m4s', mime: 'application/octet-stream' } }, { tab: { id: 7 } });
 await send({ type: 'media.add', candidate: { url: 'blob:https://media.example/generated', mime: 'application/vnd.apple.mpegurl', inlineManifest: { format: 'hls', text: '#EXTM3U\n#EXTINF:2,\nhttps://media.example/chunk-1.ts\n', baseUrl: 'https://media.example/page', sourceUrl: 'https://media.example/player-config' } } }, { tab: { id: 7 } });
@@ -135,6 +136,10 @@ const inline = candidates.find(item => item.id.startsWith('inline-hls:'));
 if (!inline) throw new Error('Inline manifest did not receive a content fingerprint');
 if (inline.requestHeaders.cookie || inline.requestHeaders.authorization) throw new Error('Inline manifest inherited sensitive request credentials');
 if (inline.referer !== 'https://media.example/page') throw new Error('Inline manifest did not inherit its safe request context');
+const initialUi = await send({ type: 'ui.context.get', scope: 'active' });
+const inlineUi = initialUi.context.candidates.find(item => item.id === inline.id);
+if (inlineUi.poster !== 'https://media.example/poster.jpg') throw new Error(`HLS did not inherit the page video poster: ${JSON.stringify(inlineUi)}`);
+if (video.pageTitle !== '媒体页面 A') throw new Error(`Candidate title prefix was not cleaned: ${video.pageTitle}`);
 
 const manifest = await send({ type: 'media.fetchText', tabId: 7, id: video.id, url: 'https://media.example/master.m3u8' });
 if (!manifest.ok || !manifest.text.startsWith('#EXTM3U')) throw new Error(`Bounded manifest fetch failed: ${JSON.stringify(manifest)}`);
@@ -142,11 +147,22 @@ fetchResponse = new Response('too large', { headers: { 'content-length': String(
 const oversizedManifest = await send({ type: 'media.fetchText', tabId: 7, id: video.id, url: 'https://media.example/large.m3u8' });
 if (oversizedManifest.ok || oversizedManifest.error !== 'media_manifest_too_large') throw new Error(`Oversized manifest was not rejected: ${JSON.stringify(oversizedManifest)}`);
 
-await send({ type: 'preview.headers.apply', payload: { url: video.url, headers: video.requestHeaders } }, { tab: { id: 7 } });
+const metadata = await send({ type: 'media.metadata.update', tabId: 7, sourceContextId: (await send({ type: 'ui.context.get', scope: 'active' })).context.sourceContextId, payload: { id: inline.id, url: inline.url, duration: 18.5, width: 1280, height: 720, live: false } });
+if (!metadata.ok || metadata.candidate.duration !== 18.5 || metadata.candidate.width !== 1280 || metadata.candidate.height !== 720) throw new Error(`Preview metadata was not merged: ${JSON.stringify(metadata)}`);
+
+await send({ type: 'preview.headers.apply', payload: { previewSessionId: 'preview-a', candidateId: video.id, url: video.url, headers: video.requestHeaders } }, { tab: { id: 7 } });
 if (listeners.previewRules?.addRules?.[0]?.condition?.tabIds?.[0] !== 7) throw new Error(`Preview rule was not scoped to the source tab: ${JSON.stringify(listeners.previewRules)}`);
-if (listeners.previewRules?.addRules?.[0]?.condition?.urlFilter !== 'https://media.example') throw new Error(`Preview rule was not scoped to the media origin: ${JSON.stringify(listeners.previewRules)}`);
-await send({ type: 'preview.headers.clear' }, { tab: { id: 7 } });
-if (listeners.previewRules?.addRules) throw new Error(`Preview clear unexpectedly added a rule: ${JSON.stringify(listeners.previewRules)}`);
+if (listeners.previewRules?.addRules?.[0]?.condition?.regexFilter !== '^https://media\\.example(?:/|$)') throw new Error(`Preview rule was not scoped to the media origin: ${JSON.stringify(listeners.previewRules)}`);
+const firstPreviewRuleId = listeners.previewRules.addRules[0].id;
+await send({ type: 'preview.headers.apply', payload: { previewSessionId: 'preview-b', candidateId: video.id, url: video.url, headers: video.requestHeaders } }, { tab: { id: 7 } });
+const secondPreviewRuleId = listeners.previewRules.addRules[0].id;
+if (listeners.previewRules.removeRuleIds.length || secondPreviewRuleId === firstPreviewRuleId) throw new Error('A second preview session replaced the first session rule');
+await send({ type: 'preview.headers.clear', previewSessionId: 'preview-a' }, { tab: { id: 7 } });
+if (JSON.stringify(listeners.previewRules.removeRuleIds) !== JSON.stringify([firstPreviewRuleId])) throw new Error(`Clearing one preview session removed the wrong rule: ${JSON.stringify(listeners.previewRules)}`);
+await send({ type: 'preview.headers.clear', previewSessionId: 'preview-b' }, { tab: { id: 7 } });
+if (JSON.stringify(listeners.previewRules.removeRuleIds) !== JSON.stringify([secondPreviewRuleId])) throw new Error(`Second preview session was not independently cleared: ${JSON.stringify(listeners.previewRules)}`);
+const mismatchedPreview = await send({ type: 'preview.headers.apply', payload: { previewSessionId: 'preview-invalid', candidateId: video.id, url: 'https://other.example/video.mp4', headers: video.requestHeaders } }, { tab: { id: 7 } });
+if (mismatchedPreview.ok || mismatchedPreview.error !== 'preview_candidate_mismatch') throw new Error(`Preview headers accepted a mismatched candidate origin: ${JSON.stringify(mismatchedPreview)}`);
 
 tabsById.get(7).url = 'https://media.example/next';
 listeners.history({ tabId: 7, frameId: 0, url: tabsById.get(7).url });
@@ -173,7 +189,15 @@ if (!Array.isArray(localGetQueries[0]) || localGetQueries[0].some(value => typeo
 
 let activeView = await send({ type: 'ui.context.get', scope: 'active' });
 if (!activeView.ok || activeView.context.sourceTabId !== 7 || !activeView.context.sourceContextId || activeView.context.candidates.length !== 1000) throw new Error(`Active UI context was not assembled from tab state: ${JSON.stringify(activeView)}`);
+if (activeView.context.pageTitle !== '媒体页面 A') throw new Error(`Recursive StreamFirefly title prefix was not cleaned: ${activeView.context.pageTitle}`);
+if (!activeView.context.resourceViewState || activeView.context.resourceViewState.sortMode !== 'detected') throw new Error(`Resource view state was missing: ${JSON.stringify(activeView.context.resourceViewState)}`);
 const oldSourceContextId = activeView.context.sourceContextId;
+const patchedView = await send({ type: 'ui.resource-state.patch', scope: 'active', sourceContextId: oldSourceContextId, patch: { type: 'video', pattern: 'm3u8', sortMode: 'size', collapsed: true } });
+if (!patchedView.ok || patchedView.state.type !== 'video' || patchedView.state.pattern !== 'm3u8' || patchedView.state.sortMode !== 'size' || !patchedView.state.collapsed) throw new Error(`Resource view state patch failed: ${JSON.stringify(patchedView)}`);
+const sharedView = await send({ type: 'ui.context.get', scope: 'sender' }, { tab: { ...tabsById.get(7) } });
+if (sharedView.context.resourceViewState.revision !== patchedView.state.revision || sharedView.context.resourceViewState.type !== 'video') throw new Error(`Workspace did not receive sidebar resource state: ${JSON.stringify(sharedView.context.resourceViewState)}`);
+const staleView = await send({ type: 'ui.resource-state.patch', scope: 'active', sourceContextId: 'stale-context', patch: { type: 'audio' } });
+if (staleView.ok || staleView.error !== 'resource_view_context_stale') throw new Error(`Stale resource view patch was accepted: ${JSON.stringify(staleView)}`);
 
 tabsById.get(7).active = false;
 tabsById.get(9).active = true;
@@ -214,6 +238,7 @@ listeners.beforeNavigate({ tabId: 7, frameId: 0, url: tabsById.get(7).url });
 await flush();
 activeView = await send({ type: 'ui.context.get', scope: 'active' });
 if (!activeView.ok || activeView.context.sourceContextId === oldSourceContextId || activeView.context.candidates.length) throw new Error(`Source navigation did not rotate context and clear resources: ${JSON.stringify(activeView)}`);
+if (activeView.context.resourceViewState.type !== 'all' || activeView.context.resourceViewState.pattern || activeView.context.resourceViewState.collapsed) throw new Error(`Source navigation did not reset resource view state: ${JSON.stringify(activeView.context.resourceViewState)}`);
 
 await send({ type: 'media.add', candidate: { url: 'https://media.example/final.mp4', mime: 'video/mp4' } }, { tab: { id: 7 } });
 tabsById.delete(7);

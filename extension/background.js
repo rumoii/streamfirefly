@@ -11,7 +11,7 @@ const recentRequestContexts = new Map();
 const previewRules = { nextId: 2147000000, byTab: new Map() };
 const native = { port: null, pending: new Map(), seq: 0, capabilities: new Set(), infoPromise: null };
 const workspaceTabsByWindow = new Map();
-const DEFAULT_SETTINGS = Object.freeze({ detectImages: false, advancedDeepSearch: false });
+const DEFAULT_SETTINGS = Object.freeze({ detectImages: false, advancedDeepSearch: false, candidateSort: "detected" });
 let settings = { ...DEFAULT_SETTINGS };
 let settingsReady = loadSettings();
 
@@ -23,22 +23,44 @@ async function loadSettings() {
 api.storage?.onChanged?.addListener((changes, area) => {
   if (area !== "local") return;
   for (const key of ["detectImages", "advancedDeepSearch"]) if (changes[key]) settings[key] = Boolean(changes[key].newValue);
+  if (changes.candidateSort) settings.candidateSort = normalizeSortMode(changes.candidateSort.newValue);
 });
 
 function stateKey(tabId) { return `${STATE_PREFIX}${tabId}`; }
 function newId() { try { return crypto.randomUUID(); } catch (_) { return `${Date.now()}-${Math.random().toString(16).slice(2)}`; } }
 function supportedPage(url) { try { return ["http:", "https:"].includes(new URL(url).protocol); } catch (_) { return false; } }
-function pageTitleFor(tab) { try { return tab?.title || new URL(tab?.url || "").hostname || "未命名页面"; } catch (_) { return tab?.title || "未命名页面"; } }
+function cleanPageTitle(value) {
+  const cleaned = String(value || "").replace(/^(?:(?:流萤(?:\s+StreamFirefly)?)[\s·|\-–—:：]+)+/i, "").trim();
+  return cleaned || "未命名页面";
+}
+function pageTitleFor(tab) { try { return cleanPageTitle(tab?.title || new URL(tab?.url || "").hostname); } catch (_) { return cleanPageTitle(tab?.title); } }
+function normalizeSortMode(value) { return ["detected", "size", "duration", "type"].includes(value) ? value : "detected"; }
+function defaultResourceViewState() { return { pattern: "", type: "all", minMb: "", maxMb: "", sortMode: normalizeSortMode(settings.candidateSort), collapsed: false, expandedId: "", revision: 0 }; }
+function normalizeResourceViewState(value) {
+  const input = value && typeof value === "object" ? value : {};
+  return {
+    pattern: typeof input.pattern === "string" ? input.pattern.slice(0, 500) : "",
+    type: ["all", "video", "audio", "image"].includes(input.type) ? input.type : "all",
+    minMb: normalizeSizeFilter(input.minMb), maxMb: normalizeSizeFilter(input.maxMb),
+    sortMode: normalizeSortMode(input.sortMode ?? settings.candidateSort),
+    collapsed: Boolean(input.collapsed), expandedId: typeof input.expandedId === "string" ? input.expandedId.slice(0, 16384) : "",
+    revision: Number.isInteger(input.revision) && input.revision >= 0 ? input.revision : 0
+  };
+}
+function normalizeSizeFilter(value) {
+  const text = typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
+  return text === "" || /^\d{0,9}(?:\.\d{0,3})?$/.test(text) ? text : "";
+}
 
-function emptyState(tabId, pageUrl = "") { return { schemaVersion: STATE_VERSION, tabId, sourceContextId: newId(), pageUrl, paused: false, lastTouchedAt: Date.now(), candidates: new Map() }; }
-function serializeState(state) { return { schemaVersion: STATE_VERSION, tabId: state.tabId, sourceContextId: state.sourceContextId, pageUrl: state.pageUrl, paused: Boolean(state.paused), lastTouchedAt: state.lastTouchedAt, candidates: [...state.candidates.values()] }; }
+function emptyState(tabId, pageUrl = "") { return { schemaVersion: STATE_VERSION, tabId, sourceContextId: newId(), pageUrl, paused: false, lastTouchedAt: Date.now(), resourceViewState: defaultResourceViewState(), candidates: new Map() }; }
+function serializeState(state) { return { schemaVersion: STATE_VERSION, tabId: state.tabId, sourceContextId: state.sourceContextId, pageUrl: state.pageUrl, paused: Boolean(state.paused), lastTouchedAt: state.lastTouchedAt, resourceViewState: normalizeResourceViewState(state.resourceViewState), candidates: [...state.candidates.values()] }; }
 
 async function loadTabState(tabId) {
   if (candidatesByTab.has(tabId)) return candidatesByTab.get(tabId);
   let stored;
   try { stored = (await api.storage.session.get(stateKey(tabId)))[stateKey(tabId)]; } catch (_) {}
   const state = stored?.schemaVersion === STATE_VERSION && typeof stored.sourceContextId === "string" && stored.sourceContextId && Array.isArray(stored.candidates)
-    ? { ...stored, tabId, paused: Boolean(stored.paused), candidates: new Map(stored.candidates.filter(item => item?.id && item?.url).map(item => [item.id, item])) }
+    ? { ...stored, tabId, paused: Boolean(stored.paused), resourceViewState: normalizeResourceViewState(stored.resourceViewState), candidates: new Map(stored.candidates.filter(item => item?.id && item?.url).map(item => [item.id, item])) }
     : emptyState(tabId);
   candidatesByTab.set(tabId, state);
   return state;
@@ -49,8 +71,9 @@ async function uiContextForTab(tab) {
   const pageUrl = tab?.url || "";
   const supported = sourceTabId >= 0 && supportedPage(pageUrl);
   if (!supported) {
-    return { sourceTabId, sourceContextId: "", pageUrl, pageTitle: pageTitleFor(tab), favIconUrl: tab?.favIconUrl || "", supported: false, paused: false, candidates: [] };
+    return { sourceTabId, sourceContextId: "", pageUrl, pageTitle: pageTitleFor(tab), favIconUrl: tab?.favIconUrl || "", supported: false, paused: false, resourceViewState: defaultResourceViewState(), candidates: [] };
   }
+  await settingsReady;
   let state = await loadTabState(sourceTabId);
   if (!state.pageUrl) {
     state.pageUrl = pageUrl;
@@ -59,7 +82,14 @@ async function uiContextForTab(tab) {
     await clearTab(sourceTabId, pageUrl);
     state = await loadTabState(sourceTabId);
   }
-  return { sourceTabId, sourceContextId: state.sourceContextId, pageUrl, pageTitle: pageTitleFor(tab), favIconUrl: tab?.favIconUrl || "", supported: true, paused: Boolean(state.paused), candidates: [...state.candidates.values()] };
+  return { sourceTabId, sourceContextId: state.sourceContextId, pageUrl, pageTitle: pageTitleFor(tab), favIconUrl: tab?.favIconUrl || "", supported: true, paused: Boolean(state.paused), resourceViewState: normalizeResourceViewState(state.resourceViewState), candidates: candidatesForUi(state) };
+}
+
+function candidatesForUi(state) {
+  const candidates = [...state.candidates.values()];
+  const posters = [...new Set(candidates.filter(item => item.type === "video" && item.poster).map(item => item.poster))];
+  const fallback = posters.length === 1 ? posters[0] : null;
+  return candidates.map(item => !item.poster && ["hls", "dash"].includes(item.type) && fallback ? { ...item, poster: fallback, posterSource: "dom-fallback" } : item);
 }
 
 async function resolveUiTab(sender, senderOnly = false, windowId = null) {
@@ -72,6 +102,10 @@ async function resolveUiTab(sender, senderOnly = false, windowId = null) {
 
 function notifyUiContext(tabId, windowId) {
   api.runtime.sendMessage({ type: "ui.context.changed", tabId, windowId }).catch?.(() => {});
+}
+
+function notifyResourceViewState(state) {
+  api.runtime.sendMessage({ type: "ui.resource-state.changed", tabId: state.tabId, sourceContextId: state.sourceContextId, state: normalizeResourceViewState(state.resourceViewState) }).catch?.(() => {});
 }
 
 async function unmountWorkspace(tabId) {
@@ -230,7 +264,8 @@ async function addCandidate(tabId, item) {
     const existing = state.candidates.get(id);
     const context = item.inlineManifest ? requestContextFor(tabId, item) : null;
     const inlineHeaders = context ? Object.fromEntries(Object.entries(context.requestHeaders || {}).filter(([name]) => !["cookie", "authorization"].includes(name.toLowerCase()))) : null;
-    const enriched = context ? { ...item, requestHeaders: item.requestHeaders && Object.keys(item.requestHeaders).length ? item.requestHeaders : inlineHeaders, referer: item.referer || context.referer, contentDisposition: item.contentDisposition || context.contentDisposition } : item;
+    const normalizedItem = { ...item, pageTitle: item.pageTitle ? cleanPageTitle(item.pageTitle) : item.pageTitle, pageUrl: item.pageUrl || state.pageUrl };
+    const enriched = context ? { ...normalizedItem, requestHeaders: normalizedItem.requestHeaders && Object.keys(normalizedItem.requestHeaders).length ? normalizedItem.requestHeaders : inlineHeaders, referer: normalizedItem.referer || context.referer, contentDisposition: normalizedItem.contentDisposition || context.contentDisposition } : normalizedItem;
     const merged = mergeCandidate(existing, { ...enriched, canonicalUrl });
     const type = classify(merged);
     if (!type || type === "image" && !settings.detectImages) return false;
@@ -310,12 +345,60 @@ async function setSniffingPaused(tabId, paused) {
   });
 }
 
+async function patchResourceViewState(tabId, sourceContextId, patch) {
+  if (!Number.isInteger(tabId) || tabId < 0) return { ok: false, error: "source_tab_unavailable" };
+  return queueTab(tabId, async () => {
+    const state = await loadTabState(tabId);
+    if (!sourceContextId || sourceContextId !== state.sourceContextId) return { ok: false, error: "resource_view_context_stale" };
+    const current = normalizeResourceViewState(state.resourceViewState);
+    const allowed = {};
+    for (const key of ["pattern", "type", "minMb", "maxMb", "sortMode", "collapsed", "expandedId"]) if (Object.prototype.hasOwnProperty.call(patch || {}, key)) allowed[key] = patch[key];
+    const next = normalizeResourceViewState({ ...current, ...allowed, revision: current.revision + 1 });
+    if (next.expandedId && !state.candidates.has(next.expandedId)) next.expandedId = "";
+    state.resourceViewState = next;
+    state.lastTouchedAt = Date.now();
+    await persistState(state);
+    notifyResourceViewState(state);
+    return { ok: true, state: next };
+  });
+}
+
+async function updateCandidateMetadata(tabId, sourceContextId, payload = {}) {
+  if (!Number.isInteger(tabId) || tabId < 0) return { ok: false, error: "source_tab_unavailable" };
+  return queueTab(tabId, async () => {
+    const state = await loadTabState(tabId);
+    if (!sourceContextId || sourceContextId !== state.sourceContextId) return { ok: false, error: "media_context_stale" };
+    const canonicalUrl = canonicalize(payload.url || "");
+    const id = state.candidates.has(payload.id) ? payload.id : [...state.candidates.entries()].find(([, item]) => canonicalize(item.url) === canonicalUrl)?.[0];
+    if (!id) return { ok: false, error: "media_candidate_not_found" };
+    const existing = state.candidates.get(id);
+    const metadata = {};
+    for (const key of ["duration", "width", "height"]) {
+      const value = Number(payload[key]);
+      if (Number.isFinite(value) && value > 0) metadata[key] = value;
+    }
+    if (typeof payload.live === "boolean") metadata.live = payload.live;
+    if (typeof payload.poster === "string" && payload.poster.length <= 2 * 1024 * 1024 && /^(?:https?:|data:image\/|blob:)/i.test(payload.poster)) metadata.poster = payload.poster;
+    if (!Object.keys(metadata).length) return { ok: true, candidate: existing };
+    const candidate = { ...existing, ...metadata, metadataSource: "preview", lastSeenAt: Date.now() };
+    state.candidates.set(id, candidate);
+    state.lastTouchedAt = Date.now();
+    schedulePersist(state);
+    notifyUiContext(tabId);
+    return { ok: true, candidate };
+  });
+}
+
 async function removeCandidates(tabId, ids) {
   return queueTab(tabId, async () => {
     const state = await loadTabState(tabId);
     const selected = new Set(Array.isArray(ids) ? ids.filter(Boolean) : []);
     let removed = 0;
     for (const id of selected) if (state.candidates.delete(id)) removed += 1;
+    if (selected.has(state.resourceViewState?.expandedId)) {
+      state.resourceViewState = normalizeResourceViewState({ ...state.resourceViewState, expandedId: "", revision: (state.resourceViewState?.revision || 0) + 1 });
+      notifyResourceViewState(state);
+    }
     state.lastTouchedAt = Date.now();
     await persistState(state);
     updateBadge(state);
@@ -421,24 +504,41 @@ async function nativeInfo() {
 }
 
 async function clearPreviewHeadersForTab(tabId) {
-  const ruleId = previewRules.byTab.get(tabId);
-  if (!ruleId || !api.declarativeNetRequest?.updateSessionRules) return;
+  const sessions = previewRules.byTab.get(tabId);
+  if (!sessions?.size || !api.declarativeNetRequest?.updateSessionRules) return;
+  await api.declarativeNetRequest.updateSessionRules({ removeRuleIds: [...sessions.values()] });
   previewRules.byTab.delete(tabId);
-  await api.declarativeNetRequest.updateSessionRules({ removeRuleIds: [ruleId] });
 }
 
 async function updatePreviewHeaders(payload = {}, sender = {}) {
   if (!api.declarativeNetRequest?.updateSessionRules) return { ok: false, error: "preview_headers_unavailable" };
   const tabId = sender.tab?.id;
   if (!Number.isInteger(tabId)) return { ok: false, error: "preview_source_tab_required" };
+  const previewSessionId = typeof payload.previewSessionId === "string" ? payload.previewSessionId.trim().slice(0, 200) : "";
+  if (!previewSessionId) return { ok: false, error: "preview_session_required" };
+  const sessions = previewRules.byTab.get(tabId) || new Map();
+  const previousRuleId = sessions.get(previewSessionId);
   const headers = Object.fromEntries(Object.entries(payload.headers || {}).filter(([key, value]) => ["referer", "origin", "authorization", "cookie", "user-agent"].includes(key.toLowerCase()) && typeof value === "string" && value));
-  await clearPreviewHeadersForTab(tabId);
-  if (payload.action === "clear" || !payload.url || !Object.keys(headers).length) return { ok: true };
-  let urlFilter; try { urlFilter = new URL(payload.url).origin; } catch (_) { return { ok: false, error: "preview_url_invalid" }; }
+  if (payload.action === "clear" || !payload.url || !Object.keys(headers).length) {
+    if (previousRuleId) await api.declarativeNetRequest.updateSessionRules({ removeRuleIds: [previousRuleId] });
+    const nextSessions = new Map(sessions);
+    nextSessions.delete(previewSessionId);
+    if (nextSessions.size) previewRules.byTab.set(tabId, nextSessions); else previewRules.byTab.delete(tabId);
+    return { ok: true };
+  }
+  let origin; try { origin = new URL(payload.url).origin; } catch (_) { return { ok: false, error: "preview_url_invalid" }; }
+  const state = await loadTabState(tabId);
+  const candidate = state.candidates.get(payload.candidateId);
+  let candidateOrigin;
+  try { candidateOrigin = new URL(candidate?.url || "").origin; } catch (_) {}
+  if (!candidate || candidateOrigin !== origin) return { ok: false, error: "preview_candidate_mismatch" };
+  const regexFilter = `^${origin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:/|$)`;
   const requestHeaders = Object.entries(headers).map(([header, value]) => ({ header: header.replace(/^(.)/, match => match.toUpperCase()), operation: "set", value }));
   const ruleId = previewRules.nextId++;
-  previewRules.byTab.set(tabId, ruleId);
-  await api.declarativeNetRequest.updateSessionRules({ removeRuleIds: [], addRules: [{ id: ruleId, priority: 1, action: { type: "modifyHeaders", requestHeaders }, condition: { urlFilter, resourceTypes: ["media", "xmlhttprequest", "image"], tabIds: [tabId] } }] });
+  await api.declarativeNetRequest.updateSessionRules({ removeRuleIds: previousRuleId ? [previousRuleId] : [], addRules: [{ id: ruleId, priority: 1, action: { type: "modifyHeaders", requestHeaders }, condition: { regexFilter, resourceTypes: ["media", "xmlhttprequest", "image"], tabIds: [tabId] } }] });
+  const nextSessions = new Map(sessions);
+  nextSessions.set(previewSessionId, ruleId);
+  previewRules.byTab.set(tabId, nextSessions);
   return { ok: true };
 }
 
@@ -487,6 +587,15 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     removeCandidates(tabId, message.payload?.ids).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
     return true;
   }
+  if (message?.type === "media.metadata.update") {
+    const tabId = sender.tab?.id ?? message.tabId;
+    updateCandidateMetadata(tabId, message.sourceContextId, message.payload || {}).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+  if (message?.type === "ui.resource-state.patch") {
+    resolveUiTab(sender, message.scope === "sender", message.windowId).then(tab => patchResourceViewState(tab?.id ?? message.tabId, message.sourceContextId, message.patch || {})).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
   if (message?.type === "media.candidate.get") {
     candidateFor(sender.tab?.id ?? message.tabId, message.id).then(candidate => sendResponse({ ok: true, candidate })).catch(error => sendResponse({ ok: false, error: error.message }));
     return true;
@@ -529,6 +638,6 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (["task.list", "task.delete", "task.control", "path.validate"].includes(message?.type)) { nativeRequestPromise(message.type, message.payload || {}).then(sendResponse); return true; }
   if (message?.type === "preview.headers.apply") { updatePreviewHeaders({ ...message.payload, action: "apply" }, sender).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message })); return true; }
-  if (message?.type === "preview.headers.clear") { updatePreviewHeaders({ action: "clear" }, sender).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message })); return true; }
+  if (message?.type === "preview.headers.clear") { updatePreviewHeaders({ action: "clear", previewSessionId: message.previewSessionId || message.payload?.previewSessionId }, sender).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message })); return true; }
   return false;
 });

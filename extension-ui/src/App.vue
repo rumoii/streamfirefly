@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { extensionApi, surfaceFromUrl } from "./api";
+import { surfaceFromUrl } from "./api";
 import { useAppStore, humanError } from "./store";
 import type { MediaCandidate } from "./types";
 import AppHeader from "./components/AppHeader.vue";
@@ -18,7 +18,6 @@ let toastTimer = 0;
 
 function showToast(message: string) { toast.value = message; clearTimeout(toastTimer); toastTimer = window.setTimeout(() => toast.value = "", 3500); }
 async function guard(action: () => Promise<any>, success?: string) { try { await action(); if (success) showToast(success); } catch (reason: any) { showToast(humanError(reason?.message)); } }
-async function updateSort(mode: string) { store.settings.candidateSort = mode; if (extensionApi()?.storage?.local) await extensionApi().storage.local.set({ candidateSort: mode }); }
 async function resetSettings() { const next = { saveDir: "", downloadThreads: 6, detectImages: false, advancedDeepSearch: false, candidateSort: store.settings.candidateSort }; await guard(() => store.saveSettings(next), "已恢复默认设置"); }
 function openParser(candidate: MediaCandidate) { void guard(() => store.openWorkspace(candidate.type === "hls" ? "parser" : "resources", candidate.id)); }
 
@@ -39,7 +38,7 @@ onMounted(() => store.initialize(surface));
       </div>
       <template v-else>
         <div class="sidebar-source-summary"><strong>{{ store.candidates.filter(item => item.type !== 'segment').length }}</strong><span>个媒体资源</span><i></i><strong>{{ store.activeTasks.length }}</strong><span>个活动任务</span></div>
-        <ResourcesView :candidates="store.candidates" :loading="store.loading" :sort-mode="store.settings.candidateSort" compact @download="downloadCandidate = $event" @parse="openParser" @remove="guard(() => store.removeCandidates($event), '已从列表移除资源')" @update-sort="updateSort" />
+        <ResourcesView :candidates="store.candidates" :loading="store.loading" :view-state="store.resourceViewState" compact @download="downloadCandidate = $event" @parse="openParser" @remove="guard(() => store.removeCandidates($event), '已从列表移除资源')" @update-view-state="patch => guard(() => store.patchResourceView(patch))" @metadata="(candidate, metadata) => guard(() => store.updateCandidateMetadata(candidate, metadata))" />
         <TaskOverview :source-tasks="store.sourceTasks" :active-tasks="store.activeTasks" />
       </template>
     </main>

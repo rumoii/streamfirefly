@@ -15,12 +15,24 @@ export interface MediaCandidate {
   height?: number | null;
   duration?: number | null;
   poster?: string | null;
+  live?: boolean | null;
   detectedAt?: number;
   source?: string;
   referer?: string;
   requestHeaders?: Record<string, string>;
   contentDisposition?: string;
   inlineManifest?: { format: string; baseUrl: string; text: string } | null;
+}
+
+export interface ResourceViewState {
+  pattern: string;
+  type: "all" | "video" | "audio" | "image";
+  minMb: string;
+  maxMb: string;
+  sortMode: "detected" | "size" | "duration" | "type";
+  collapsed: boolean;
+  expandedId: string;
+  revision: number;
 }
 
 export interface UiContext {
@@ -32,6 +44,7 @@ export interface UiContext {
   supported: boolean;
   paused: boolean;
   candidates: MediaCandidate[];
+  resourceViewState: ResourceViewState;
 }
 
 export interface TaskOutput {

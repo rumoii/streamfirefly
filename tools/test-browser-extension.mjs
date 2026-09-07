@@ -107,6 +107,7 @@ function reporterSource(origin) {
     if (!postManifest.inlineManifest.text.includes(origin + '/media/post-segment.ts') || !postManifest.inlineManifest.text.includes('URI="' + origin + '/api/key.bin"')) throw new Error('POST HLS manifest URLs were not normalized');
 
     const tabsBeforeWorkspace = (await testApi.tabs.query({ windowId: tab.windowId })).length;
+    const pageBeforeWorkspace = (await testApi.scripting.executeScript({ target: { tabId: tab.id }, func: () => ({ title: document.title, htmlOverflow: document.documentElement.style.overflow, bodyOverflow: document.body.style.overflow }) }))[0].result;
     const workspaceResult = await openWorkspace(await testApi.tabs.get(tab.id), 'resources');
     if (!workspaceResult.ok) throw new Error('workspace injection failed: ' + workspaceResult.error);
     await waitFor(() => workspaceReady === tab.id, 'workspace bundle did not report readiness');
@@ -118,6 +119,43 @@ function reporterSource(origin) {
       return result[0]?.result || null;
     }, 'workspace did not mount in an open Shadow DOM');
     if (workspaceMounted.count !== 1 || !workspaceMounted.text.includes('流萤') || workspaceMounted.error) throw new Error('workspace mounted with an invalid Vue UI state: ' + JSON.stringify(workspaceMounted));
+    const resourceState = await loadTabState(tab.id);
+    const sidebarPatch = await patchResourceViewState(tab.id, resourceState.sourceContextId, { type: 'video', sortMode: 'size' });
+    if (!sidebarPatch.ok) throw new Error('sidebar resource state patch failed: ' + sidebarPatch.error);
+    await waitFor(async () => {
+      const result = await testApi.scripting.executeScript({ target: { tabId: tab.id }, func: () => {
+        const root = document.getElementById('streamfirefly-workspace-host')?.shadowRoot;
+        const selects = root ? [...root.querySelectorAll('.toolbar-grid select')] : [];
+        return selects.length >= 2 ? { type: selects[0].value, sort: selects[1].value } : null;
+      } });
+      const value = result[0]?.result;
+      return value?.type === 'video' && value?.sort === 'size' ? value : null;
+    }, 'sidebar resource state did not reach the workspace');
+    await testApi.scripting.executeScript({ target: { tabId: tab.id }, func: () => {
+      const input = document.getElementById('streamfirefly-workspace-host')?.shadowRoot?.querySelector('.toolbar-grid input[type="search"]');
+      input.value = 'direct';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    } });
+    await waitFor(async () => (await loadTabState(tab.id)).resourceViewState.pattern === 'direct', 'workspace resource state did not reach background authority');
+    const workspaceBehavior = (await testApi.scripting.executeScript({ target: { tabId: tab.id }, func: () => {
+      const host = document.getElementById('streamfirefly-workspace-host');
+      const shell = host?.shadowRoot?.querySelector('.workspace-shell');
+      const content = host?.shadowRoot?.querySelector('.app-content');
+      const resources = host?.shadowRoot?.querySelector('.expandable-resources');
+      const spacer = document.createElement('div');
+      spacer.style.height = '1200px';
+      content.append(spacer);
+      shell.scrollTop = 420;
+      const contentStyle = getComputedStyle(content);
+      const contentInnerWidth = content.clientWidth - parseFloat(contentStyle.paddingLeft) - parseFloat(contentStyle.paddingRight);
+      const result = { title: document.title, htmlOverflow: document.documentElement.style.overflow, bodyOverflow: document.body.style.overflow, overflowY: getComputedStyle(shell).overflowY, scrollTop: shell.scrollTop, scrollHeight: shell.scrollHeight, clientHeight: shell.clientHeight, viewportWidth: document.documentElement.clientWidth, contentWidth: content.getBoundingClientRect().width, contentInnerWidth, resourcesWidth: resources.getBoundingClientRect().width };
+      spacer.remove();
+      return result;
+    } }))[0].result;
+    if (workspaceBehavior.title !== pageBeforeWorkspace.title) throw new Error('workspace changed the source document title: ' + JSON.stringify({ pageBeforeWorkspace, workspaceBehavior }));
+    if (workspaceBehavior.htmlOverflow !== 'hidden' || workspaceBehavior.bodyOverflow !== 'hidden') throw new Error('workspace did not lock the underlying page scroll: ' + JSON.stringify(workspaceBehavior));
+    if (workspaceBehavior.overflowY !== 'auto' || workspaceBehavior.scrollHeight <= workspaceBehavior.clientHeight || workspaceBehavior.scrollTop <= 0) throw new Error('workspace shell was not vertically scrollable: ' + JSON.stringify(workspaceBehavior));
+    if (workspaceBehavior.contentWidth < workspaceBehavior.viewportWidth - 24 || workspaceBehavior.resourcesWidth < workspaceBehavior.contentInnerWidth - 1) throw new Error('workspace resources did not fill the available viewport width: ' + JSON.stringify(workspaceBehavior));
     const repeatedWorkspace = await openWorkspace(await testApi.tabs.get(tab.id), 'settings');
     if (!repeatedWorkspace.ok) throw new Error('repeated workspace open failed: ' + repeatedWorkspace.error);
     const tabsAfterWorkspace = (await testApi.tabs.query({ windowId: tab.windowId })).length;
@@ -125,6 +163,8 @@ function reporterSource(origin) {
     await testApi.tabs.sendMessage(tab.id, { type: 'workspace.unmount' });
     await testApi.tabs.sendMessage(tab.id, { type: 'workspace.unmount' });
     await waitFor(async () => (await testApi.scripting.executeScript({ target: { tabId: tab.id }, func: () => !document.getElementById('streamfirefly-workspace-host') }))[0]?.result, 'workspace did not unmount idempotently');
+    const pageAfterUnmount = (await testApi.scripting.executeScript({ target: { tabId: tab.id }, func: () => ({ title: document.title, htmlOverflow: document.documentElement.style.overflow, bodyOverflow: document.body.style.overflow }) }))[0].result;
+    if (JSON.stringify(pageAfterUnmount) !== JSON.stringify(pageBeforeWorkspace)) throw new Error('workspace did not restore source page title and scroll styles: ' + JSON.stringify({ pageBeforeWorkspace, pageAfterUnmount }));
     await openWorkspace(await testApi.tabs.get(tab.id), 'resources');
 
     await testApi.scripting.executeScript({
@@ -143,7 +183,7 @@ function reporterSource(origin) {
       return has(items, '/media/spa.mp4') && !has(items, '/media/direct.mp4') ? items : null;
     }, 'SPA navigation did not clear old candidates and rescan the page');
     await waitFor(async () => (await testApi.scripting.executeScript({ target: { tabId: tab.id }, func: () => !document.getElementById('streamfirefly-workspace-host') }))[0]?.result, 'SPA navigation did not unload the workspace');
-    await postResult({ ok: true, browser: ${JSON.stringify(browserName)}, first, afterSpa, workspace: { mounted: true, duplicateCount: workspaceMounted.count, tabCountUnchanged: tabsAfterWorkspace === tabsBeforeWorkspace, navigationCleanup: true } });
+    await postResult({ ok: true, browser: ${JSON.stringify(browserName)}, first, afterSpa, workspace: { mounted: true, duplicateCount: workspaceMounted.count, tabCountUnchanged: tabsAfterWorkspace === tabsBeforeWorkspace, navigationCleanup: true, sharedResourceState: true, titlePreserved: true, scrollVerified: true } });
   })().catch(async error => {
     try { await postResult({ ok: false, browser: ${JSON.stringify(browserName)}, error: error?.message || String(error), stack: error?.stack || null }); } catch (_) {}
   });

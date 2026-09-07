@@ -15,8 +15,9 @@ export function runtimeUrl(path: string, fallback = path): string {
 export type UiSurface = "sidebar" | "options" | "workspace";
 
 export function surfaceFromUrl(): UiSurface {
+  if ((globalThis as any).__STREAMFIREFLY_SURFACE__ === "workspace") return "workspace";
   const surface = new URLSearchParams(location.search).get("surface");
-  return surface === "options" ? "options" : "sidebar";
+  return surface === "options" ? "options" : surface === "workspace" ? "workspace" : "sidebar";
 }
 
 export async function currentWindowId(): Promise<number | null> {

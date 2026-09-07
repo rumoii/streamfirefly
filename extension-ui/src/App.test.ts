@@ -12,6 +12,7 @@ let currentContext: UiContext = {
   favIconUrl: "",
   supported: true,
   paused: false,
+  resourceViewState: { pattern: "", type: "all", minMb: "", maxMb: "", sortMode: "detected", collapsed: false, expandedId: "", revision: 0 },
   candidates: [{ id: "hls-1", url: "https://media.example/master.m3u8", type: "hls", sizeKind: "manifest", pageTitle: "测试 HLS" }]
 };
 
@@ -22,6 +23,10 @@ vi.stubGlobal("chrome", {
       sent.push(message);
       if (message.type === "native.connect") return { ok: true, capabilities: ["hls-selection-v1", "task-output-group-v1", "hls-segment-engine-v1"] };
       if (message.type === "ui.context.get") return { ok: true, context: structuredClone(currentContext) };
+      if (message.type === "ui.resource-state.patch") {
+        currentContext.resourceViewState = { ...currentContext.resourceViewState, ...message.patch, revision: currentContext.resourceViewState.revision + 1 };
+        return { ok: true, state: structuredClone(currentContext.resourceViewState) };
+      }
       if (message.type === "task.list") return { ok: true, tasks: [{ id: "task-1", title: "当前下载", state: "stopping", progress: 36, live_recording: true, source_context_id: "context-7" }] };
       if (message.type === "workspace.open" || message.type === "media.remove" || message.type === "preview.headers.clear") return { ok: true };
       return { ok: true };
@@ -84,7 +89,7 @@ describe("sidebar surface", () => {
   });
 
   it("rejects workspace actions on browser-internal pages", async () => {
-    currentContext = { sourceTabId: 9, sourceContextId: "", pageUrl: "about:addons", pageTitle: "扩展管理", favIconUrl: "", supported: false, paused: false, candidates: [] };
+    currentContext = { sourceTabId: 9, sourceContextId: "", pageUrl: "about:addons", pageTitle: "扩展管理", favIconUrl: "", supported: false, paused: false, resourceViewState: { pattern: "", type: "all", minMb: "", maxMb: "", sortMode: "detected", collapsed: false, expandedId: "", revision: 0 }, candidates: [] };
     const wrapper = mount(App, { global: { plugins: [createPinia()] } });
     await flushPromises();
 
@@ -96,7 +101,7 @@ describe("sidebar surface", () => {
   });
 
   it("renders the resource empty state without inventing a session", async () => {
-    currentContext = { sourceTabId: 7, sourceContextId: "context-empty", pageUrl: "https://media.example/empty", pageTitle: "空页面", favIconUrl: "", supported: true, paused: false, candidates: [] };
+    currentContext = { sourceTabId: 7, sourceContextId: "context-empty", pageUrl: "https://media.example/empty", pageTitle: "空页面", favIconUrl: "", supported: true, paused: false, resourceViewState: { pattern: "", type: "all", minMb: "", maxMb: "", sortMode: "detected", collapsed: false, expandedId: "", revision: 0 }, candidates: [] };
     const wrapper = mount(App, { global: { plugins: [createPinia()] } });
     await flushPromises();
     expect(wrapper.text()).toContain("等待发现媒体资源");

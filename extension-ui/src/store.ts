@@ -1,7 +1,7 @@
 import { computed, onBeforeUnmount, ref } from "vue";
 import { defineStore } from "pinia";
 import { currentWindowId, extensionApi, sendMessage, surfaceFromUrl, type UiSurface } from "./api";
-import type { DownloadTask, MediaCandidate, UiContext } from "./types";
+import type { DownloadTask, MediaCandidate, ResourceViewState, UiContext } from "./types";
 
 const activeStates = new Set(["queued", "starting", "running", "retrying", "pausing", "cancelling", "stopping"]);
 
@@ -21,6 +21,17 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
   candidateSort: "detected"
 });
 
+export const DEFAULT_RESOURCE_VIEW_STATE: Readonly<ResourceViewState> = Object.freeze({
+  pattern: "",
+  type: "all",
+  minMb: "",
+  maxMb: "",
+  sortMode: "detected",
+  collapsed: false,
+  expandedId: "",
+  revision: 0
+});
+
 export async function readSettings(storage = extensionApi()?.storage?.local): Promise<AppSettings> {
   if (!storage) return { ...DEFAULT_SETTINGS };
   const stored = await storage.get(Object.keys(DEFAULT_SETTINGS));
@@ -37,9 +48,11 @@ export const useAppStore = defineStore("app", () => {
   const error = ref("");
   const status = ref("");
   const settings = ref<AppSettings>({ ...DEFAULT_SETTINGS });
+  const resourceViewState = ref<ResourceViewState>({ ...DEFAULT_RESOURCE_VIEW_STATE });
   let timer: number | null = null;
   let listening = false;
   let sidebarWindowId: number | null = null;
+  let resourcePatchQueue: Promise<void> = Promise.resolve();
 
   const sourceTasks = computed(() => tasks.value.filter(task => task.source_context_id && task.source_context_id === context.value?.sourceContextId));
   const activeTasks = computed(() => tasks.value.filter(task => activeStates.has(task.state)));
@@ -49,9 +62,13 @@ export const useAppStore = defineStore("app", () => {
     if (surface.value === "sidebar" && sidebarWindowId == null) sidebarWindowId = await currentWindowId();
     const result: any = await sendMessage({ type: "ui.context.get", scope: surface.value === "workspace" ? "sender" : "active", windowId: sidebarWindowId });
     if (!result?.ok) throw new Error(result?.error || "source_tab_unavailable");
-    context.value = result.context;
+    const nextContext = result.context as UiContext;
+    nextContext.pageTitle = cleanSourceTitle(nextContext.pageTitle);
+    nextContext.resourceViewState = { ...DEFAULT_RESOURCE_VIEW_STATE, ...(nextContext.resourceViewState || {}), sortMode: nextContext.resourceViewState?.sortMode || settings.value.candidateSort };
+    context.value = nextContext;
     candidates.value = Array.isArray(result.context?.candidates) ? result.context.candidates : [];
-    document.title = `流萤 · ${context.value?.pageTitle || "网页媒体"}`;
+    resourceViewState.value = { ...nextContext.resourceViewState };
+    if (surface.value !== "workspace") document.title = `流萤 · ${context.value?.pageTitle || "网页媒体"}`;
   }
 
   async function loadTasks() {
@@ -67,8 +84,9 @@ export const useAppStore = defineStore("app", () => {
     error.value = "";
     try {
       if (!extensionApi()?.runtime?.sendMessage) {
-        context.value = { sourceContextId: "preview-page", sourceTabId: 1, pageUrl: "https://media.example/demo", pageTitle: "示例媒体页面", favIconUrl: "", supported: true, paused: false, candidates: previewCandidates() };
+        context.value = { sourceContextId: "preview-page", sourceTabId: 1, pageUrl: "https://media.example/demo", pageTitle: "示例媒体页面", favIconUrl: "", supported: true, paused: false, resourceViewState: { ...DEFAULT_RESOURCE_VIEW_STATE }, candidates: previewCandidates() };
         candidates.value = context.value.candidates;
+        resourceViewState.value = { ...context.value.resourceViewState };
         tasks.value = previewTasks();
         capabilities.value = ["hls-selection-v1", "hls-subtitle-sidecar-v1", "task-output-group-v1", "hls-segment-engine-v1", "hls-checkpoint-v1", "hls-aes128-v1", "hls-key-override-v1", "hls-reauthorize-v1", "hls-live-engine-v1"];
       } else {
@@ -120,6 +138,40 @@ export const useAppStore = defineStore("app", () => {
     candidates.value = candidates.value.filter(item => !ids.includes(item.id));
   }
 
+  function patchResourceView(patch: Partial<Omit<ResourceViewState, "revision">>): Promise<void> {
+    if (!context.value?.supported) return Promise.resolve();
+    const sourceContextId = context.value.sourceContextId;
+    resourceViewState.value = { ...resourceViewState.value, ...patch, revision: resourceViewState.value.revision + 1 };
+    let sortPersistence: Promise<unknown> = Promise.resolve();
+    if (patch.sortMode) {
+      settings.value.candidateSort = patch.sortMode;
+      sortPersistence = extensionApi()?.storage?.local?.set?.({ candidateSort: patch.sortMode }) || Promise.resolve();
+    }
+    if (!extensionApi()?.runtime?.sendMessage) return Promise.resolve();
+    const tabId = context.value.sourceTabId;
+    const operation = resourcePatchQueue.catch(() => {}).then(async () => {
+      await sortPersistence;
+      const result: any = await sendMessage({ type: "ui.resource-state.patch", scope: surface.value === "workspace" ? "sender" : "active", tabId, windowId: sidebarWindowId, sourceContextId, patch });
+      if (!result?.ok) throw new Error(result?.error || "resource_view_update_failed");
+      if (context.value?.sourceContextId === sourceContextId && result.state?.revision >= resourceViewState.value.revision) resourceViewState.value = result.state;
+    });
+    resourcePatchQueue = operation.catch(() => {});
+    return operation;
+  }
+
+  async function updateCandidateMetadata(candidate: MediaCandidate, metadata: Partial<Pick<MediaCandidate, "duration" | "width" | "height" | "poster" | "live">>) {
+    if (!context.value?.supported) return;
+    if (!extensionApi()?.runtime?.sendMessage) {
+      const index = candidates.value.findIndex(item => item.id === candidate.id);
+      if (index >= 0) candidates.value[index] = { ...candidates.value[index], ...metadata };
+      return;
+    }
+    const result: any = await sendMessage({ type: "media.metadata.update", tabId: context.value.sourceTabId, sourceContextId: context.value.sourceContextId, payload: { id: candidate.id, url: candidate.url, ...metadata } });
+    if (!result?.ok) throw new Error(result?.error || "media_metadata_update_failed");
+    const index = candidates.value.findIndex(item => item.id === candidate.id);
+    if (index >= 0 && result.candidate) candidates.value[index] = { ...candidates.value[index], ...result.candidate };
+  }
+
   async function saveSettings(next = settings.value) {
     if (next.saveDir.trim()) {
       const result: any = await sendMessage({ type: "path.validate", payload: { path: next.saveDir.trim() } });
@@ -151,7 +203,12 @@ export const useAppStore = defineStore("app", () => {
   }
 
   function onRuntimeMessage(message: any) {
-    if (message?.type === "ui.context.changed" && surface.value === "sidebar" && (message.windowId == null || sidebarWindowId == null || message.windowId === sidebarWindowId)) void loadContext().catch(() => {});
+    if (message?.type === "ui.context.changed") {
+      const belongsToSidebar = surface.value === "sidebar" && (message.windowId == null || sidebarWindowId == null || message.windowId === sidebarWindowId);
+      const belongsToWorkspace = surface.value === "workspace" && message.tabId === context.value?.sourceTabId;
+      if (belongsToSidebar || belongsToWorkspace) void loadContext().catch(() => {});
+    }
+    if (message?.type === "ui.resource-state.changed" && message.sourceContextId === context.value?.sourceContextId && message.state?.revision >= resourceViewState.value.revision) resourceViewState.value = message.state;
     if (message?.type === "task.deleted" && message.id) tasks.value = tasks.value.filter(item => item.id !== message.id);
     if (message?.type === "task.progress" && message.task) {
       const index = tasks.value.findIndex(item => item.id === message.task.id);
@@ -162,11 +219,14 @@ export const useAppStore = defineStore("app", () => {
   onBeforeUnmount(() => {
     if (timer != null) { clearInterval(timer); timer = null; }
     if (listening) { extensionApi()?.runtime?.onMessage?.removeListener?.(onRuntimeMessage); listening = false; }
-    void sendMessage({ type: "preview.headers.clear" }).catch(() => {});
   });
 
-  return { surface, context, candidates, tasks, capabilities, loading, error, status, settings, sourceTasks, activeTasks, initialize, refresh, toggleSniffing, openWorkspace, closeWorkspace, removeCandidates, saveSettings, controlTask, deleteTask };
+  return { surface, context, candidates, tasks, capabilities, loading, error, status, settings, resourceViewState, sourceTasks, activeTasks, initialize, refresh, toggleSniffing, openWorkspace, closeWorkspace, removeCandidates, patchResourceView, updateCandidateMetadata, saveSettings, controlTask, deleteTask };
 });
+
+export function cleanSourceTitle(value: string): string {
+  return String(value || "").replace(/^(?:(?:流萤(?:\s+StreamFirefly)?)[\s·|\-–—:：]+)+/i, "").trim() || "未命名页面";
+}
 
 export function humanError(value: string): string {
   const labels: Record<string, string> = {
