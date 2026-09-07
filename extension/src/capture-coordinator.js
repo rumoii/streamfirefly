@@ -1,8 +1,7 @@
 import { createCaptureTransport } from "./capture-transport.js";
 export function createCaptureCoordinator(api, nativeRequest, evaluation, resources) {
   const local = typeof Worker === "function" ? createCaptureTransport(api) : null;
-  const sessions = new Map();
-  const opening = new Set();
+  const sessions = new Map(), opening = new Map(), history = new Map();
   async function transport(type, payload) {
     if (local) return type === "open" ? local.open(payload) : local[type](payload.id);
     await evaluation.ensureDocument();
@@ -10,48 +9,113 @@ export function createCaptureCoordinator(api, nativeRequest, evaluation, resourc
     if (!result?.ok) throw new Error(result?.error || "capture_transport_failed");
     return result.value;
   }
-  async function open(payload) {
-    if (sessions.has(payload.tabId) || opening.has(payload.tabId)) throw new Error("此页面已有捕捉会话");
-    opening.add(payload.tabId);
-    try { return await start(payload); } finally { opening.delete(payload.tabId); }
+  async function identity(tabId, frameId) {
+    const result = await api.tabs.sendMessage(tabId, { type: "capture.identity" }, { frameId });
+    if (!result?.ok || typeof result.documentToken !== "string" || !result.documentToken) throw new Error("capture_document_unavailable");
+    return result.documentToken;
+  }
+  async function inspect(tabId, frame) {
+    const before = await identity(tabId, frame.frameId);
+    const results = await api.scripting.executeScript({ target: { tabId, frameIds: [frame.frameId] }, world: "MAIN", func: () => ({ installed: Boolean(window.__streamFireflyCaptureProbe?.installed), sources: window.__streamFireflyCaptureProbe?.sources?.() || [] }) });
+    if (await identity(tabId, frame.frameId) !== before) throw new Error("capture_document_changed");
+    const result = results[0];
+    if (!result?.result?.installed) throw new Error("capture_probe_unavailable");
+    if (!Array.isArray(result.result.sources) || result.result.sources.length > 64) throw new Error("capture_sources_invalid");
+    return result.result.sources.filter(item => typeof item?.id === "string" && /^\d{1,8}$/.test(item.id) && Array.isArray(item.tracks) && item.state !== "closed").map(item => ({ id: item.id, frameId: frame.frameId, documentToken: before, documentId: result.documentId, url: frame.url, state: String(item.state).slice(0, 30), tracks: item.tracks.slice(0, 8).map(value => String(value).slice(0, 200)) }));
   }
   async function sources(tabId) {
-    const results = await api.scripting.executeScript({ target: { tabId, frameIds: [0] }, world: "MAIN", func: () => window.__streamFireflyCaptureProbe?.sources?.() || [] });
-    const list = results[0]?.result;
-    if (!Array.isArray(list) || list.length > 64) throw new Error("媒体源信息无效");
-    return list.filter(item => typeof item?.id === "string" && /^\d{1,8}$/.test(item.id) && Array.isArray(item.tracks)).map(item => ({ id: item.id, state: String(item.state).slice(0, 30), tracks: item.tracks.slice(0, 8).map(value => String(value).slice(0, 200)) }));
+    const frames = await api.webNavigation.getAllFrames({ tabId });
+    if (!Array.isArray(frames) || frames.length > 100) throw new Error("capture_frame_limit");
+    const result = await Promise.all(frames.map(async frame => {
+      const status = { frameId: frame.frameId, url: frame.url, state: "unsupported" };
+      if (!/^https?:/.test(frame.url)) return { status, sources: [] };
+      try { return { status: { ...status, state: "ready" }, sources: await inspect(tabId, frame) }; }
+      catch (error) { return { status: { ...status, state: "failed", error: error.message }, sources: [] }; }
+    }));
+    return { sources: result.flatMap(item => item.sources), frames: result.map(item => item.status) };
   }
-  async function start(payload) {
-    const state = await resources.loadTabState(payload.tabId);
-    if (state.sourceContextId !== payload.sourceContextId) throw new Error("来源页面已变化");
-    const prepared = await api.tabs.sendMessage(payload.tabId, { type: "capture.prepare" }, { frameId: 0 });
-    if (!prepared?.ok) throw new Error("来源页面未准备好，请刷新后重新开启");
-    const supported = await api.scripting.executeScript({ target: { tabId: payload.tabId, frameIds: [0] }, world: "MAIN", func: () => Boolean(window.__streamFireflyCaptureProbe?.installed) });
-    if (!supported[0]?.result) throw new Error("此页面不支持媒体缓冲捕捉，请使用内置下载");
-    const origin = api.runtime.getURL("").replace(/\/$/, "");
-    const result = await nativeRequest("capture.open", { origin, directory: payload.directory || "" });
-    if (!result.ok) throw new Error(result.error || "capture_open_failed");
-    const session = { ...result.value, tabId: payload.tabId };
-    sessions.set(payload.tabId, session);
+  const send = (session, type) => api.tabs.sendMessage(session.tabId, { type: `capture.${type}`, id: session.id, documentToken: session.source.documentToken, sourceId: session.source.id }, { frameId: session.source.frameId });
+  async function cleanup(session) {
+    clearTimeout(session.timer);
+    const results = await Promise.allSettled([nativeRequest("capture.abort", { id: session.id }), transport("abort", { id: session.id }), send(session, "abort")]);
+    if (results.some(result => result.status === "rejected" || result.value?.ok === false)) session.cleanupFailed = true;
+  }
+  async function interrupted(tabId, frameId, documentToken, id, reason = "capture_source_unavailable") {
+    const operation = opening.get(tabId);
+    if (operation && (frameId == null || operation.frameId === frameId) && (documentToken == null || operation.documentToken === documentToken) && (id == null || operation.id === id)) operation.cancelled = true;
+    const session = sessions.get(tabId);
+    if (!session || frameId != null && session.source.frameId !== frameId || documentToken != null && session.source.documentToken !== documentToken || id != null && session.id !== id) return;
+    sessions.delete(tabId); session.error = reason; session.state = "interrupted";
+    await cleanup(session);
+  }
+  async function monitor(session) {
+    if (sessions.get(session.tabId) !== session || session.state === "stopping") return;
     try {
-      await transport("open", session);
-      const current = await resources.loadTabState(payload.tabId);
-      if (current.sourceContextId !== payload.sourceContextId || sessions.get(payload.tabId) !== session) throw new Error("来源页面已变化");
-      const started = await api.tabs.sendMessage(payload.tabId, { type: "capture.start", id: session.id, sourceId: payload.sourceId || "" }, { frameId: 0 });
+      const available = await inspect(session.tabId, { frameId: session.source.frameId, url: session.source.url });
+      if (sessions.get(session.tabId) !== session || session.state === "stopping") return;
+      if (!available.some(source => source.id === session.source.id && source.documentToken === session.source.documentToken)) throw new Error("capture_source_unavailable");
+      const response = await nativeRequest("capture.list");
+      if (sessions.get(session.tabId) !== session || session.state === "stopping") return;
+      if (!response.ok) throw new Error("capture_host_disconnected");
+      const snapshot = response.value.find(item => item.id === session.id);
+      if (!snapshot || !["armed", "capturing"].includes(snapshot.state)) {
+        sessions.delete(session.tabId); clearTimeout(session.timer);
+        await Promise.allSettled([transport("abort", { id: session.id }), send(session, "abort")]);
+        return;
+      }
+    } catch (error) { await interrupted(session.tabId, session.source.frameId, session.source.documentToken, session.id, error.message); return; }
+    if (sessions.get(session.tabId) === session) session.timer = setTimeout(() => void monitor(session), 2000);
+  }
+  async function open(payload) {
+    if (sessions.has(payload.tabId) || opening.has(payload.tabId)) throw new Error("capture_already_open");
+    const selected = payload.source;
+    if (!selected || !Number.isInteger(selected.frameId) || typeof selected.documentToken !== "string") throw new Error("capture_source_required");
+    const operation = { frameId: selected.frameId, documentToken: selected.documentToken, cancelled: false };
+    opening.set(payload.tabId, operation);
+    let session;
+    try {
+      const check = async () => { const current = await resources.loadTabState(payload.tabId); if (operation.cancelled || current.sourceContextId !== payload.sourceContextId) throw new Error("capture_document_changed"); };
+      await check();
+      const found = (await sources(payload.tabId)).sources.find(source => source.id === selected.id && source.frameId === selected.frameId && source.documentToken === selected.documentToken);
+      if (!found) throw new Error("capture_source_unavailable");
+      const prepared = await api.tabs.sendMessage(payload.tabId, { type: "capture.prepare", documentToken: found.documentToken }, { frameId: found.frameId });
+      if (!prepared?.ok) throw new Error("capture_document_changed");
+      await check();
+      const result = await nativeRequest("capture.open", { origin: api.runtime.getURL("").replace(/\/$/, ""), directory: payload.directory || "" });
+      if (!result.ok) throw new Error(result.error || "capture_open_failed");
+      session = { ...result.value, tabId: payload.tabId, source: found, state: "armed" };
+      operation.id = session.id;
+      sessions.set(payload.tabId, session); history.set(session.id, session);
+      while (history.size > 100) history.delete(history.keys().next().value);
+      await check();
+      await transport("open", { ...session, frameId: found.frameId, documentToken: found.documentToken, documentId: found.documentId });
+      await check();
+      const started = await send(session, "start");
       if (!started?.ok) throw new Error(started?.error || "capture_probe_failed");
+      await check();
+      session.timer = setTimeout(() => void monitor(session), 2000);
       return { id: session.id };
-    } catch (error) { await cleanup(session); sessions.delete(payload.tabId); throw error; }
+    } catch (error) {
+      if (session) { session.error = error.message; session.state = "interrupted"; await cleanup(session); if (sessions.get(payload.tabId) === session) sessions.delete(payload.tabId); }
+      throw error;
+    } finally { if (opening.get(payload.tabId) === operation) opening.delete(payload.tabId); }
   }
-  async function close(tabId) {
-    const session = sessions.get(tabId); if (!session) return;
-    try {
-      const stopped = await api.tabs.sendMessage(tabId, { type: "capture.stop", id: session.id }, { frameId: 0 });
-      if (!stopped?.ok) throw new Error(stopped?.error || "capture_stop_failed");
-      await transport("close", { id: session.id });
-    } catch (error) { await cleanup(session); throw error; }
-    finally { sessions.delete(tabId); }
+  async function close(tabId, id) {
+    const session = sessions.get(tabId);
+    if (!session) return;
+    if (id !== session.id) throw new Error("capture_session_changed");
+    if (session.closing) return session.closing;
+    session.state = "stopping"; clearTimeout(session.timer);
+    session.closing = (async () => {
+      try { const stopped = await send(session, "stop"); if (!stopped?.ok) throw new Error(stopped?.error || "capture_stop_failed"); await transport("close", { id: session.id }); session.state = "finalizing"; }
+      catch (error) { session.error = error.message; session.state = "interrupted"; await cleanup(session); throw error; }
+      finally { if (sessions.get(tabId) === session) sessions.delete(tabId); }
+    })();
+    return session.closing;
   }
-  async function cleanup(session) { await Promise.allSettled([nativeRequest("capture.abort", { id: session.id }), transport("abort", { id: session.id }), api.tabs.sendMessage(session.tabId, { type: "capture.abort", id: session.id }, { frameId: 0 })]); }
-  async function interrupted(tabId) { const session = sessions.get(tabId); if (!session) return; sessions.delete(tabId); await cleanup(session); }
-  return { open, close, sources, interrupted, openControl: tabId => api.tabs.create({ url: api.runtime.getURL(`dist/app.html?surface=options&captureTab=${tabId}`) }), recover: async id => { const result = await nativeRequest("capture.close", { id }); if (!result.ok) throw new Error(result.error); return result.value; }, push: (payload, sender) => local ? local.push(payload, sender) : null, isLocal: Boolean(local), list: async () => { const result = await nativeRequest("capture.list"); if (!result.ok) throw new Error(result.error); return result.value; } };
+  async function list() {
+    const result = await nativeRequest("capture.list"); if (!result.ok) throw new Error(result.error || "capture_host_disconnected");
+    return result.value.map(snapshot => { const session = history.get(snapshot.id); return { ...snapshot, bytes: snapshot.bytes ?? 0, tracks: snapshot.tracks || [], outputs: snapshot.outputs || [], tabId: session?.tabId, source: session?.source, state: session?.state === "stopping" && ["armed", "capturing"].includes(snapshot.state) ? "stopping" : snapshot.state, error: snapshot.error || (snapshot.state !== "complete" ? session?.error || (session?.cleanupFailed ? "capture_cleanup_failed" : undefined) : undefined) }; });
+  }
+  return { open, close, sources, interrupted, list, openControl: tabId => api.tabs.create({ url: api.runtime.getURL(`dist/app.html?surface=options&captureTab=${tabId}`) }), recover: async id => { const result = await nativeRequest("capture.close", { id }); if (!result.ok) throw new Error(result.error); return result.value; }, push: (payload, sender) => local ? local.push(payload, sender) : null, isLocal: Boolean(local) };
 }

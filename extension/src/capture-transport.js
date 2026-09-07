@@ -3,11 +3,13 @@ export function createCaptureTransport(api) {
   async function open(payload) {
     if (sessions.size >= 2 || !/^ws:\/\/127\.0\.0\.1:\d+$/.test(payload.endpoint) || !/^[a-f0-9]{64}$/.test(payload.token)) throw new Error("capture_transport_invalid");
     if (sessions.has(payload.id)) throw new Error("capture_already_open");
+    if (!Number.isInteger(payload.frameId) || typeof payload.documentToken !== "string" || !payload.documentToken) throw new Error("capture_identity_required");
     const socket = new WebSocket(payload.endpoint);
-    const session = { socket, tabId: payload.tabId, documentId: payload.documentId, pending: null, timer: null, heartbeat: null };
+    const session = { socket, tabId: payload.tabId, frameId: payload.frameId, documentToken: payload.documentToken, documentId: payload.documentId, pending: null, timer: null, heartbeat: null };
     sessions.set(payload.id, session);
     let rejectOpening;
     function dispose(error) { rejectOpening?.(error); rejectOpening = null; clearTimeout(session.timer); clearInterval(session.heartbeat); session.pending?.reject(error); session.pending = null; sessions.delete(payload.id); socket.close(); }
+    session.dispose = dispose;
     await new Promise((resolve, reject) => {
       rejectOpening = reject;
       session.timer = setTimeout(() => { reject(new Error("capture_connect_timeout")); dispose(new Error("capture_connect_timeout")); }, 10000);
@@ -24,7 +26,7 @@ export function createCaptureTransport(api) {
   }
   async function push(payload, sender) {
     const session = sessions.get(payload.id);
-    if (!session || sender.tab?.id !== session.tabId || sender.frameId !== 0 || session.documentId && sender.documentId !== session.documentId) throw new Error("capture_sender_invalid");
+    if (!session || sender.tab?.id !== session.tabId || sender.frameId !== session.frameId || payload.documentToken !== session.documentToken || session.documentId && sender.documentId !== session.documentId) throw new Error("capture_sender_invalid");
     if (session.pending) throw new Error("capture_backpressure");
     if (!Number.isInteger(payload.generation) || payload.generation < 0 || payload.generation >= 32) throw new Error("capture_generation_invalid");
     if (typeof payload.data !== "string" || payload.data.length > 350000 || !Number.isSafeInteger(payload.sequence) || payload.sequence < 0 || !Number.isInteger(payload.track) || payload.track < 0 || payload.track >= 32 || typeof payload.mime !== "string" || payload.mime.length > 200) throw new Error("capture_frame_invalid");
@@ -36,6 +38,6 @@ export function createCaptureTransport(api) {
     return new Promise((resolve, reject) => { session.pending = { track: payload.track, sequence: payload.sequence, resolve, reject }; session.timer = setTimeout(() => { session.pending = null; reject(new Error("capture_ack_timeout")); session.socket.close(); }, 30000); try { session.socket.send(frame); } catch { clearTimeout(session.timer); session.pending = null; reject(new Error("capture_disconnected")); } });
   }
   function close(id) { const session = sessions.get(id); if (!session) return; if (session.pending) throw new Error("capture_backpressure"); session.socket.send("finish"); clearInterval(session.heartbeat); sessions.delete(id); session.socket.close(); }
-  function abort(id) { const session = sessions.get(id); if (!session) return; clearTimeout(session.timer); clearInterval(session.heartbeat); session.pending?.reject(new Error("capture_interrupted")); session.pending = null; sessions.delete(id); session.socket.close(); }
+  function abort(id) { const session = sessions.get(id); if (!session) return; session.dispose(new Error("capture_interrupted")); }
   return { open, push, close, abort };
 }

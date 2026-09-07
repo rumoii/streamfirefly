@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref, watch } from "vue";
 import type { UiContext } from "../../types";
-import { configurationRequest } from "./client";
+import { sessionRequest } from "../session-client";
 const props = defineProps<{ context: UiContext }>();
 const emit = defineEmits<{ select: [hex: string] }>();
 const keys = ref<{ hex: string; source: string; frameId: number }[]>([]);
@@ -11,7 +11,7 @@ onBeforeUnmount(() => { sequence++; });
 async function refresh() {
   const current = ++sequence;
   try {
-    const response = await configurationRequest<{ keys: typeof keys.value }>("deep.status", { tabId: props.context.sourceTabId });
+    const response = await sessionRequest("deep.status", { tabId: props.context.sourceTabId });
     if (current === sequence) { keys.value = response.keys; error.value = ""; }
   } catch (reason) { if (current === sequence) error.value = reason instanceof Error ? reason.message : "读取失败"; }
 }

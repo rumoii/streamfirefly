@@ -56,12 +56,14 @@ api.webRequest.onHeadersReceived.addListener(details => {
 api.webRequest.onErrorOccurred.addListener(details => requestHeadersById.delete(details.requestId), { urls: ["http://*/*", "https://*/*"] });
 
 api.webNavigation?.onBeforeNavigate?.addListener(details => {
+  if (details.frameId !== 0) { deepSearch.clear(details.tabId, details.frameId); void capture.interrupted(details.tabId, details.frameId); return; }
   if (details.frameId !== 0) return;
   deepSearch.clear(details.tabId);
   void capture.interrupted(details.tabId);
   void unmountWorkspace(details.tabId).then(() => clearTab(details.tabId, details.url)).then(() => notifyUiContext(details.tabId));
 });
 api.webNavigation?.onHistoryStateUpdated?.addListener(details => {
+  void capture.interrupted(details.tabId, details.frameId === 0 ? undefined : details.frameId);
   if (details.frameId !== 0) return;
   void unmountWorkspace(details.tabId).then(() => clearTab(details.tabId, details.url)).then(() => api.tabs.sendMessage?.(details.tabId, { type: "media.rescan" })?.catch?.(() => {})).then(() => notifyUiContext(details.tabId));
 });
@@ -86,10 +88,12 @@ async function taskPayloadForSender(payload = {}, sender = {}) {
 
 api.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "capture.transport.push" && capture.isLocal) { capture.push(message.payload, sender).then(value => sendResponse({ ok: true, value }), error => sendResponse({ ok: false, error: error.message })); return true; }
-  if (message?.type === "capture.interrupted" && sender.tab) { capture.interrupted(sender.tab.id).then(() => sendResponse({ ok: true }), () => sendResponse({ ok: false })); return true; }
+  if (message?.type === "capture.interrupted" && sender.tab) { if (!message.payload?.id || !message.payload?.documentToken) return false; capture.interrupted(sender.tab.id, sender.frameId ?? 0, message.payload.documentToken, message.payload.id, message.payload.error).then(() => sendResponse({ ok: true }), () => sendResponse({ ok: false })); return true; }
   if (message?.type === "deep.key.add") { deepSearch.addKey(sender, message.payload).then(ok => sendResponse({ ok }), () => sendResponse({ ok: false })); return true; }
   if (["deep.status", "deep.set"].includes(message?.type)) {
-    const tabId = sender.tab?.id ?? message.payload?.tabId;
+    const trusted = sender.url?.split(/[?#]/, 1)[0] === api.runtime.getURL("dist/app.html");
+    const tabId = trusted ? message.payload?.tabId : sender.tab?.id;
+    if (!Number.isInteger(tabId)) { sendResponse({ ok: false, error: "来源页面无效" }); return false; }
     const operation = message.type === "deep.status" ? deepSearch.status(tabId) : deepSearch.set(tabId, message.payload?.enabled, Boolean(message.payload?.remember));
     operation.then(value => sendResponse({ ok: true, value }), error => sendResponse({ ok: false, error: error.message })); return true;
   }
@@ -122,7 +126,7 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
       "integration.intent": () => dispatchIntents.get(message.payload.id),
       "capture.sources": () => capture.sources(message.payload.tabId),
       "capture.open": () => capture.open(message.payload),
-      "capture.close": () => capture.close(message.payload.tabId),
+      "capture.close": () => capture.close(message.payload.tabId, message.payload.id),
       "capture.list": () => capture.list(),
       "capture.recover": () => capture.recover(message.payload.id)
     };
@@ -196,11 +200,10 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       await settings.ready;
       if (!api.scripting?.executeScript || !Number.isInteger(sender.tab?.id)) return { ok: false, error: "page_probe_unavailable" };
-      const target = { tabId: sender.tab.id, frameIds: [sender.frameId ?? 0] };
-      await api.scripting.executeScript({ target, world: "MAIN", files: ["page-probe.js"] });
-      if ((sender.frameId ?? 0) === 0) await api.scripting.executeScript({ target, world: "MAIN", files: ["capture-probe.js"] });
-      const advanced = await deepSearch.install(sender);
-      if (advanced) await api.scripting.executeScript({ target, world: "MAIN", files: ["page-probe-advanced.js"] });
+      const target = { tabId: sender.tab.id, ...(sender.documentId ? { documentIds: [sender.documentId] } : { frameIds: [sender.frameId ?? 0] }) };
+      const advanced = await deepSearch.install(sender, message.documentToken);
+      try { await api.scripting.executeScript({ target, world: "MAIN", files: ["page-probe.js", "capture-probe.js"] }); await deepSearch.activate(sender, message.documentToken); }
+      catch (error) { await deepSearch.injected(sender, message.documentToken, error.message); throw error; }
       return { ok: true, advanced };
     })().then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
     return true;

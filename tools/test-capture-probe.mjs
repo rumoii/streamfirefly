@@ -43,16 +43,17 @@ documentListeners.get('seeking')(); assert.equal(posted.pop().generation, 2);
 first.appendBuffer(new Uint8Array([9])); assert.equal(posted.pop().generation, 2);
 control({ type: 'abort', id: 'session-five' }); assert.equal(posted.pop().type, 'failed');
 const code = buildSync({ entryPoints: [new URL('../extension/src/capture-coordinator.js', import.meta.url).pathname.replace(/^\/(\w:)/, '$1')], bundle: true, format: 'iife', globalName: 'Capture', write: false }).outputFiles[0].text;
-const scope = { Worker: undefined }; vm.runInNewContext(code, scope);
+const scope = { Worker: undefined, setTimeout, clearTimeout }; vm.runInNewContext(code, scope);
 const actions = [];
 const api = {
   runtime: { getURL: () => 'chrome-extension://test/', sendMessage: async message => { actions.push(message.type); return { ok: true }; } },
-  tabs: { sendMessage: async (_tab, message) => { actions.push(message.type); return { ok: message.type !== 'capture.start' }; } },
-  scripting: { executeScript: async () => [{ result: true }] }
+  tabs: { sendMessage: async (_tab, message) => { actions.push(message.type); return { ok: message.type !== 'capture.start', documentToken: 'doc' }; } },
+  webNavigation: { getAllFrames: async () => [{ frameId: 0, url: 'https://page.test' }] },
+  scripting: { executeScript: async () => [{ result: { installed: true, sources: [{ id: '1', state: 'open', tracks: ['video/mp4'] }] } }] }
 };
 const native = async type => { actions.push(type); return { ok: true, value: { id: 'native-session' } }; };
 const coordinator = scope.Capture.createCaptureCoordinator(api, native, { ensureDocument: async () => {} }, { loadTabState: async () => ({ sourceContextId: 'page' }) });
-await assert.rejects(coordinator.open({ tabId: 1, sourceContextId: 'page' }), /capture_probe_failed/);
+await assert.rejects(coordinator.open({ tabId: 1, sourceContextId: 'page', source: { id: '1', frameId: 0, documentToken: 'doc' } }), /capture_probe_failed/);
 assert.ok(actions.includes('capture.transport.abort')); assert.equal(actions.filter(type => type === 'capture.abort').length, 2);
 await coordinator.interrupted(1);
 console.log('Capture probe: passive mode, source selection, bounded queue, ACK drain, restart, failed append and coordinator cleanup passed');

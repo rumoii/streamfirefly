@@ -12,6 +12,14 @@ on:
         description: Exact main commit to package
         required: true
         type: string
+      capture_soak_seconds:
+        description: Capture soak duration (7200 required for Beta 2 release acceptance)
+        required: true
+        default: '0'
+        type: choice
+        options:
+          - '0'
+          - '7200'
 
 permissions:
   contents: read
@@ -19,7 +27,7 @@ permissions:
 jobs:
   package:
     runs-on: windows-2025
-    timeout-minutes: 90
+    timeout-minutes: 180
     env:
       BUNDLE_VERSION: ${{ inputs.bundle_version }}
       EXPECTED_COMMIT: ${{ inputs.expected_commit }}
@@ -103,10 +111,20 @@ jobs:
             foreach ($path in $registryPaths) { if (-not (Test-Path -LiteralPath $path)) { throw "Native Messaging registration is missing: $path" } }
             $env:STREAMFIREFLY_NATIVE_EXE = Join-Path $installDir 'streamfirefly-native.exe'
             $env:STREAMFIREFLY_FFMPEG_EXE = Join-Path $installDir 'ffmpeg.exe'
+            $env:STREAMFIREFLY_FFPROBE_EXE = (Get-ChildItem -LiteralPath '.\tools\ffmpeg-cache\x64-extracted' -Recurse -Filter ffprobe.exe | Select-Object -First 1).FullName
+            if (-not $env:STREAMFIREFLY_FFPROBE_EXE) { throw 'Capture output inspection requires FFprobe' }
+            $env:STREAMFIREFLY_EXTENSION_DIR = Join-Path $bundle.FullName 'extension'
+            $env:STREAMFIREFLY_ISOLATED_INSTALL_TEST = '1'
             npm run test:native
             if ($LASTEXITCODE -ne 0) { throw 'Packaged Native Host protocol test failed' }
             npm run test:capture:browser
             if ($LASTEXITCODE -ne 0) { throw 'Chrome capture transport test failed' }
+            npm run test:capture:installed
+            if ($LASTEXITCODE -ne 0) { throw 'Installed browser capture chain failed' }
+            if ('${{ inputs.capture_soak_seconds }}' -eq '7200') {
+              npm run test:capture:soak
+              if ($LASTEXITCODE -ne 0) { throw 'Two-hour installed capture soak failed' }
+            }
             & (Join-Path $installDir 'ffmpeg.exe') -version | Select-Object -First 1
             if ($LASTEXITCODE -ne 0) { throw 'Packaged FFmpeg failed to start' }
           } finally {
@@ -126,3 +144,12 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
+
+      - name: Upload capture test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Capture-evidence-${{ github.run_id }}
+          path: test-results/capture/*.json
+          if-no-files-found: warn
+          retention-days: 14

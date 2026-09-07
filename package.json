@@ -8,7 +8,7 @@
     "test:ui": "vitest run",
     "test:ui:browser": "node tools/test-ui-playwright.mjs",
     "validate:extension": "npm run build:extension && node tools/validate-extension.mjs && node tools/validate-firefox-extension.mjs",
-    "test:unit": "npm run test:ui && node tools/check-module-boundaries.mjs && node tools/test-discovery-integrations.mjs && node tools/test-capture-probe.mjs && node tools/test-extension-logic.mjs && node tools/test-page-probe.mjs && node tools/test-firefox-integration.mjs && node tools/test-internal-packaging.mjs",
+    "test:unit": "npm run test:ui && node tools/check-module-boundaries.mjs && node tools/test-discovery-integrations.mjs && node tools/test-capture-probe.mjs && node tools/test-capture-sessions.mjs && node tools/test-extension-logic.mjs && node tools/test-page-probe.mjs && node tools/test-firefox-integration.mjs && node tools/test-internal-packaging.mjs",
     "test:native": "cargo build --manifest-path native-host/Cargo.toml && node tools/test-native.mjs && node tools/test-native-download.mjs && node tools/test-native-hls.mjs && node tools/test-native-queue.mjs && node tools/test-native-capture.mjs",
     "verify:features": "npm run typecheck && npm run validate:extension && npm run test:unit && cargo test --manifest-path native-host/Cargo.toml && npm run test:native",
     "lint:firefox": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/package-firefox-extension.ps1 -LintOnly",
@@ -16,6 +16,9 @@
     "test:firefox": "node tools/test-browser-extension.mjs --browser firefox",
     "test:chrome": "node tools/test-browser-extension.mjs --browser chrome",
     "test:capture:browser": "node tools/test-browser-extension.mjs --browser chrome --capture",
+    "test:capture:frames": "node tools/test-capture-browser.mjs --browser chrome && node tools/test-capture-browser.mjs --browser edge",
+    "test:capture:installed": "node tools/test-capture-browser.mjs --browser chrome --installed && node tools/test-capture-browser.mjs --browser edge --installed",
+    "test:capture:soak": "node tools/test-capture-browser.mjs --browser chrome --installed --duration 7200",
     "test:edge": "node tools/test-browser-extension.mjs --browser edge",
     "test:browsers": "npm run test:chrome && npm run test:edge && npm run test:firefox"
   },

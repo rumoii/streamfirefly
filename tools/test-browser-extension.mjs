@@ -134,15 +134,16 @@ function reporterSource(origin) {
       } });
       const url = testApi.runtime.getURL('offscreen.html');
       if (!(await testApi.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'], documentUrls: [url] })).length) await testApi.offscreen.createDocument({ url: 'offscreen.html', reasons: ['WORKERS'], justification: 'Capture test fixture' });
-      const opened = await testApi.runtime.sendMessage({ type: 'capture.transport.open', payload: { id: 'browser-capture', tabId: tab.id, endpoint: origin.replace('http:', 'ws:'), token: 'a'.repeat(64) } });
+      const identity = await testApi.tabs.sendMessage(tab.id, { type: 'capture.identity' }, { frameId: 0 });
+      const opened = await testApi.runtime.sendMessage({ type: 'capture.transport.open', payload: { id: 'browser-capture', tabId: tab.id, frameId: 0, documentToken: identity.documentToken, endpoint: origin.replace('http:', 'ws:'), token: 'a'.repeat(64) } });
       if (!opened?.ok) throw new Error(JSON.stringify(opened));
-      const started = await testApi.tabs.sendMessage(tab.id, { type: 'capture.start', id: 'browser-capture', sourceId: setup[0].result }, { frameId: 0 });
+      const started = await testApi.tabs.sendMessage(tab.id, { type: 'capture.start', id: 'browser-capture', sourceId: setup[0].result, documentToken: identity.documentToken }, { frameId: 0 });
       if (!started?.ok) throw new Error(JSON.stringify(started));
       await testApi.scripting.executeScript({ target: { tabId: tab.id }, world: 'MAIN', args: [origin], func: async base => {
         const bytes = await fetch(base + '/capture-sample.mp4').then(response => response.arrayBuffer());
         await new Promise((resolve, reject) => { const buffer = window.captureFixtureBuffer; buffer.addEventListener('updateend', resolve, { once: true }); buffer.addEventListener('error', () => reject(Error('MSE rejected fixture')), { once: true }); buffer.appendBuffer(bytes); });
       } });
-      const stopped = await testApi.tabs.sendMessage(tab.id, { type: 'capture.stop', id: 'browser-capture' }, { frameId: 0 });
+      const stopped = await testApi.tabs.sendMessage(tab.id, { type: 'capture.stop', id: 'browser-capture', documentToken: identity.documentToken }, { frameId: 0 });
       if (!stopped?.ok) throw new Error(JSON.stringify(stopped));
       const closed = await testApi.runtime.sendMessage({ type: 'capture.transport.close', payload: { id: 'browser-capture' } });
       if (!closed?.ok) throw new Error(JSON.stringify(closed));
@@ -252,8 +253,8 @@ function stageExtension(stage, origin) {
   const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, manifestName), 'utf8'));
   const reporter = reporterSource(origin);
   fs.writeFileSync(path.join(stage, 'test-reporter.js'), reporter);
-  fs.writeFileSync(path.join(stage, 'test-content.js'), `const testApi = globalThis.browser ?? globalThis.chrome;\ntestApi.runtime.sendMessage({ type: 'probe.install' }).then(result => testApi.runtime.sendMessage({ type: 'test.probe.result', result })).catch(error => testApi.runtime.sendMessage({ type: 'test.probe.result', error: error.message }));\n`);
-  manifest.content_scripts[0].js.push('test-content.js');
+  fs.writeFileSync(path.join(stage, 'test-content.js'), `const testApi = globalThis.browser ?? globalThis.chrome;\nconst originalSend = testApi.runtime.sendMessage.bind(testApi.runtime);\ntestApi.runtime.sendMessage = (...args) => { const result = originalSend(...args); if (args[0]?.type === 'probe.install') result.then(value => originalSend({ type: 'test.probe.result', result: value })).catch(error => originalSend({ type: 'test.probe.result', error: error.message })); return result; };\n`);
+  manifest.content_scripts[0].js.unshift('test-content.js');
   if (browserName === 'firefox') manifest.background.scripts.push('test-reporter.js');
   else {
     fs.writeFileSync(path.join(stage, 'test-background.js'), `${fs.readFileSync(path.join(extensionRoot, 'dist/background.js'), 'utf8')}\n${reporter}`);

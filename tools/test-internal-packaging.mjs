@@ -66,5 +66,6 @@ for (const expected of [
   'release/StreamFirefly-${{ inputs.bundle_version }}-internal-arm64.zip',
   'INTERNAL-SHA256SUMS.txt'
 ]) requireText(workflow, expected, 'Internal package workflow');
+for (const expected of ['STREAMFIREFLY_EXTENSION_DIR', 'STREAMFIREFLY_FFPROBE_EXE', 'STREAMFIREFLY_ISOLATED_INSTALL_TEST', 'npm run test:capture:installed', 'npm run test:capture:soak', 'capture_soak_seconds']) requireText(workflow, expected, 'Installed capture workflow');
 
 console.log('Internal packaging version, provenance, workflow, and audit contracts passed');
