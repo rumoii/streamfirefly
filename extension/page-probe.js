@@ -7,10 +7,16 @@
   const SCRIPT_LIMIT = 2 * 1024 * 1024;
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
+  const joinLines = Array.prototype.join;
   const mediaExtension = /\.(?:m3u8?|mpd|mp4|webm|mov|mkv|flv|f4v|m4v|mpeg|mpg|avi|wmv|asf|ogv|3gp|mp3|m4a|aac|wav|flac|ogg|opus|wma|weba|ts|m4s|key)(?:$|[?#&])/i;
   const quotedMediaUrl = /(?:https?:\\?\/\\?\/|\/|\.\.\/|\.\/)?[^\s"'<>\\]+\.(?:m3u8?|mpd|mp4|webm|mov|mkv|flv|f4v|m4v|mpeg|mpg|avi|wmv|asf|ogv|3gp|mp3|m4a|aac|wav|flac|ogg|opus|wma|weba|ts|m4s|key)(?:\?[^\s"'<>\\]*)?/gi;
   const namespaceMediaReference = /^(?:[a-z_][a-z0-9_]*\.){4,}(?:m3u8?|mpd|mp4|webm|mov|mkv|flv|f4v|m4v|mpeg|mpg|avi|wmv|asf|ogv|3gp|mp3|m4a|aac|wav|flac|ogg|opus|wma|weba|ts|m4s|key)$/;
   let scannedScriptBytes = 0;
+  let generatedHlsBytes = 0;
+  const consumeGeneratedHlsBudget = bytes => {
+    generatedHlsBytes = Math.min(16 * 1024 * 1024 + 1, generatedHlsBytes + bytes);
+    return generatedHlsBytes <= 16 * 1024 * 1024;
+  };
   const scannedScripts = new WeakMap();
 
   const isNamespaceMediaReference = value => {
@@ -42,13 +48,14 @@
       if (!trimmed || /^(?:data:|blob:|skd:|urn:)/i.test(trimmed)) return trimmed;
       return absoluteUrl(trimmed, baseUrl) || trimmed;
     };
-    return String(text).replace(/URI=("([^"]+)"|'([^']+)')/gi, (whole, quoted, doubleValue, singleValue) => {
+    const lines = String(text).replace(/URI=("([^"]+)"|'([^']+)')/gi, (whole, quoted, doubleValue, singleValue) => {
       const quote = quoted[0];
       return `URI=${quote}${resolve(doubleValue ?? singleValue)}${quote}`;
     }).split(/\r?\n/).map(line => {
       const trimmed = line.trim();
       return !trimmed || trimmed.startsWith("#") ? line : resolve(trimmed);
-    }).join("\n");
+    });
+    return Reflect.apply(joinLines, lines, ["\n"]);
   };
 
   const emitManifestMembers = (text, baseUrl, source) => {
@@ -243,5 +250,5 @@
     record.addedNodes.forEach(node => { if (node.nodeType === Node.ELEMENT_NODE) scanScripts(node); else scanScript(node.parentElement); });
   })).observe(document.documentElement, { childList: true, characterData: true, subtree: true });
 
-  window.__streamFireflyProbeApi = Object.freeze({ emit, emitInlineManifest, scanText, scanValue });
+  window.__streamFireflyProbeApi = Object.freeze({ emit, emitInlineManifest, scanText, scanValue, consumeGeneratedHlsBudget });
 })();

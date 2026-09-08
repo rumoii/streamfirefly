@@ -4,6 +4,41 @@
   if (!api) return;
   let active = true;
   const restorers = [];
+  function installGeneratedHlsHooks(scope, emit, consume, baseUrl = scope.location.href) {
+    let enabled = true, scanning = false;
+    const encoder = new scope.TextEncoder();
+    const restore = [];
+    for (const [owner, name, source] of [[scope.String, "fromCharCode", "from-char-code"], [scope.Array.prototype, "join", "array-join"]]) {
+      const original = owner[name];
+      const wrapped = new Proxy(original, { apply(target, receiver, args) {
+        const result = Reflect.apply(target, receiver, args);
+        if (!enabled || scanning || typeof result !== "string" || result.length > 512 * 1024 || !/^\s*#EXTM3U(?:\r?\n)/.test(result.slice(0, 32))) return result;
+        scanning = true;
+        try {
+          const bytes = encoder.encode(result).byteLength;
+          if (bytes > 512 * 1024 || !consume(bytes)) return result;
+          const lines = result.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+          let entries = 0;
+          for (let index = 1; index < lines.length; index++) {
+            if (/^#EXTINF:/.test(lines[index]) || /^#EXT-X-STREAM-INF:/.test(lines[index])) {
+              if (/^#EXTINF:/.test(lines[index]) && !/^#EXTINF:\d+(?:\.\d+)?,/.test(lines[index])) return result;
+              const next = lines[++index];
+              if (!next || next.startsWith("#")) return result;
+              const url = new scope.URL(next, baseUrl);
+              if (!/^https?:$/.test(url.protocol) || url.username || url.password) return result;
+              entries++;
+            } else if (!lines[index].startsWith("#")) return result;
+          }
+          if (entries) emit(result, source);
+        } catch (_) {
+        } finally { scanning = false; }
+        return result;
+      } });
+      owner[name] = wrapped;
+      restore.push(() => { if (owner[name] === wrapped) owner[name] = original; });
+    }
+    return () => { enabled = false; for (const operation of restore) operation(); };
+  }
   const reportedKeys = new Set();
   window.__streamFireflyAdvancedProbeInstalled = { dispose() { active = false; for (const restore of restorers.reverse()) restore(); reportedKeys.clear(); window.__streamFireflyAdvancedProbeInstalled = null; } };
 
@@ -47,6 +82,7 @@
   wrapFunction(window, "atob", result => scan(result, "atob"));
   if (window.TextDecoder?.prototype) wrapFunction(TextDecoder.prototype, "decode", result => scan(result, "text-decoder"));
   if (window.Response?.prototype?.arrayBuffer) wrapFunction(Response.prototype, "arrayBuffer", result => { result.then(value => scan(value, "response-buffer")).catch(() => {}); });
+  restorers.push(installGeneratedHlsHooks(window, (text, source) => api.emitInlineManifest(text, location.href, location.href, source), api.consumeGeneratedHlsBudget));
 
   const OriginalWorker = window.Worker;
   if (typeof OriginalWorker !== "function" || typeof URL.createObjectURL !== "function") return;
@@ -74,6 +110,11 @@
         else { for (const key in value) { if (state.nodes > 10000) break; if (Object.prototype.hasOwnProperty.call(value, key)) walk(value[key], seen, depth + 1, state); } }
       };
       const originalParse = JSON.parse;
+      let generatedBytes = 0;
+      const stopGeneratedHls = (${installGeneratedHlsHooks.toString()})(self, text => {
+        if (!active || ++reports > 1000) return;
+        self.postMessage({ __streamFireflyWorkerProbe: marker, generatedHls: text });
+      }, bytes => { generatedBytes = Math.min(16 * 1024 * 1024 + 1, generatedBytes + bytes); return generatedBytes <= 16 * 1024 * 1024; }, workerBase);
       JSON.parse = function (...args) { const result = Reflect.apply(originalParse, this, args); try { walk(result); } catch (_) {} return result; };
       const originalAtob = self.atob;
       if (originalAtob) self.atob = function (...args) { const result = Reflect.apply(originalAtob, this, args); try { walk(result); } catch (_) {} return result; };
@@ -88,7 +129,7 @@
       const wrappers = { parse: JSON.parse, atob: self.atob, decode: self.TextDecoder?.prototype?.decode, text: self.Response?.prototype?.text, buffer: self.Response?.prototype?.arrayBuffer };
       self.addEventListener("message", event => {
         if (event.data?.__streamFireflyWorkerControl !== marker) return;
-        event.stopImmediatePropagation(); active = false;
+        event.stopImmediatePropagation(); active = false; stopGeneratedHls();
         if (JSON.parse === wrappers.parse) JSON.parse = originalParse;
         if (self.atob === wrappers.atob) self.atob = originalAtob;
         if (originalDecode && TextDecoder.prototype.decode === wrappers.decode) TextDecoder.prototype.decode = originalDecode;
@@ -114,7 +155,10 @@
       worker.addEventListener("message", event => {
         if (event.data?.__streamFireflyWorkerProbe !== marker) return;
         event.stopImmediatePropagation();
-        scan(event.data.value, "worker");
+        if (typeof event.data.generatedHls === "string") {
+          const text = event.data.generatedHls;
+          if (active && text.length <= 512 * 1024 && api.consumeGeneratedHlsBudget(new TextEncoder().encode(text).byteLength)) api.emitInlineManifest(text, resolved.href, resolved.href, "worker-generated-hls");
+        } else scan(event.data.value, "worker");
       });
       const timer = setTimeout(() => { URL.revokeObjectURL(bootstrapUrl); bootstrapUrls.delete(bootstrapUrl); }, 30000);
       bootstrapUrls.set(bootstrapUrl, timer);

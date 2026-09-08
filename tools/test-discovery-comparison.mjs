@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import { discoveryCases, scoreDiscoveryCase } from './discovery-cases.mjs';
+const spec = discoveryCases[0];
+const evidence = { id: spec.id, executed: true, collected: true, expectedText: '#EXTM3U\n#EXTINF:2,\nhttps://fixture/part.ts', segmentUrl: 'https://fixture/part.ts', candidates: [] };
+assert.throws(() => scoreDiscoveryCase(spec, null));
+assert.throws(() => scoreDiscoveryCase(spec, { ...evidence, executed: false }));
+assert.throws(() => scoreDiscoveryCase(spec, { ...evidence, expectedText: undefined }));
+assert.equal(scoreDiscoveryCase(spec, evidence).passed, false);
+const candidate = { url: 'blob:random-one', format: 'hls', text: evidence.expectedText };
+assert.equal(scoreDiscoveryCase(spec, { ...evidence, candidates: [candidate] }).passed, true);
+assert.equal(scoreDiscoveryCase(spec, { ...evidence, candidates: [{ ...candidate, url: 'blob:random-two' }] }).passed, true);
+assert.equal(scoreDiscoveryCase(spec, { ...evidence, candidates: [{ ...candidate, text: '#EXTM3U' }] }).passed, false);
+assert.equal(scoreDiscoveryCase(spec, { ...evidence, candidates: [candidate, candidate] }).duplicateCount, 1);
+assert.equal(scoreDiscoveryCase(spec, { ...evidence, candidates: [candidate, { url: 'https://wrong/path' }] }).passed, false);
+const negative = discoveryCases.find(item => item.id === 'ordinary-text');
+assert.equal(scoreDiscoveryCase(negative, { ...evidence, id: negative.id }).passed, true);
+assert.equal(scoreDiscoveryCase(negative, { ...evidence, id: negative.id, candidates: [candidate] }).passed, false);
+console.log('Discovery comparison scoring tests passed');

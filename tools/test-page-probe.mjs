@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
+import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -77,6 +78,7 @@ if (!inline?.inlineManifest.text.includes('URI="https://cdn.example/path/key.bin
 if (!messages.some(item => item.url === 'https://cdn.example/path/key.bin' && item.segmentKind === 'key')) throw new Error('Extensionless HLS key was not emitted as a segment candidate');
 
 const beforeAdvanced = messages.length;
+vm.runInContext('globalThis.originalJoin = Array.prototype.join; globalThis.originalFromCharCode = String.fromCharCode;', context);
 vm.runInNewContext(fs.readFileSync(path.join(root, 'extension', 'page-probe-advanced.js'), 'utf8'), context);
 vm.runInContext('JSON.parse(JSON.stringify({ media: "https://cdn.example/advanced/video.mp4" }))', context);
 const beforeAdvancedNamespace = messages.length;
@@ -88,6 +90,68 @@ const worker = new context.Worker('https://page.example/worker.js');
 if (!worker.scriptUrl.startsWith('blob:')) throw new Error('Same-origin classic Worker was not wrapped');
 const bootstrap = await createdBlobs.at(-1).text();
 if (!bootstrap.includes('importScripts("https://page.example/worker.js")') || !bootstrap.includes('JSON.parse =')) throw new Error('Worker bootstrap does not install deep-search hooks');
+const beforeWorkerManifest = messages.length;
+worker.listeners.message({ data: { __streamFireflyWorkerProbe: /const marker = "([^"]+)"/.exec(bootstrap)[1], generatedHls: '#EXTM3U\n#EXTINF:2,\npart.ts\n' }, stopImmediatePropagation() {} });
+assert.equal(messages.slice(beforeWorkerManifest).filter(item => item?.inlineManifest).length, 1, 'probe normalization must not trigger the join hook');
 context.__streamFireflyAdvancedProbeInstalled.dispose();
 if (context.Worker !== TestWorker || !worker.control?.__streamFireflyWorkerControl) throw new Error('Deep-search shutdown did not restore Worker and disable existing hooks');
+assert.equal(vm.runInContext('Array.prototype.join === originalJoin && String.fromCharCode === originalFromCharCode', context), true);
+const advancedSource = fs.readFileSync(path.join(root, 'extension', 'page-probe-advanced.js'), 'utf8');
+vm.runInContext(advancedSource, context);
+const generate = (kind, text) => vm.runInContext(kind === 'array-join' ? `${JSON.stringify(text.split('\n'))}.join(${JSON.stringify('\n')})` : `String.fromCharCode(...${JSON.stringify([...text].map(character => character.charCodeAt(0)))})`, context);
+const valid = '#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\npart.ts\n#EXT-X-ENDLIST\n';
+for (const source of ['from-char-code', 'array-join']) {
+  const before = messages.length;
+  assert.equal(generate(source, valid), valid);
+  assert.equal(messages.slice(before).filter(item => item?.source === source && item.inlineManifest).length, 1);
+}
+for (const invalid of ['ordinary application text', '#EXTM3U\n', '#EXTM3U\n#EXTINF:2,\n', '#EXTM3U\n#EXTINF:2,\nfile:///secret\n', '#EXTM3U\n#EXTINF:NaN,\npart.ts\n']) {
+  const before = messages.length;
+  assert.equal(generate('array-join', invalid), invalid);
+  assert.equal(messages.length, before);
+}
+for (const oversized of [`${valid}#${'x'.repeat(512 * 1024)}`, `${valid}#${'中'.repeat(180000)}`]) {
+  const before = messages.length;
+  assert.equal(generate('array-join', oversized), oversized);
+  assert.equal(messages.length, before, 'both character and UTF-8 byte limits must be enforced');
+}
+const beforeFragments = messages.length;
+generate('from-char-code', '#EXTM3U\n#EXTINF:2,\n');
+generate('from-char-code', 'part.ts\n#EXT-X-ENDLIST\n');
+assert.equal(messages.length, beforeFragments, 'unrelated calls must not be assembled');
+assert.throws(() => vm.runInContext('Array.prototype.join.call(null)', context));
+assert.throws(() => vm.runInContext('String.fromCharCode(Symbol())', context));
+assert.throws(() => vm.runInContext('new String.fromCharCode(65)', context));
+assert.throws(() => vm.runInContext('new Array.prototype.join()', context));
+assert.equal(vm.runInContext('String.fromCharCode.name === originalFromCharCode.name && String.fromCharCode.length === originalFromCharCode.length', context), true);
+vm.runInContext('globalThis.installedJoin = Array.prototype.join', context);
+vm.runInContext(advancedSource, context);
+assert.equal(vm.runInContext('Array.prototype.join === installedJoin', context), true);
+vm.runInContext('globalThis.thirdPartyJoin = function(...args) { return installedJoin.apply(this, args); }; Array.prototype.join = thirdPartyJoin;', context);
+context.__streamFireflyAdvancedProbeInstalled.dispose();
+assert.equal(vm.runInContext('Array.prototype.join === thirdPartyJoin', context), true);
+const beforeDisposed = messages.length;
+generate('array-join', valid);
+assert.equal(messages.length, beforeDisposed);
+vm.runInContext(advancedSource, context);
+const large = `${valid}#${'x'.repeat(400000)}\n`;
+for (let index = 0; index < 45; index++) generate('array-join', large);
+const afterBudget = messages.length;
+generate('array-join', valid);
+assert.equal(messages.length, afterBudget, 'document budget stops scanning');
+context.__streamFireflyAdvancedProbeInstalled.dispose();
+vm.runInContext(advancedSource, context);
+generate('array-join', valid);
+assert.equal(messages.length, afterBudget, 're-enabling must not reset document budget');
+context.__streamFireflyAdvancedProbeInstalled.dispose();
+const workerMessages = [];
+let stopWorker;
+const workerContext = { URL, TextEncoder, TextDecoder: class extends TextDecoder {}, ArrayBuffer, Uint8Array, location: { href: 'blob:https://page.example/worker' }, postMessage: value => workerMessages.push(value), addEventListener: (_name, callback) => { stopWorker = callback; }, importScripts() {} };
+workerContext.self = workerContext;
+vm.runInNewContext(bootstrap, workerContext);
+vm.runInContext(`${JSON.stringify(valid.split('\n'))}.join(${JSON.stringify('\n')})`, workerContext);
+assert.equal(workerMessages.filter(item => item.generatedHls === valid).length, 1);
+stopWorker({ data: worker.control, stopImmediatePropagation() {} });
+vm.runInContext(`${JSON.stringify(valid.split('\n'))}.join(${JSON.stringify('\n')})`, workerContext);
+assert.equal(workerMessages.filter(item => item.generatedHls === valid).length, 1);
 console.log('Page probe deep-search tests passed');

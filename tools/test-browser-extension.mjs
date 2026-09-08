@@ -6,6 +6,8 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import assert from 'node:assert/strict';
+import { discoveryReporter } from './discovery-reporter.mjs';
+import { stimulateDiscovery, discoveryCases, scoreDiscoveryCase } from './discovery-cases.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const extensionRoot = path.join(repositoryRoot, 'extension');
@@ -16,6 +18,7 @@ const browserName = option('--browser') || 'firefox';
 
 const resultPath = option('--result');
 const captureTest = cliArgs.includes('--capture');
+const discoveryTest = cliArgs.includes('--discovery');
 if (captureTest && browserName !== 'chrome') throw new Error('Capture transport browser fixture requires Chrome');
 if (!['firefox', 'chrome', 'edge'].includes(browserName)) throw new Error(`Unsupported browser: ${browserName}`);
 
@@ -251,7 +254,7 @@ function stageExtension(stage, origin) {
   copyRuntimeFiles(stage);
   const manifestName = browserName === 'firefox' ? 'manifest.firefox.json' : 'manifest.json';
   const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, manifestName), 'utf8'));
-  const reporter = reporterSource(origin);
+  const reporter = discoveryTest ? discoveryReporter(origin) : reporterSource(origin);
   fs.writeFileSync(path.join(stage, 'test-reporter.js'), reporter);
   fs.writeFileSync(path.join(stage, 'test-content.js'), `const testApi = globalThis.browser ?? globalThis.chrome;\nconst originalSend = testApi.runtime.sendMessage.bind(testApi.runtime);\ntestApi.runtime.sendMessage = (...args) => { const result = originalSend(...args); if (args[0]?.type === 'probe.install') result.then(value => originalSend({ type: 'test.probe.result', result: value })).catch(error => originalSend({ type: 'test.probe.result', error: error.message })); return result; };\n`);
   manifest.content_scripts[0].js.unshift('test-content.js');
@@ -294,6 +297,13 @@ function startFixtureServer() {
   const report = new Promise(resolve => { resolveReport = resolve; });
   const server = http.createServer((request, response) => {
     const origin = `http://127.0.0.1:${server.address().port}`;
+    if (request.url?.startsWith('/discovery-worker.js')) { response.writeHead(200, { 'content-type': 'text/javascript' }).end(`const stimulate = ${stimulateDiscovery.toString()}; self.onmessage = event => { const value = stimulate(event.data.kind, event.data.text); self.postMessage({ done: true, value }); };`); return; }
+    if (request.url?.startsWith('/discovery')) {
+      const context = new URL(request.url, origin).searchParams.get('context');
+      const frameOrigin = context === 'cross-frame' ? origin.replace('127.0.0.1', 'localhost') : origin;
+      const frame = context?.endsWith('frame') ? `<iframe src="${frameOrigin}/discovery-child"></iframe>` : '';
+      response.writeHead(200, { 'content-type': 'text/html' }).end(`<!doctype html><title>Discovery fixture</title>${frame}`); return;
+    }
     if (captureTest && request.url === '/capture-sample.mp4') { response.writeHead(200, { 'content-type': 'video/mp4' }).end(captureSample); return; }
     if (captureTest && request.url === '/capture-status') { response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(captureStatus)); return; }
     if (request.url === '/report' && request.method === 'POST') {
@@ -401,14 +411,19 @@ async function run() {
     const append = chunk => { output = (output + chunk.toString()).slice(-16000); };
     child.stdout.on('data', append); child.stderr.on('data', append);
     let timeoutTimer;
-    const timeout = new Promise((_, reject) => { timeoutTimer = setTimeout(() => reject(new Error(`Timed out waiting for ${browserName} report; events=${JSON.stringify(fixture.events)}\n${output}`)), 60000); });
+    const timeout = new Promise((_, reject) => { timeoutTimer = setTimeout(() => reject(new Error(`Timed out waiting for ${browserName} report; events=${JSON.stringify(fixture.events)}\n${output}`)), discoveryTest ? 180000 : 60000); });
     const earlyExit = new Promise((_, reject) => child.once('exit', code => reject(new Error(`web-ext exited before reporting (code ${code})\n${output}`))));
     let result;
     try { result = await Promise.race([fixture.report, timeout, earlyExit]); }
     finally { clearTimeout(timeoutTimer); }
-    if (!result?.ok) throw new Error(`StreamFirefly ${browserName} fixture failed: ${result?.error || 'unknown error'}\n${result?.stack || ''}\n${output}`);
     if (resultPath) fs.writeFileSync(path.resolve(resultPath), `${JSON.stringify(result, null, 2)}\n`);
-    console.log(`StreamFirefly ${browserName} browser test passed: ${result.first.length} initial candidates, ${result.afterSpa.length} after SPA navigation`);
+    if (!result?.ok) throw new Error(`StreamFirefly ${browserName} fixture failed: ${result?.error || 'unknown error'}\n${result?.stack || ''}\n${output}`);
+    if (discoveryTest) {
+      const failures = discoveryCases.map(spec => scoreDiscoveryCase(spec, result.discovery.find(item => item.id === spec.id))).filter(item => item.required && !item.passed);
+      assert.deepEqual(failures, [], 'Selected discovery cases failed');
+    }
+    if (discoveryTest) console.log(`StreamFirefly ${browserName} discovery evidence collected: ${result.discovery.length} cases`);
+    else console.log(`StreamFirefly ${browserName} browser test passed: ${result.first.length} initial candidates, ${result.afterSpa.length} after SPA navigation`);
   } catch (error) {
     failure = error;
   } finally {
