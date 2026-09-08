@@ -6,14 +6,14 @@ on:
       bundle_version:
         description: Internal bundle version
         required: true
-        default: 0.10.0-beta.2
+        default: 0.10.0-beta.3
         type: string
       expected_commit:
         description: Exact main commit to package
         required: true
         type: string
       capture_soak_seconds:
-        description: Capture soak duration (7200 required for Beta 2 release acceptance)
+        description: Capture soak duration (7200 required before publishing a pre-release)
         required: true
         default: '0'
         type: choice
@@ -79,6 +79,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run test:browsers
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:discovery
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run lint:firefox
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --manifest-path native-host/Cargo.toml
@@ -117,6 +119,8 @@ jobs:
             $env:STREAMFIREFLY_ISOLATED_INSTALL_TEST = '1'
             npm run test:native
             if ($LASTEXITCODE -ne 0) { throw 'Packaged Native Host protocol test failed' }
+            npm run test:discovery:native
+            if ($LASTEXITCODE -ne 0) { throw 'Generated HLS discovery and packaged Native download failed' }
             npm run test:capture:browser
             if ($LASTEXITCODE -ne 0) { throw 'Chrome capture transport test failed' }
             npm run test:capture:installed
@@ -151,5 +155,16 @@ jobs:
         with:
           name: Capture-evidence-${{ github.run_id }}
           path: test-results/capture/*.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload discovery download evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Discovery-evidence-${{ github.run_id }}
+          path: |
+            test-results/generated-hls-browser.json
+            test-results/generated-hls-native.json
           if-no-files-found: warn
           retention-days: 14
