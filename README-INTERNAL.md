@@ -1,11 +1,14 @@
-# StreamFirefly 0.10.0-beta.1 内测指南
+# StreamFirefly 0.10.0-beta.2 测试包指南
 
-此版本仅用于受邀测试，不是 Chrome Web Store 正式发布版本。测试人员需要登录受邀的 GitHub 账号，从私有 Release 下载测试包。请勿转发安装包、Release 链接或测试数据。
+此版本仅用于受邀测试，通过 GitHub Actions 测试产物交付，未创建 Release，也不是 Chrome Web Store 正式发布版本。测试人员需要使用有源码仓库访问权限的 GitHub 账号，或由维护者提供经校验的测试包。请勿转发安装包、产物链接或测试数据。
 
 StreamFirefly 不绕过 DRM。请只测试自己拥有版权或已获授权的内容。
 
 ## 本次更新与升级要求
 
+- 完善 iframe 媒体缓存捕捉与深度搜索，按来源框架和文档隔离会话，展示中断和部分结果。
+- 增加下载工具结构化配置、草稿检查、识别规则调试和独立 URL 提取；提取候选不继承原请求凭据，也不自动发送到外部工具。
+- 设置页统一分类导航并保留草稿；配置已保存但旧候选清理失败时明确提示，可再次保存重试。
 - HLS 快速、详细和批量下载使用同一套切片引擎；点播支持检查点恢复，直播仍需单独启动。
 - 最多同时执行 2 个任务，其余按先入先出排队；排队任务可暂停、取消，恢复和重试进入队尾。
 - 批量下载一次确认，逐项显示入队、失败和需单独处理的结果；已入队任务不因关闭弹窗而取消。
@@ -20,23 +23,23 @@ Windows ARM64 包完成构建及包审计不等于 ARM64 设备实机验收；�
 
 ## 一、下载测试包
 
-1. 接受 `rumoii/streamfirefly-internal-releases` 私有仓库的协作者邀请。
-2. 登录 GitHub，进入该仓库的 **Releases** 页面。
-3. 打开 `StreamFirefly 0.10.0-beta.1 内测版`，下载与当前 Windows 架构匹配的压缩包：
-   - Intel 或 AMD Windows 电脑：`StreamFirefly-0.10.0-beta.1-internal-x64.zip`
-   - Windows ARM 电脑：`StreamFirefly-0.10.0-beta.1-internal-arm64.zip`
-4. 同时下载 `INTERNAL-SHA256SUMS.txt`，用于核对压缩包完整性。
+1. 登录 GitHub，进入 `rumoii/streamfirefly` 的 **Actions → Package internal test bundles**。
+2. 打开维护者指定且结果为成功的运行，核对源码提交，下载 `StreamFirefly-0.10.0-beta.2-internal` artifact；产物保留 14 天。没有源码仓库权限时向维护者索取测试包，不要求开放源码访问权限。
+3. 解压 artifact，选择与当前 Windows 架构匹配的压缩包：
+   - Intel 或 AMD Windows 电脑：`StreamFirefly-0.10.0-beta.2-internal-x64.zip`
+   - Windows ARM 电脑：`StreamFirefly-0.10.0-beta.2-internal-arm64.zip`
+4. 保留同一 artifact 内的 `INTERNAL-SHA256SUMS.txt`，用于核对压缩包完整性。
 
 可以在 Windows 的“设置 → 系统 → 系统信息 → 系统类型”中查看架构。大多数 Intel、AMD 电脑使用 x64；仅骁龙等 Windows ARM 设备使用 ARM64。
 
-> 私有分发仓库只存放测试说明和 Release，不包含 StreamFirefly 源码。个人 GitHub 私有仓库的协作者具有写权限，请勿修改仓库内容、标签或 Release。
+> 测试包版本标识不代表 Beta 2 已发布或完成统一验收。两小时捕捉、真实网站和设备验收结果需另行记录。
 
 ## 二、校验并解压
 
 在下载目录打开 PowerShell，计算压缩包的 SHA-256：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 -LiteralPath '.\StreamFirefly-0.10.0-beta.1-internal-x64.zip'
+Get-FileHash -Algorithm SHA256 -LiteralPath '.\StreamFirefly-0.10.0-beta.2-internal-x64.zip'
 ```
 
 ARM64 测试人员将文件名替换为 ARM64 包。输出应与 `INTERNAL-SHA256SUMS.txt` 中对应记录一致；不一致时不要继续安装，请重新下载并反馈。
@@ -44,8 +47,8 @@ ARM64 测试人员将文件名替换为 ARM64 包。输出应与 `INTERNAL-SHA25
 为避免 Windows 保留互联网下载标记，先解除 ZIP 锁定，再完整解压：
 
 ```powershell
-Unblock-File -LiteralPath '.\StreamFirefly-0.10.0-beta.1-internal-x64.zip'
-Expand-Archive -LiteralPath '.\StreamFirefly-0.10.0-beta.1-internal-x64.zip' -DestinationPath '.\StreamFirefly-Test'
+Unblock-File -LiteralPath '.\StreamFirefly-0.10.0-beta.2-internal-x64.zip'
+Expand-Archive -LiteralPath '.\StreamFirefly-0.10.0-beta.2-internal-x64.zip' -DestinationPath '.\StreamFirefly-Test'
 ```
 
 不要直接在压缩包内运行脚本，也不要单独移动 `extension`、`native-host` 或 `tools` 文件夹。
@@ -158,7 +161,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 ### 源码里的规则、外部工具和捕捉入口
 
-这些入口属于 0.10.0-beta.1 内测版，旧版 0.9.1 内测包不会自动获得。扩展和助手必须成套更新；本版增加本地程序调用和缓存捕捉能力握手，不支持新旧组件混用。真实下载工具、已安装助手的浏览器捕捉全链路、长时压力及 ARM64 实机仍待验收。捕捉只保存开启后的媒体数据，异常停止会保留片段，不自动删除已有下载。
+这些入口由 0.10.0-beta.2 测试包提供，旧版 0.9.1 内测包不会自动获得。扩展和助手必须成套更新，并通过本地程序调用和缓存捕捉能力握手，不支持新旧组件混用。安装态短链路结果以对应 CI 运行和证据为准；真实下载工具、真实网站捕捉、长时压力及 ARM64 实机仍待验收。捕捉只保存开启后的媒体数据，异常停止会保留片段，不自动删除已有下载。
 
 ### 扩展提示 Native Host 不可用
 

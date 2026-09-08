@@ -6,7 +6,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = relative => fs.readFileSync(path.join(root, relative), 'utf8').replaceAll('\r\n', '\n');
 const requireText = (text, expected, label) => { if (!text.includes(expected)) throw new Error(`${label} is missing: ${expected}`); };
 
-const bundleVersion = '0.10.0-beta.1';
+const bundleVersion = '0.10.0-beta.2';
 const packageScript = read('tools/package-internal-test.ps1');
 const auditScript = read('tools/audit-internal-test.ps1');
 const nativeTest = read('tools/test-native.mjs');
@@ -51,6 +51,9 @@ requireText(nativeHlsTest, 'process.env.STREAMFIREFLY_NATIVE_EXE', 'Native HLS t
 requireText(nativeHlsTest, 'process.env.STREAMFIREFLY_FFMPEG_EXE', 'Native HLS FFmpeg fixture');
 requireText(readme, `StreamFirefly-${bundleVersion}-internal-x64.zip`, 'Internal test guide');
 requireText(readme, `StreamFirefly-${bundleVersion}-internal-arm64.zip`, 'Internal test guide');
+requireText(readme, `# StreamFirefly ${bundleVersion} 测试包指南`, 'Internal test guide version');
+requireText(readme, 'Actions → Package internal test bundles', 'Test artifact delivery');
+requireText(readme, '未创建 Release', 'Test-only delivery boundary');
 for (const expected of [
   'runs-on: windows-2025',
   '11d5960a326750d5838078e36cf38b85af677262',

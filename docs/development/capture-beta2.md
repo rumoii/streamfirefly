@@ -4,7 +4,7 @@
 
 验证快照日期：2026-09-07。分支 `main`，源码基线 `a770ddee8fac63333aef8dc25c159ef679aa7bfa`；首次验证时，Beta 2 实现、测试及交接文档属于该基线之后尚未提交的工作区改动。这是历史验证快照，不表示后续检出的仓库仍有未提交文件。接手时用 `git log` 与 `git status --short` 确认实际提交和工作区；仅检出该基线不能获得 Beta 2 改动。Beta 2 尚未发布。
 
-源码数字版本保持 `0.10.0`，内测打包工作流的 `bundle_version` 默认值仍为 `0.10.0-beta.1`；两者不能用作 Beta 2 已发布的证据。Beta 1 的 CI 结果也不覆盖此工作区。
+源码数字版本保持 `0.10.0`，内测打包工作流的 `bundle_version` 默认值为 `0.10.0-beta.2`，用于 Actions 测试产物；两者不能用作 Beta 2 已发布的证据。Beta 1 的 CI 结果也不覆盖后续源码提交。
 
 整体架构见 [模块化发现、工具交接与缓存捕捉](modular-discovery.md)，身份隔离的取舍与回滚见 [捕捉文档身份决策](../decisions/proposed/2026-09-07-capture-document-identity.md)。本页统一维护 Beta 2 的交接状态和验收清单。
 
