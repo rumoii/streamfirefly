@@ -321,6 +321,7 @@ onBeforeUnmount(() => { void disposePreview(); });
                   <div class="expanded-info">
                     <dl class="detail-grid"><div><dt>文件大小</dt><dd>{{ item.sizeKind === 'manifest' ? '最终大小未知' : formatBytes(item.size) }}</dd></div><div><dt>分辨率</dt><dd>{{ item.width && item.height ? `${item.width} × ${item.height}` : '未知' }}</dd></div><div><dt>媒体时长</dt><dd>{{ formatDuration(item.duration) }}</dd></div><div><dt>媒体状态</dt><dd>{{ item.live ? '直播流' : '点播资源' }}</dd></div><div><dt>发现来源</dt><dd>{{ sourceLabel(item.source) }}</dd></div><div><dt>MIME</dt><dd>{{ item.mime || '未知' }}</dd></div></dl>
                     <div class="url-box"><span>资源地址</span><code>{{ item.url }}</code><button class="text-button" @click="copyUrl(item.url)">复制</button></div>
+                    <div v-if="item.extraction" class="url-box"><span>规则提取 · {{ item.extraction.ruleId }} · {{ item.extraction.observed ? '已观察到目标请求' : '尚未观察到目标请求' }}</span><code>{{ item.extraction.originalUrl }}</code><small>来源信息仅用于追溯；提取候选不自动发送到外部工具。</small></div>
                     <p v-if="previewError" class="inline-error detail-error">{{ previewError }}</p>
                   </div>
                 </div></div>

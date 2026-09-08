@@ -19,7 +19,7 @@ function move(index: number, offset: number) { const rules = config.value.rules;
 function domains(value: string) { return value.split(/[,\s]+/).map(item => item.trim()).filter(Boolean); }
 function patchSites(rule: DetectionRule, event: Event) { rule.sites = domains((event.target as HTMLInputElement).value); }
 async function save() { await perform(async () => { await configurationRequest("discovery.save", validateDiscovery(toRaw(config.value))); disabled.value = {}; message.value = "规则已保存；已保留的资源会重新评估，历史未收集资源需刷新来源页面。"; }); }
-async function test() { await perform(async () => { result.value = await configurationRequest("discovery.test", { ...sample.value, size: sample.value.size === "" ? null : Number(sample.value.size) }); }); }
+async function test() { await perform(async () => { result.value = null; result.value = await configurationRequest("discovery.test", { config: validateDiscovery(toRaw(config.value)), sample: { ...sample.value, size: sample.value.size === "" ? null : Number(sample.value.size) } }); }); }
 function exportConfig() { transfer.value = JSON.stringify(config.value, null, 2); }
 function importConfig() { try { config.value = validateDiscovery(JSON.parse(transfer.value)); message.value = "已载入草稿，请检查后保存。"; } catch (error) { message.value = error instanceof Error ? error.message : "导入失败"; } }
 
@@ -34,7 +34,7 @@ function importConfig() { try { config.value = validateDiscovery(JSON.parse(tran
       <p v-if="disabled[rule.id]" role="alert">{{ disabled[rule.id] }}</p>
     </article>
     <div class="feature-row"><button class="button" :disabled="busy || config.rules.length >= 100" @click="add">新增规则</button><button class="button primary" :disabled="busy" @click="save">保存规则</button></div>
-    <details><summary>测试已保存规则</summary><div class="feature-grid"><label v-for="(_value, key) in sample" :key="key" class="field"><span>{{ key }}</span><input v-model="sample[key]" class="control"></label></div><button class="button" :disabled="busy" @click="test">运行测试</button><p v-if="result" role="status">{{ result.kind || '未收集' }} · {{ result.reason }}</p></details>
+    <details><summary>测试当前草稿（不保存）</summary><div class="feature-grid"><label v-for="(_value, key) in sample" :key="key" class="field"><span>{{ key }}</span><input v-model="sample[key]" class="control"></label></div><button class="button" :disabled="busy" @click="test">运行测试</button><p v-if="result" role="status">{{ result.kind || '未收集' }} · {{ result.reason }}</p><ol v-if="result?.steps"><li v-for="step in result.steps" :key="step.ruleId">{{ step.name }}：{{ step.reason }}</li></ol></details>
     <details><summary>配置导入 / 导出</summary><textarea v-model="transfer" class="control feature-code" aria-label="识别配置 JSON"></textarea><div class="feature-row"><button class="button" @click="exportConfig">生成导出内容</button><button class="button" @click="importConfig">载入草稿</button></div></details>
     <p v-if="message" role="status">{{ message }}</p>
   </section>

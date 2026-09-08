@@ -89,7 +89,13 @@ const api = {
   windows: { update: async (id, properties) => { windowUpdates.push({ id, properties: { ...properties } }); } }
 };
 const source = buildSync({ entryPoints: [path.join(root, 'extension/src/background.js')], bundle: true, format: 'iife', write: false }).outputFiles[0].text;
-vm.runInNewContext(source, { chrome: api, URL, Map, Set, Number, Object, Date, Promise, TextEncoder, TextDecoder, Headers, Uint8Array, crypto: webcrypto, structuredClone, fetch: async () => fetchResponse, setTimeout, clearTimeout, console });
+const evaluationSource = buildSync({ entryPoints: [path.join(root, 'extension/src/evaluation-worker.ts')], bundle: true, format: 'iife', write: false }).outputFiles[0].text;
+class FixtureWorker {
+  constructor() { this.stopped = false; this.scope = { URL, structuredClone, self: { postMessage: result => { if (!this.stopped) this.onmessage?.({ data: result }); } } }; vm.runInNewContext(evaluationSource, this.scope); }
+  postMessage(job) { queueMicrotask(() => { if (!this.stopped) this.scope.self.onmessage({ data: structuredClone(job) }); }); }
+  terminate() { this.stopped = true; }
+}
+vm.runInNewContext(source, { chrome: api, Worker: FixtureWorker, Error, URL, Map, Set, Number, Object, Date, Promise, TextEncoder, TextDecoder, Headers, Uint8Array, crypto: webcrypto, structuredClone, fetch: async () => fetchResponse, setTimeout, clearTimeout, console });
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const flush = async () => { for (let index = 0; index < 6; index += 1) await settle(); };
@@ -258,3 +264,28 @@ if (timedOutConnection.ok || timedOutConnection.error !== 'native_host_timeout')
 nativeInfoError = null;
 if (!(await send({ type: 'native.connect' })).ok) throw new Error('Failed handshake was cached and prevented reconnection');
 console.log('Extension candidate state, UI context, workspace lifecycle, and native reconnection tests passed');
+
+const trustedSettings = { url: api.runtime.getURL('dist/app.html?surface=options') };
+const extractionConfig = { version: 1, rules: [{ id: 'extract-test', name: '地址', enabled: true, sites: ['video.example'], pattern: '[?&]media=([^&]+)', flags: 'i', output: '$1', decode: true, kind: 'hls' }] };
+const extractedUrl = 'https://cdn.example/extracted.m3u8';
+for (const type of ['extraction.get', 'extraction.test', 'extraction.save']) {
+  const denied = await send({ type, payload: extractionConfig }, { tab: { id: 8 }, url: 'https://video.example/page' });
+  if (denied.ok) throw new Error('Web content reached extraction administration');
+}
+const draft = await send({ type: 'extraction.test', payload: { config: extractionConfig, sample: { url: 'https://api.example/?media=' + encodeURIComponent(extractedUrl), pageUrl: 'https://video.example/page' } } }, trustedSettings);
+if (!draft.ok || draft.value.url !== extractedUrl || localValues.extractionConfig) throw new Error('Extraction draft route mutated storage or failed: ' + JSON.stringify(draft));
+const saved = await send({ type: 'extraction.save', payload: extractionConfig }, trustedSettings);
+if (!saved.ok || saved.value.cleanup.status !== 'complete') throw new Error('Extraction configuration failed: ' + JSON.stringify(saved));
+await send({ type: 'media.add', candidate: { url: 'https://api.example/?media=' + encodeURIComponent(extractedUrl), mime: 'application/json', requestHeaders: { cookie: 'private', authorization: 'secret' } } }, { tab: { id: 8 } });
+const extractedCandidates = await send({ type: 'media.candidates', tabId: 8 });
+const extractedCandidate = extractedCandidates.find(item => item.url === extractedUrl);
+if (!extractedCandidate?.extraction || extractedCandidate.requestHeaders || extractedCandidate.mime || extractedCandidate.size) throw new Error('Assembled extraction route inherited original metadata');
+const sessionSet = api.storage.session.set;
+api.storage.session.set = async () => { throw new Error('session storage failure'); };
+const partial = await send({ type: 'extraction.save', payload: { version: 1, rules: [] } }, trustedSettings);
+if (!partial.ok || partial.value.cleanup.status !== 'failed' || partial.value.cleanup.error !== 'session storage failure' || partial.value.config.rules.length || localValues.extractionConfig.rules.length) throw new Error('Extraction route lost partial save state: ' + JSON.stringify(partial));
+api.storage.session.set = sessionSet;
+const cleared = await send({ type: 'extraction.save', payload: { version: 1, rules: [] } }, trustedSettings);
+if (!cleared.ok || cleared.value.cleanup.status !== 'complete' || (await send({ type: 'media.candidates', tabId: 8 })).some(item => item.url === extractedUrl)) throw new Error('Extraction save did not clean derived candidates');
+listeners.removed(8); await flush();
+console.log('Trusted extraction routes, real evaluation worker code, independent candidates and cleanup passed');

@@ -3,12 +3,90 @@ import { flushPromises, mount } from "@vue/test-utils";
 import RulesPanel from "./RulesPanel.vue";
 import ToolsPanel from "./ToolsPanel.vue";
 import DispatchView from "./DispatchView.vue";
+import ExtractionPanel from "./ExtractionPanel.vue";
+import { defaultExtraction, extractResource, extractAddress } from "../../../../shared/extraction";
 import { defaultDiscovery } from "../../../../shared/discovery";
 import { integrationDefaults, preset } from "../../../../shared/integrations";
 const { send } = vi.hoisted(() => ({ send: vi.fn() }));
 vi.mock("../../api", () => ({ sendMessage: send }));
 beforeEach(() => { send.mockReset(); });
 describe("configuration serialization", () => {
+  it("tests an unsaved disabled program draft without persisting or invoking it", async () => {
+    send.mockImplementation(async (message: any) => message.type === "integration.get" ? { ok: true, value: { config: integrationDefaults(), receipts: [], error: "" } } : { ok: true, value: {} });
+    const wrapper = mount(ToolsPanel); await flushPromises();
+    await wrapper.get('[aria-label="工具类型"]').setValue("program");
+    const button = (name: string) => wrapper.findAll("button").find(item => item.text() === name)!;
+    await button("添加工具").trigger("click");
+    await wrapper.get('[aria-label="程序保存目录"]').setValue("C:\\Media files");
+    await button("测试草稿").trigger("click"); await flushPromises();
+    const request = send.mock.calls.find(([message]) => message.type === "integration.test")?.[0];
+    expect(request.payload.profile.enabled).toBe(false); expect(request.payload.profile.programOptions.directory).toBe("C:\\Media files");
+    expect(send.mock.calls.some(([message]) => ["integration.save", "integration.invoke"].includes(message.type))).toBe(false);
+    await button("转换为高级参数").trigger("click");
+    expect(wrapper.find('[aria-label="程序保存目录"]').exists()).toBe(false);
+    expect(wrapper.findAll("textarea")[0].element.value).toContain("--save-dir\nC:\\Media files"); wrapper.unmount();
+  });
+  it("tests rule drafts rather than saved configuration", async () => {
+    send.mockImplementation(async (message: any) => message.type === "discovery.get" ? { ok: true, value: { config: defaultDiscovery(), disabled: {}, error: "" } } : { ok: true, value: { kind: "video", reason: "草稿命中", steps: [{ ruleId: "draft", name: "规则", reason: "命中" }] } });
+    const wrapper = mount(RulesPanel); await flushPromises();
+    const button = (name: string) => wrapper.findAll("button").find(item => item.text() === name)!;
+    await button("新增规则").trigger("click"); await button("运行测试").trigger("click"); await flushPromises();
+    const request = send.mock.calls.find(([message]) => message.type === "discovery.test")?.[0];
+    expect(request.payload.config.rules).toHaveLength(1); expect(request.payload.sample.size).toBeNull();
+    expect(wrapper.text()).toContain("草稿命中"); expect(send.mock.calls.some(([message]) => message.type === "discovery.save")).toBe(false); wrapper.unmount();
+  });
+  it("shows extraction success and a missing group error without saving", async () => {
+    send.mockImplementation(async (message: any) => {
+      if (message.type === "extraction.get") return { ok: true, value: { config: defaultExtraction(), disabled: {}, error: "" } };
+      if (message.type === "extraction.test") return { ok: true, value: await extractResource(message.payload.sample, message.payload.config, async (rule, url) => extractAddress(rule, url)) };
+      throw new Error(message.type);
+    });
+    const wrapper = mount(ExtractionPanel); await flushPromises();
+    const button = (name: string) => wrapper.findAll("button").find(item => item.text() === name)!;
+    await button("新增提取规则").trigger("click"); await wrapper.find('input[type="checkbox"]').setValue(true);
+    await button("测试提取").trigger("click"); await flushPromises(); expect(wrapper.text()).toContain("https://cdn.example.com/video.m3u8");
+    await wrapper.get('[aria-label="提取输出模板"]').setValue("$2"); await button("测试提取").trigger("click"); await flushPromises(); expect(wrapper.text()).toContain("缺失的捕获组");
+    expect(send.mock.calls.some(([message]) => message.type === "extraction.save")).toBe(false); wrapper.unmount();
+  });
+  it("reports saved extraction settings with failed cleanup and allows an explicit retry", async () => {
+    let saves = 0;
+    send.mockImplementation(async (message: any) => {
+      if (message.type === "extraction.get") return { ok: true, value: { config: defaultExtraction(), disabled: {}, error: "" } };
+      if (message.type === "extraction.test") return { ok: true, value: { url: "https://cdn.example.com/stale.m3u8", steps: [] } };
+      if (message.type === "extraction.save") {
+        saves++;
+        return { ok: true, value: { config: structuredClone(message.payload), disabled: {}, error: "", cleanup: saves === 1 ? { status: "failed", error: "session storage failure" } : { status: "complete" } } };
+      }
+      throw new Error(message.type);
+    });
+    const wrapper = mount(ExtractionPanel); await flushPromises();
+    const button = (name: string) => wrapper.findAll("button").find(item => item.text() === name)!;
+    await button("新增提取规则").trigger("click");
+    await wrapper.get('[aria-label="提取规则名称"]').setValue("已保存规则");
+    await button("测试提取").trigger("click"); await flushPromises();
+    expect(wrapper.text()).toContain("https://cdn.example.com/stale.m3u8");
+    await button("保存提取配置").trigger("click"); await flushPromises();
+    expect(wrapper.text()).toContain("已保存并生效，但旧候选清理未完成");
+    expect(wrapper.text()).toContain("session storage failure");
+    expect(wrapper.text()).toContain("再次点击");
+    expect(wrapper.text()).not.toContain("候选已清理");
+    expect(wrapper.text()).not.toContain("https://cdn.example.com/stale.m3u8");
+    expect((wrapper.get('[aria-label="提取规则名称"]').element as HTMLInputElement).value).toBe("已保存规则");
+    expect(saves).toBe(1);
+    await button("保存提取配置").trigger("click"); await flushPromises();
+    expect(saves).toBe(2); expect(wrapper.text()).toContain("候选已清理"); expect(wrapper.text()).not.toContain("session storage failure");
+    wrapper.unmount();
+  });
+  it("preserves the extraction draft when saving fails before cleanup", async () => {
+    send.mockImplementation(async (message: any) => message.type === "extraction.get" ? { ok: true, value: { config: defaultExtraction(), disabled: {}, error: "" } } : { ok: false, error: "提取配置保存失败，配置未更改：local storage failure" });
+    const wrapper = mount(ExtractionPanel); await flushPromises();
+    const button = (name: string) => wrapper.findAll("button").find(item => item.text() === name)!;
+    await button("新增提取规则").trigger("click"); await wrapper.get('[aria-label="提取规则名称"]').setValue("未保存草稿");
+    await button("保存提取配置").trigger("click"); await flushPromises();
+    expect(wrapper.text()).toContain("配置未更改"); expect(wrapper.text()).not.toContain("配置已保存");
+    expect((wrapper.get('[aria-label="提取规则名称"]').element as HTMLInputElement).value).toBe("未保存草稿");
+    expect(wrapper.get("fieldset").attributes("disabled")).toBeUndefined(); wrapper.unmount();
+  });
   it("previews expanded arguments and retries only a definitively failed item", async () => {
     const profile = { ...preset("program"), enabled: true };
     let dispatches = 0;

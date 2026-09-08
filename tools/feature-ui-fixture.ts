@@ -1,6 +1,8 @@
 import { defaultDiscovery, detectResource, validateDiscovery } from "../shared/discovery";
 import { integrationDefaults, validateIntegrations } from "../shared/integrations";
 import { renderTemplate } from "../shared/templates";
+import { defaultExtraction, validateExtraction, extractResource, extractAddress } from "../shared/extraction";
+let extraction = defaultExtraction();
 let discovery = defaultDiscovery();
 let integrations = integrationDefaults();
 let templates = { version: 1, hls: "${url}", dash: "${url}", other: "${url}", filename: "" };
@@ -34,7 +36,10 @@ const api = {
           case "capture.close": captureSession.state = "partial"; captureSession.error = "capture_source_unavailable"; return { ok: true };
           case "discovery.get": return { ok: true, value: { config: structuredClone(discovery), disabled: {}, error: "" } };
           case "discovery.save": discovery = validateDiscovery(payload); return { ok: true, value: { config: discovery } };
-          case "discovery.test": return { ok: true, value: await detectResource(payload, discovery, async (pattern, flags, value) => new RegExp(pattern, flags).test(value)) };
+          case "discovery.test": return { ok: true, value: await detectResource(payload.sample, validateDiscovery(payload.config), async (pattern, flags, value) => new RegExp(pattern, flags).test(value), true) };
+          case "extraction.get": return { ok: true, value: { config: structuredClone(extraction), disabled: {}, error: "" } };
+          case "extraction.save": extraction = validateExtraction(payload); return { ok: true, value: { config: extraction, disabled: {}, error: "", cleanup: { status: "complete" } } };
+          case "extraction.test": return { ok: true, value: await extractResource(payload.sample, validateExtraction(payload.config), async (rule, url) => extractAddress(rule, url)) };
           case "integration.get": return { ok: true, value: { config: structuredClone(integrations), receipts: [], error: "" } };
           case "integration.save": integrations = validateIntegrations(payload); return { ok: true, value: { config: integrations } };
           case "integration.secret": return { ok: true };

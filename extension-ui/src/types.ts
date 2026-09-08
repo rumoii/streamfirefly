@@ -1,6 +1,7 @@
 export type CandidateType = "video" | "audio" | "image" | "hls" | "dash" | "segment" | string;
 
 export interface MediaCandidate {
+  extraction?: import("../../shared/extraction").ExtractionOrigin;
   id: string;
   url: string;
   canonicalUrl?: string;

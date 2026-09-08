@@ -1,6 +1,7 @@
 import { createSettings } from './settings.js';
 import { createEvaluation } from './evaluation.js';
 import { createDiscovery } from './discovery.js';
+import { createExtraction } from './extraction.js';
 import { createIntegrations } from './integrations.js';
 import { createDispatchIntents } from './dispatch-intents.js';
 import { createDeepSearch } from './deep-search.js';
@@ -14,7 +15,8 @@ const api = globalThis.browser ?? globalThis.chrome;
 const settings = createSettings(api);
 const evaluation = createEvaluation(api);
 const discovery = createDiscovery(api, settings, evaluation);
-const resources = createResources(api, settings, (message, tabId) => workspace.notifyWorkspaceMessage(message, tabId), discovery.detect);
+const extraction = createExtraction(api, evaluation);
+const resources = createResources(api, settings, (message, tabId) => workspace.notifyWorkspaceMessage(message, tabId), discovery.detect, extraction.extract);
 const { loadTabState, uiContextForTab, resolveUiTab, notifyUiContext, queueTab, rememberRequestContext, parseContentRange, addCandidate, clearTab, resolveRequestTabId, setSniffingPaused, patchResourceViewState, updateCandidateMetadata, removeCandidates, candidateFor, fetchMediaText } = resources;
 const preview = createPreview(api, resources.candidateFor);
 const { updatePreviewHeaders } = preview;
@@ -107,20 +109,23 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "capture.context" && sender.url?.split(/[?#]/, 1)[0] === api.runtime.getURL("dist/app.html")) {
     api.tabs.get(message.payload.tabId).then(uiContextForTab).then(value => sendResponse({ ok: true, value }), () => sendResponse({ ok: false, error: "来源页面已关闭" })); return true;
   }
-  const administrative = ["discovery.get", "discovery.save", "discovery.test", "template.render", "templates.get", "templates.save", "integration.preview", "integration.get", "integration.save", "integration.test", "integration.invoke", "integration.secret", "integration.intent", "capture.sources", "capture.open", "capture.close", "capture.list", "capture.recover"];
+  const administrative = ["extraction.get", "extraction.save", "extraction.test", "discovery.get", "discovery.save", "discovery.test", "template.render", "templates.get", "templates.save", "integration.preview", "integration.get", "integration.save", "integration.test", "integration.invoke", "integration.secret", "integration.intent", "capture.sources", "capture.open", "capture.close", "capture.list", "capture.recover"];
   if (administrative.includes(message?.type)) {
     if (typeof sender.url !== "string" || sender.url.split(/[?#]/, 1)[0] !== api.runtime.getURL("dist/app.html")) { sendResponse({ ok: false, error: "请从扩展设置页执行此操作" }); return false; }
     const operations = {
       "discovery.get": () => discovery.read(),
       "discovery.save": async () => { const result = await discovery.save(message.payload); await resources.reevaluate(); return result; },
-      "discovery.test": () => discovery.detect(message.payload),
+      "discovery.test": () => discovery.test(message.payload),
+      "extraction.get": () => extraction.read(),
+      "extraction.test": () => extraction.test(message.payload),
+      "extraction.save": () => extraction.save(message.payload, resources.clearExtracted),
       "template.render": () => evaluation.run({ ...message.payload, kind: "template" }),
       "templates.get": () => outputTemplates.read(),
       "templates.save": () => outputTemplates.save(message.payload),
       "integration.preview": () => integrations.preview(message.payload),
       "integration.get": () => integrations.read(),
       "integration.save": () => integrations.save(message.payload),
-      "integration.test": () => integrations.test(message.payload.profileId),
+      "integration.test": () => integrations.test(message.payload),
       "integration.invoke": () => integrations.dispatch({ ...message.payload, protocolTabId: sender.tab?.id }),
       "integration.secret": () => integrations.setSecret(message.payload.profileId, message.payload.secret),
       "integration.intent": () => dispatchIntents.get(message.payload.id),

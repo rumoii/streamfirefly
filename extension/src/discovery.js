@@ -1,4 +1,4 @@
-import { defaultDiscovery, detectResource, validateDiscovery } from "../../shared/discovery.ts";
+import { defaultDiscovery, detectResource, validateDiscovery, validateResourceInput } from "../../shared/discovery.ts";
 export function createDiscovery(api, settings, evaluation) {
   let config = defaultDiscovery();
   let loadError = "";
@@ -6,14 +6,14 @@ export function createDiscovery(api, settings, evaluation) {
   const ready = api.storage.local.get(["discoveryConfig"]).then(stored => {
     if (stored.discoveryConfig) config = validateDiscovery(stored.discoveryConfig);
   }).catch(error => { loadError = error.message; });
-  async function detect(candidate) {
+  async function detect(candidate, fallbackKind) {
     await ready;
     if (loadError) throw new Error(loadError);
     const snapshot = { ...config, detectImages: settings.get().detectImages, rules: config.rules.filter(rule => !disabled.has(rule.id)) };
     return detectResource(candidate, snapshot, async (pattern, flags, value, ruleId) => {
       try { return await evaluation.run({ kind: "regex", pattern, flags, value }); }
       catch (error) { if (error.message === "worker_timeout") disabled.set(ruleId, "执行超时，已停用；修改并保存后重试"); throw error; }
-    });
+    }, false, fallbackKind);
   }
   async function read() { await ready; return { config: structuredClone(config), error: loadError, disabled: Object.fromEntries(disabled) }; }
   async function save(value) {
@@ -24,5 +24,11 @@ export function createDiscovery(api, settings, evaluation) {
     config = next; disabled.clear();
     return read();
   }
-  return { detect, read, save };
+  async function test(payload) {
+    await settings.ready;
+    const draft = validateDiscovery(payload.config);
+    draft.detectImages = settings.get().detectImages;
+    return detectResource(validateResourceInput(payload.sample), draft, (pattern, flags, value) => evaluation.run({ kind: "regex", pattern, flags, value }), true);
+  }
+  return { detect, read, save, test };
 }

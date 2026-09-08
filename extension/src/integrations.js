@@ -2,6 +2,7 @@ import { integrationDefaults, validateIntegrations } from "../../shared/integrat
 import { hostMatches } from "../../shared/discovery.ts";
 import { createIntegrationAdapters } from "./integration-adapters.js";
 import { prepareIntegrationRequest } from "./integration-request.js";
+import { toolError } from "../../shared/tool-options.ts";
 export function createIntegrations(api, resources, nativeRequest, evaluate) {
   let config = integrationDefaults(); let loadError = "";
   const secrets = new Map(), receipts = new Map(), automatic = new Set();
@@ -22,7 +23,7 @@ export function createIntegrations(api, resources, nativeRequest, evaluate) {
     const headers = Object.fromEntries(Object.entries(candidate.requestHeaders || {}).map(([key, value]) => [key.toLowerCase(), value]));
     const values = { url: candidate.url, pageUrl: candidate.pageUrl || "", title: candidate.pageTitle || "媒体", fileName: candidate.pageTitle || "媒体", ext: new URL(candidate.url).pathname.split(".").at(-1) || "", mime: candidate.mime || "", size: candidate.size == null ? "" : String(candidate.size), now: new Date().toISOString().replace(/[:.]/g, "-") };
     values.token = secrets.get(profile.id) || "";
-    for (const field of profile.sensitiveFields) values[field] = field === "referer" ? candidate.referer || candidate.pageUrl || "" : headers[field === "userAgent" ? "user-agent" : field] || "";
+    for (const field of profile.sensitiveFields) values[field] = candidate.extraction && !candidate.extraction.observed ? "" : field === "referer" ? candidate.referer || candidate.pageUrl || "" : headers[field === "userAgent" ? "user-agent" : field] || "";
     if (Object.values(values).some(value => typeof value !== "string" || value.length > 16384 || /[\r\n\0]/.test(value))) throw new Error("资源参数包含非法内容");
     return { values, candidate };
   }
@@ -38,17 +39,25 @@ export function createIntegrations(api, resources, nativeRequest, evaluate) {
     while (receipts.size > 200) { const old = [...receipts].find(([, item]) => item.state !== "sending"); if (!old) throw new Error("外部交接过多，请稍后重试"); receipts.delete(old[0]); }
     try { await persist(); } catch { receipts.delete(receipt.requestId); throw new Error("交接记录无法保存，未执行外部调用"); }
     try { Object.assign(receipt, await adapters.invoke(profile, values, receipt.requestId, secrets.get(profile.id), false, payload.protocolTabId)); }
-    catch (error) { receipt.state = error.definitive ? "failed" : "unknown"; receipt.error = receipt.state === "unknown" ? "服务响应中断，结果未知，不会自动重试" : "目标明确拒绝请求，可检查配置后重试"; }
+    catch (error) { receipt.state = error.definitive ? "failed" : "unknown"; receipt.error = toolError(error.message) + (receipt.state === "unknown" ? " 结果未知，不会自动重试。" : ""); }
     await persist(); return structuredClone(receipt);
   }
   async function read() { await ready; return { config: structuredClone(config), receipts: [...receipts.values()].map(item => ({ ...item })), error: loadError }; }
   async function save(input) { await ready; if (loadError) throw new Error(loadError); const next = validateIntegrations(input); await api.storage.local.set({ integrationConfig: next }); for (const id of secrets.keys()) { const before = config.profiles.find(profile => profile.id === id); const after = next.profiles.find(profile => profile.id === id); if (!after || before?.endpoint !== after.endpoint || before?.kind !== after.kind) secrets.delete(id); } config = next; return read(); }
-  async function test(id) { const profile = await profileFor(id); return adapters.invoke(profile, {}, crypto.randomUUID(), secrets.get(id), true); }
+  async function test(input) {
+    const profile = validateIntegrations({ version: 1, profiles: [input.profile] }).profiles[0];
+    const secret = input.secret || "";
+    if (typeof secret !== "string" || secret.length > 4096 || /[\r\n\0]/.test(secret)) throw new Error("凭据无效");
+    const sample = { url: "https://example.com/video.mp4", title: "测试媒体", fileName: "video.mp4", ext: "mp4", now: "2026-09-08", pageUrl: "https://example.com/", referer: "https://example.com/", cookie: "test=sample", authorization: "sample", userAgent: "test", origin: "https://example.com", token: "sample" };
+    await prepareIntegrationRequest(profile, sample, evaluate);
+    try { return await adapters.invoke(profile, sample, crypto.randomUUID(), secret, true); }
+    catch (error) { throw new Error(toolError(error.message)); }
+  }
   async function autoSend(tabId, candidateId) {
     await ready; if (loadError) return;
     const state = await resources.loadTabState(tabId);
     const candidate = await resources.candidateFor(tabId, candidateId);
-    if (!candidate) return;
+    if (!candidate || candidate.extraction) return;
     for (const profile of config.profiles) {
       if (!profile.enabled || !["http", "aria2"].includes(profile.kind) || !profile.autoSites.some(site => hostMatches(candidate.pageUrl || state.pageUrl, site))) continue;
       const key = `${state.sourceContextId}:${profile.id}:${candidateId}`;

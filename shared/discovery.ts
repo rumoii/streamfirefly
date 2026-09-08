@@ -14,7 +14,8 @@ export interface DetectionRule {
   sites: string[];
 }
 export interface DiscoveryConfig { version: 1; rules: DetectionRule[]; sites: string[]; siteMode: "exclude" | "include"; detectImages: boolean }
-export interface DetectionResult { kind: MediaKind | null; ruleId?: string; reason: string }
+export interface DetectionStep { ruleId: string; name: string; reason: string }
+export interface DetectionResult { kind: MediaKind | null; ruleId?: string; reason: string; steps?: DetectionStep[] }
 export type RegexMatcher = (pattern: string, flags: string, value: string, ruleId: string) => Promise<boolean>;
 const kinds: MediaKind[] = ["video", "audio", "image", "hls", "dash", "segment"];
 export const defaultDiscovery = (): DiscoveryConfig => ({ version: 1, rules: [], sites: [], siteMode: "exclude", detectImages: false });
@@ -56,25 +57,44 @@ export function builtinKind(item: ResourceInput): MediaKind | null {
   return null;
 }
 
-export async function detectResource(item: ResourceInput, config: DiscoveryConfig, regex: RegexMatcher): Promise<DetectionResult> {
-  if (item.url.length > 16384) return { kind: null, reason: "地址超出长度限制" };
+export function validateResourceInput(value: unknown): ResourceInput {
+  const item = value as ResourceInput;
+  if (!item || typeof item.url !== "string" || item.url.length > 16384 || [item.mime, item.pageUrl].some(field => field != null && (typeof field !== "string" || field.length > 16384)) || item.size != null && (!Number.isSafeInteger(item.size) || item.size < 0)) throw new Error("测试资源字段无效");
+  return item;
+}
+
+export async function detectResource(item: ResourceInput, config: DiscoveryConfig, regex: RegexMatcher, explain = false, fallbackKind?: MediaKind): Promise<DetectionResult> {
+  const steps: DetectionStep[] = [];
+  const step = (rule: DetectionRule, reason: string) => { if (explain) steps.push({ ruleId: rule.id, name: rule.name, reason }); };
+  const finish = (result: DetectionResult): DetectionResult => {
+    if (!explain) return result;
+    for (const rule of config.rules) if (!steps.some(entry => entry.ruleId === rule.id)) step(rule, "未执行：前序决策已结束识别");
+    return { ...result, steps };
+  };
+  if (item.url.length > 16384) return finish({ kind: null, reason: "地址超出长度限制" });
   const listed = config.sites.some(pattern => hostMatches(item.pageUrl || item.url, pattern));
-  if (config.siteMode === "include" ? !listed : listed) return { kind: null, reason: "站点规则排除" };
+  if (config.siteMode === "include" ? !listed : listed) return finish({ kind: null, reason: "站点规则排除" });
   let unknownSize = false;
   for (const action of ["exclude", "include"] as const) {
     for (const rule of config.rules) {
-      if (!rule.enabled || rule.action !== action || rule.sites.length && !rule.sites.some(pattern => hostMatches(item.pageUrl || item.url, pattern))) continue;
+      if (rule.action !== action) continue;
+      if (!rule.enabled) { step(rule, "已禁用"); continue; }
+      if (rule.sites.length && !rule.sites.some(pattern => hostMatches(item.pageUrl || item.url, pattern))) { step(rule, "站点不符"); continue; }
       if (rule.minBytes != null || rule.maxBytes != null) {
-        if (item.size == null) { unknownSize = true; continue; }
-        if (rule.minBytes != null && item.size < rule.minBytes || rule.maxBytes != null && item.size > rule.maxBytes) continue;
+        if (item.size == null) { unknownSize = true; step(rule, "大小未知"); continue; }
+        if (rule.minBytes != null && item.size < rule.minBytes || rule.maxBytes != null && item.size > rule.maxBytes) { step(rule, "大小不符"); continue; }
       }
       let matched = false;
-      if (rule.field === "url") matched = await regex(rule.pattern, rule.flags || "", item.url, rule.id);
+      if (rule.field === "url") {
+        try { matched = await regex(rule.pattern, rule.flags || "", item.url, rule.id); }
+        catch (error) { if (!explain) throw error; step(rule, "执行失败：" + (error instanceof Error ? error.message : "规则执行错误")); return finish({ kind: null, reason: "规则执行失败，未继续识别" }); }
+      }
       else if (rule.field === "extension") { try { matched = new URL(item.url).pathname.toLowerCase().endsWith(`.${rule.pattern.replace(/^\./, "").toLowerCase()}`); } catch { matched = false; } }
       else { const mime = (item.mime || "").toLowerCase().split(";", 1)[0]; const pattern = rule.pattern.toLowerCase(); matched = pattern.endsWith("/*") ? mime.startsWith(pattern.slice(0, -1)) : mime === pattern; }
-      if (matched) return { kind: action === "exclude" ? null : rule.kind, ruleId: rule.id, reason: `${action === "exclude" ? "排除" : "识别"}：${rule.name}` };
+      step(rule, matched ? "命中" : "不匹配");
+      if (matched) return finish({ kind: action === "exclude" ? null : rule.kind, ruleId: rule.id, reason: `${action === "exclude" ? "排除" : "识别"}：${rule.name}` });
     }
   }
-  const kind = builtinKind(item);
-  return { kind: kind === "image" && !config.detectImages ? null : kind, reason: unknownSize ? "大小未知，相关规则尚未命中；采用内置识别" : "内置识别" };
+  const kind = builtinKind(item) || fallbackKind || null;
+  return finish({ kind: kind === "image" && !config.detectImages ? null : kind, reason: unknownSize ? "大小未知，相关规则尚未命中；采用内置识别" : fallbackKind && !builtinKind(item) ? "提取规则预期类型" : "内置识别" });
 }

@@ -1,5 +1,5 @@
 import { INLINE_MANIFEST_MAX_BYTES, newId, supportedPage, cleanPageTitle, pageTitleFor, normalizeSortMode } from './platform.js';
-export function createResources(api, settings, notifyWorkspaceMessage, detect) {
+export function createResources(api, settings, notifyWorkspaceMessage, detect, extract) {
 const candidateListeners = new Set();
 const STATE_VERSION = 2;
 
@@ -230,19 +230,34 @@ async function addCandidate(tabId, item) {
     const normalizedItem = { ...item, pageTitle: item.pageTitle ? cleanPageTitle(item.pageTitle) : item.pageTitle, pageUrl: sourceUrl };
     const enriched = context ? { ...normalizedItem, requestHeaders: normalizedItem.requestHeaders && Object.keys(normalizedItem.requestHeaders).length ? normalizedItem.requestHeaders : inlineHeaders, referer: normalizedItem.referer || context.referer, contentDisposition: normalizedItem.contentDisposition || context.contentDisposition } : normalizedItem;
     const merged = mergeCandidate(existing, { ...enriched, canonicalUrl });
-    const detection = await detect(merged);
-    const type = detection.kind;
-    if (!type) return false;
-    merged.detection = detection;
-    const now = Date.now();
-    state.candidates.set(id, { ...merged, id, canonicalUrl, type, sizeKind: merged.sizeKind || (type === "hls" || type === "dash" ? "manifest" : "file"), detectedAt: existing?.detectedAt ?? now, lastSeenAt: now });
-    state.lastTouchedAt = now;
-    trimBucket(state, bucketFor(type));
+    if (existing?.extraction) merged.extraction = { ...existing.extraction, observed: existing.extraction.observed || item.source === "network" };
+    else delete merged.extraction;
+    const changed = [];
+    async function collect(candidate, candidateId, previous, fallbackKind) {
+      const detection = await detect(candidate, fallbackKind);
+      const type = detection.kind;
+      if (!type) return false;
+      const now = Date.now();
+      state.candidates.set(candidateId, { ...candidate, id: candidateId, type, detection, sizeKind: candidate.sizeKind || (type === "hls" || type === "dash" ? "manifest" : "file"), detectedAt: previous?.detectedAt ?? now, lastSeenAt: now });
+      state.lastTouchedAt = now; trimBucket(state, bucketFor(type)); changed.push(candidateId);
+      return true;
+    }
+    await collect(merged, id, existing, existing?.extraction?.kind);
+    if (!item.inlineManifest) {
+      const result = await extract(normalizedItem);
+      if (result.url) {
+        const extractedId = canonicalize(result.url);
+        if (!state.candidates.has(extractedId)) {
+          await collect({ url: result.url, canonicalUrl: extractedId, pageUrl: sourceUrl, pageTitle: normalizedItem.pageTitle, source: "rule", extraction: { ruleId: result.ruleId, originalUrl: item.url, observed: false, kind: result.kind } }, extractedId, null, result.kind);
+        }
+      }
+    }
+    if (!changed.length) return false;
     const inlineItems = [...state.candidates.values()].filter(value => value.inlineManifest).sort((a, b) => (b.lastSeenAt || 0) - (a.lastSeenAt || 0));
     for (const stale of inlineItems.slice(4)) state.candidates.delete(stale.id);
     schedulePersist(state);
     updateBadge(state);
-    for (const listener of candidateListeners) Promise.resolve().then(() => listener(tabId, id)).catch(() => {});
+    for (const candidateId of changed) for (const listener of candidateListeners) Promise.resolve().then(() => listener(tabId, candidateId)).catch(() => {});
     return true;
   });
 }
@@ -399,12 +414,23 @@ async function reevaluate() {
   for (const [tabId] of candidatesByTab) await queueTab(tabId, async () => {
     const state = await loadTabState(tabId);
     for (const [id, candidate] of state.candidates) {
-      const detection = await detect(candidate);
+      const detection = await detect(candidate, candidate.extraction?.kind);
       if (!detection.kind) state.candidates.delete(id);
       else state.candidates.set(id, { ...candidate, type: detection.kind, detection });
     }
     schedulePersist(state); updateBadge(state); notifyUiContext(tabId);
   });
 }
-return { subscribeCandidates(listener) { candidateListeners.add(listener); return () => candidateListeners.delete(listener); }, reevaluate, loadTabState, uiContextForTab, resolveUiTab, notifyUiContext, queueTab, rememberRequestContext, parseContentRange, addCandidate, clearTab, resolveRequestTabId, setSniffingPaused, patchResourceViewState, updateCandidateMetadata, removeCandidates, candidateFor, fetchMediaText };
+async function clearExtracted() {
+  const stored = await api.storage.session.get(null);
+  const tabIds = new Set([...candidatesByTab.keys(), ...Object.keys(stored).filter(key => key.startsWith(STATE_PREFIX)).map(key => Number(key.slice(STATE_PREFIX.length))).filter(Number.isInteger)]);
+  for (const tabId of tabIds) await queueTab(tabId, async () => {
+    const state = await loadTabState(tabId);
+    for (const [id, candidate] of state.candidates) if (candidate.extraction && !candidate.extraction.observed) state.candidates.delete(id);
+    cancelScheduledPersist(tabId);
+    await api.storage.session.set({ [stateKey(tabId)]: serializeState(state) });
+    updateBadge(state); notifyUiContext(tabId);
+  });
+}
+return { subscribeCandidates(listener) { candidateListeners.add(listener); return () => candidateListeners.delete(listener); }, clearExtracted, reevaluate, loadTabState, uiContextForTab, resolveUiTab, notifyUiContext, queueTab, rememberRequestContext, parseContentRange, addCandidate, clearTab, resolveRequestTabId, setSniffingPaused, patchResourceViewState, updateCandidateMetadata, removeCandidates, candidateFor, fetchMediaText };
 }
