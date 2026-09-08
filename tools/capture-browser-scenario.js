@@ -8,7 +8,20 @@ export async function runCaptureScenario(origin, installed, durationSeconds, dir
   }
   async function request(type, payload) { const result = await api.runtime.sendMessage({ type, payload }); if (!result?.ok) throw new Error(`${type}: ${result?.error}`); return result.value; }
   async function execute(tabId, frameId, func, args = []) { const results = await api.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, world: 'MAIN', func, args }); return results[0]?.result; }
-  const output = { installed, durationSeconds, sources: [], sessions: [], checks: [] };
+  const output = { installed, durationSeconds, sources: [], sessions: [], checks: [], progress: [], diagnostics: [] };
+  async function durable(id, label) {
+    const deadline = Date.now() + 30000;
+    const progress = { id, label, snapshot: null }; output.progress.push(progress);
+    while (Date.now() < deadline) {
+      const snapshot = (await request('capture.list')).find(session => session.id === id);
+      progress.snapshot = snapshot ? { id: snapshot.id, state: snapshot.state, bytes: snapshot.bytes, error: snapshot.error, tracks: snapshot.tracks } : null;
+      if (!snapshot) throw new Error(`${label}: session missing (${id})`);
+      if (!['armed', 'capturing'].includes(snapshot.state)) throw new Error(`${label}: ${snapshot.state}: ${snapshot.error || 'capture ended before durable data'}`);
+      if (snapshot.bytes > 0) return snapshot;
+      await pause(100);
+    }
+    throw new Error(`${label}: timeout (${id})`);
+  }
   let tab;
   try {
     if (installed) {
@@ -21,6 +34,13 @@ export async function runCaptureScenario(origin, installed, durationSeconds, dir
     for (const frame of frames) {
       await until(() => execute(tab.id, frame.frameId, () => Boolean(window.__streamFireflyCaptureProbe?.installed)), 'frame probe');
       await execute(tab.id, frame.frameId, async () => {
+        window.captureDiagnostics = [];
+        window.addEventListener('message', event => {
+          if (event.source !== window || event.data?.source !== 'streamfirefly-capture') return;
+          const { type, id, track, sequence, error, data } = event.data;
+          window.captureDiagnostics.push({ type, id, track, sequence, error, bytes: data?.byteLength });
+          if (window.captureDiagnostics.length > 12) window.captureDiagnostics.shift();
+        });
         const video = document.createElement('video'); video.muted = true; video.controls = true; document.body.append(video);
         const source = new MediaSource(); video.src = URL.createObjectURL(source);
         await new Promise(resolve => source.addEventListener('sourceopen', resolve, { once: true }));
@@ -70,7 +90,7 @@ export async function runCaptureScenario(origin, installed, durationSeconds, dir
       const duplicate = await api.runtime.sendMessage({ type: 'capture.open', payload: { tabId: tab.id, sourceContextId: context.sourceContextId, source: cross } });
       if (duplicate?.ok) throw new Error('Duplicate capture was accepted');
       await append(same); await append(cross);
-      const baseline = await until(async () => (await request('capture.list')).find(session => session.id === opened.id && session.bytes > 0), 'durable capture');
+      const baseline = await durable(opened.id, 'durable capture');
       const initialBytes = baseline.bytes;
       const deadline = Date.now() + durationSeconds * 1000;
       let fragmentCount = 1, nextHeartbeat = Date.now();
@@ -87,7 +107,7 @@ export async function runCaptureScenario(origin, installed, durationSeconds, dir
       output.sessions.push({ ...completed, expectedDuration: fragmentCount }); output.checks.push('installed-native-capture-and-idempotent-stop');
       const interrupted = await request('capture.open', { tabId: tab.id, sourceContextId: context.sourceContextId, source: same, directory });
       await append(same);
-      await until(async () => (await request('capture.list')).find(session => session.id === interrupted.id && session.bytes > 0), 'pre-navigation durable bytes');
+      await durable(interrupted.id, 'pre-navigation durable bytes');
       await execute(tab.id, same.frameId, () => { location.href = location.origin + '/player?interrupted=1'; });
       const partial = await until(async () => (await request('capture.list')).find(session => session.id === interrupted.id && ['partial', 'interrupted'].includes(session.state)), 'selected-frame navigation interruption');
       if (!partial.bytes) throw new Error('Navigation discarded durable bytes');
@@ -103,6 +123,10 @@ export async function runCaptureScenario(origin, installed, durationSeconds, dir
     output.checks.push('stale-document-rejected');
     await fetch(origin + '/report', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ok: true, ...output }) });
   } catch (error) {
+    if (tab) for (const source of output.sources) {
+      try { output.diagnostics.push({ frameId: source.frameId, ...await execute(tab.id, source.frameId, () => ({ events: window.captureDiagnostics || [], nextFragment: window.captureFixture?.nextFragment, sourceState: window.captureFixture?.source.readyState })) }); }
+      catch (reason) { output.diagnostics.push({ frameId: source.frameId, error: reason.message }); }
+    }
     await fetch(origin + '/report', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ok: false, error: error.message, stack: error.stack, ...output }) });
   } finally { if (tab) await api.tabs.remove(tab.id).catch(() => {}); }
 }
