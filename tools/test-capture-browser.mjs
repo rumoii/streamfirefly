@@ -37,7 +37,7 @@ let child, server, sockets, timer, failure, browserOutput = '';
 const socketState = { bytes: 0, chunks: 0, finished: false, error: '' };
 const diagnostics = [], memory = [];
 try {
-  const sampleResult = spawnSync(ffmpeg, ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=160x90:rate=10', '-t', String(Math.max(2, duration + 3)), '-c:v', 'libx264', '-g', '10', '-pix_fmt', 'yuv420p', '-movflags', 'frag_keyframe+empty_moov', '-f', 'mp4', 'pipe:1'], { windowsHide: true, maxBuffer: 128 * 1024 * 1024, timeout: 300000 });
+  const sampleResult = spawnSync(ffmpeg, ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=160x90:rate=10', '-t', String(Math.max(2, duration + 3)), '-c:v', 'libx264', '-g', '10', '-pix_fmt', 'yuv420p', '-movflags', 'frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4', 'pipe:1'], { windowsHide: true, maxBuffer: 128 * 1024 * 1024, timeout: 300000 });
   assert.equal(sampleResult.status, 0, String(sampleResult.stderr));
   const initialization = [], fragments = []; let fragment = null;
   for (let offset = 0; offset < sampleResult.stdout.length;) {
@@ -92,9 +92,11 @@ try {
           if (!authenticated) { assert.equal(JSON.parse(data).token, 'a'.repeat(64)); authenticated = true; socket.send('{"ready":true}'); return; }
           if (!binary) { if (data.toString() === 'finish') socketState.finished = true; return; }
           const length = data.readUInt32LE(0), metadata = JSON.parse(data.subarray(4, 4 + length));
-          assert.deepEqual(data.subarray(4 + length), sample); assert.equal(metadata.sequence, 0);
-          socketState.bytes += sample.length; socketState.chunks++;
-          socket.send(JSON.stringify({ track: metadata.track, sequence: metadata.sequence, bytes: sample.length }));
+          const expected = [sample, fragments[1], fragments[2]][socketState.chunks];
+          assert.ok(expected, 'Unexpected capture chunk');
+          assert.deepEqual(data.subarray(4 + length), expected); assert.equal(metadata.sequence, 0);
+          socketState.bytes += expected.length; socketState.chunks++;
+          socket.send(JSON.stringify({ track: metadata.track, sequence: metadata.sequence, bytes: expected.length }));
         } catch (error) { socketState.error = error.message; socket.close(); }
       });
     });
@@ -115,7 +117,7 @@ try {
   child.stdout.on('data', chunk => { browserOutput = (browserOutput + chunk).slice(-16000); }); child.stderr.on('data', chunk => { browserOutput = (browserOutput + chunk).slice(-16000); });
   const result = await Promise.race([report, new Promise((_, reject) => { timer = setTimeout(() => reject(Error('Browser capture report timed out: ' + browserOutput)), (duration + 120) * 1000); child.once('error', reject); child.once('exit', code => reject(Error('Browser runner exited: ' + code + '\n' + browserOutput))); })]);
   assert.equal(result.ok, true, JSON.stringify(result));
-  if (!installed) { assert.equal(socketState.error, ''); assert.equal(socketState.finished, true); assert.equal(socketState.chunks, 1); assert.equal(socketState.bytes, sample.length); }
+  if (!installed) { assert.equal(socketState.error, ''); assert.equal(socketState.finished, true); assert.equal(socketState.chunks, 3); assert.equal(socketState.bytes, sample.length + fragments[1].length + fragments[2].length); }
   else {
     const ffprobe = process.env.STREAMFIREFLY_FFPROBE_EXE; assert.ok(ffprobe && fs.existsSync(ffprobe), 'FFprobe required for installed output validation');
     for (const session of result.sessions) for (const output of session.outputs) {

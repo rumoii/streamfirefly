@@ -7,7 +7,11 @@ export async function runCaptureScenario(origin, installed, durationSeconds, dir
     throw new Error(`${label}: ${last?.message || 'timeout'}`);
   }
   async function request(type, payload) { const result = await api.runtime.sendMessage({ type, payload }); if (!result?.ok) throw new Error(`${type}: ${result?.error}`); return result.value; }
-  async function execute(tabId, frameId, func, args = []) { const results = await api.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, world: 'MAIN', func, args }); return results[0]?.result; }
+  async function execute(tabId, frameId, func, args = []) {
+    const results = await api.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, world: 'MAIN', func, args });
+    if (!results.length || results[0].error) throw new Error(`Frame ${frameId} execution failed: ${results[0]?.error?.message || 'missing result'}`);
+    return results[0].result;
+  }
   const output = { installed, durationSeconds, sources: [], sessions: [], checks: [], progress: [], diagnostics: [] };
   async function durable(id, label) {
     const deadline = Date.now() + 30000;
@@ -61,17 +65,33 @@ export async function runCaptureScenario(origin, installed, durationSeconds, dir
     if (disabled.keys.length || disabled.siteRemembered || disabled.enabled) throw new Error('Deep search cleanup failed');
     output.checks.push('deep-frame-state-and-key-cleanup');
     const context = await request('capture.context', { tabId: tab.id });
-    const append = async (source, repeats = 1) => execute(tab.id, source.frameId, async (base, count) => {
-      const fixture = window.captureFixture;
-      for (let index = 0; index < count; index++) {
-        const fragment = fixture.nextFragment || 0;
-        const response = await fetch(base + '/sample.mp4?fragment=' + fragment);
-        if (!response.ok) throw new Error('Media fixture fragment unavailable');
-        const sample = await response.arrayBuffer(); fixture.nextFragment = fragment + 1;
-        await new Promise((resolve, reject) => { fixture.buffer.addEventListener('updateend', resolve, { once: true }); fixture.buffer.addEventListener('error', reject, { once: true }); fixture.buffer.appendBuffer(sample); });
-        if (fixture.buffer.buffered.length && fixture.buffer.buffered.end(0) > 30) await new Promise(resolve => { fixture.buffer.addEventListener('updateend', resolve, { once: true }); fixture.buffer.remove(0, fixture.buffer.buffered.end(0) - 10); });
-      }
-    }, [origin, repeats]);
+    const append = async (source, repeats = 1) => {
+      const result = await execute(tab.id, source.frameId, async (base, count) => {
+        const fixture = window.captureFixture;
+        const update = operation => new Promise((resolve, reject) => {
+          const finish = error => { clearTimeout(timer); fixture.buffer.removeEventListener('updateend', completed); fixture.buffer.removeEventListener('error', failed); error ? reject(error) : resolve(); };
+          const completed = () => finish();
+          const failed = () => finish(new Error(fixture.video.error?.message || 'SourceBuffer rejected fixture data'));
+          const timer = setTimeout(() => finish(new Error('SourceBuffer update timeout')), 5000);
+          fixture.buffer.addEventListener('updateend', completed); fixture.buffer.addEventListener('error', failed);
+          try { operation(); } catch (error) { finish(error); }
+        });
+        try {
+          for (let index = 0; index < count; index++) {
+            if (fixture.video.error) throw new Error(fixture.video.error.message);
+            const fragment = fixture.nextFragment || 0;
+            const response = await fetch(base + '/sample.mp4?fragment=' + fragment);
+            if (!response.ok) throw new Error('Media fixture fragment unavailable');
+            const sample = await response.arrayBuffer();
+            await update(() => fixture.buffer.appendBuffer(sample));
+            fixture.nextFragment = fragment + 1;
+            if (fixture.buffer.buffered.length && fixture.buffer.buffered.end(0) > 30) await update(() => fixture.buffer.remove(0, fixture.buffer.buffered.end(0) - 10));
+          }
+          return { ok: true };
+        } catch (error) { return { ok: false, error: error.message, mediaError: fixture.video.error?.message, sourceState: fixture.source.readyState, nextFragment: fixture.nextFragment }; }
+      }, [origin, repeats]);
+      if (!result?.ok) throw new Error('Media append failed: ' + JSON.stringify(result));
+    };
     if (!installed) {
       const url = api.runtime.getURL('offscreen.html');
       if (!(await api.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'], documentUrls: [url] })).length) await api.offscreen.createDocument({ url: 'offscreen.html', reasons: ['WORKERS'], justification: 'Isolated capture frame test' });
@@ -79,12 +99,25 @@ export async function runCaptureScenario(origin, installed, durationSeconds, dir
       if (!open?.ok) throw new Error('Transport open: ' + JSON.stringify(open));
       const start = await api.tabs.sendMessage(tab.id, { type: 'capture.start', id: 'frame-test', documentToken: cross.documentToken, sourceId: cross.id }, { frameId: cross.frameId });
       if (!start?.ok) throw new Error(start?.error);
-      await append(same); await append(cross);
+      await append(same, 2); await append(cross);
       const stopped = await api.tabs.sendMessage(tab.id, { type: 'capture.stop', id: 'frame-test', documentToken: cross.documentToken }, { frameId: cross.frameId });
       if (!stopped?.ok) throw new Error(stopped?.error);
       const closed = await api.runtime.sendMessage({ type: 'test.capture.transport', operation: 'close', payload: { id: 'frame-test' } });
       if (!closed?.ok) throw new Error(closed?.error);
       output.checks.push('cross-frame-transport-and-source-isolation');
+      for (const [index, selected] of [cross, same].entries()) {
+        const id = `restart-${index}`;
+        const reopened = await api.runtime.sendMessage({ type: 'test.capture.transport', operation: 'open', payload: { id, tabId: tab.id, frameId: selected.frameId, documentId: selected.documentId, documentToken: selected.documentToken, endpoint: origin.replace('http:', 'ws:'), token: 'a'.repeat(64) } });
+        if (!reopened?.ok) throw new Error('Restart transport failed');
+        const restarted = await api.tabs.sendMessage(tab.id, { type: 'capture.start', id, documentToken: selected.documentToken, sourceId: selected.id }, { frameId: selected.frameId });
+        if (!restarted?.ok) throw new Error('Restart probe failed');
+        await append(selected);
+        const drained = await api.tabs.sendMessage(tab.id, { type: 'capture.stop', id, documentToken: selected.documentToken }, { frameId: selected.frameId });
+        if (!drained?.ok) throw new Error('Restart drain failed');
+        const released = await api.runtime.sendMessage({ type: 'test.capture.transport', operation: 'close', payload: { id } });
+        if (!released?.ok) throw new Error('Restart close failed');
+      }
+      output.checks.push('same-source-restart-and-frame-switch');
     } else {
       const opened = await request('capture.open', { tabId: tab.id, sourceContextId: context.sourceContextId, source: cross, directory });
       const duplicate = await api.runtime.sendMessage({ type: 'capture.open', payload: { tabId: tab.id, sourceContextId: context.sourceContextId, source: cross } });
