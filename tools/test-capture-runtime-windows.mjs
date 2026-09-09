@@ -10,12 +10,26 @@ import { OwnedCaptureProcesses, errorDetails, processSnapshot, removeCaptureDire
 assert.equal(process.platform, 'win32', 'Real process ownership tests require Windows');
 
 test('real PowerShell timeout and execution failures retain diagnostics', async () => {
-  const failed = await runPowerShell("throw 'injected CIM failure'");
+  const failed = await runPowerShell("throw 'injected CIM failure'", 30000);
   assert.equal(failed.status, 1, JSON.stringify(failed));
   assert.match(failed.stderr, /injected CIM failure/);
   const timeout = await runPowerShell('Start-Sleep -Seconds 30', 1000);
   assert.equal(timeout.error.killed, true);
   assert.ok(timeout.elapsedMs < 10000);
+});
+
+test('an already exited termination target is successful without suppressing command failures', async () => {
+  let snapshots = 0;
+  const owner = new OwnedCaptureProcesses(2147483647, { run: async (script, timeout) => {
+    if (script.startsWith('$targets=')) return runPowerShell(script, timeout);
+    snapshots++;
+    return { status: 0, stdout: JSON.stringify([{ pid: snapshots < 3 ? 2147483647 : 2147483646, parentPid: 0, created: '2026-09-09T00:00:00.0000000Z', bytes: 1 }]) };
+  } });
+  await owner.sample();
+  const result = await owner.stop();
+  assert.equal(result.attempts[0].status, 0);
+  assert.equal(result.attempts[0].stderr, '');
+  assert.match(result.attempts[0].stdout, /owned-process-stop-completed/);
 });
 
 test('locked files fail within the deadline and can be removed after owned process exit', { timeout: 60000 }, async () => {
