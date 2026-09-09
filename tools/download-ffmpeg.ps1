@@ -4,10 +4,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$release = 'autobuild-2026-08-26-13-06'
+$release = 'autobuild-2026-09-08-23-15'
 $files = @{
-  x64 = @{ Name = 'ffmpeg-n8.1.2-46-g139afe709a-win64-gpl-8.1.zip'; Hash = 'f966bc2e843bcd680dedd6d1a2c0c895bab859a402c6dd107cbe72a796dfebcf' }
-  arm64 = @{ Name = 'ffmpeg-n8.1.2-46-g139afe709a-winarm64-gpl-8.1.zip'; Hash = '15d246dce2a4ab9c6cf30eb280c622d10ea46836a3f561ebf25439bbc75a5829' }
+  x64 = @{ Name = 'ffmpeg-n8.1.2-51-g7ba069f4f1-win64-gpl-8.1.zip'; Hash = '508400eb2ecfab27e2f0383817b54e2bf1946940a8aeda6fe3df9438ff511bf1' }
+  arm64 = @{ Name = 'ffmpeg-n8.1.2-51-g7ba069f4f1-winarm64-gpl-8.1.zip'; Hash = '4f33057d8dbd69e1b688fcc4137406e22388f76561eeb0628a8c5551c0edc11d' }
 }
 $item = $files[$Architecture]
 $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/$release/$($item.Name)"
