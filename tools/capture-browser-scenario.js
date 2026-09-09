@@ -131,7 +131,7 @@ export async function runCaptureScenario(origin, installed, durationSeconds, dir
         await append(cross); fragmentCount++;
         const current = await request('capture.list'); const session = current.find(item => item.id === opened.id);
         if (!session || !['armed', 'capturing'].includes(session.state)) throw new Error('Long capture unexpectedly stopped: ' + session?.state);
-        if (Date.now() >= nextHeartbeat) { const response = await fetch(origin + '/heartbeat', { method: 'POST' }); if (!response.ok) throw new Error('Capture memory bound exceeded'); nextHeartbeat = Date.now() + 30000; }
+        if (Date.now() >= nextHeartbeat) { const response = await fetch(origin + '/heartbeat', { method: 'POST' }); if (!response.ok) throw new Error('Capture heartbeat failed: ' + await response.text()); nextHeartbeat = Date.now() + 30000; }
         await pause(Math.min(1000, Math.max(0, deadline - Date.now())));
       }
       await Promise.all([request('capture.close', { tabId: tab.id, id: opened.id }), request('capture.close', { tabId: tab.id, id: opened.id })]);

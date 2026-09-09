@@ -86,9 +86,13 @@ if ($LASTEXITCODE -ne 0) { throw '框架捕捉验证失败' }
 
 ## 安装态与长期验收入口
 
-`npm run test:capture:installed` 在隔离 Windows CI 中使用实际包内扩展、已安装 Host 和 FFmpeg，按专用测试扩展 ID 注册；执行 Chrome、Edge 的真实 Native Messaging 控制和 WebSocket 捕捉，校验 FFprobe 输出及导航后片段保留。
+`npm run test:capture:installed` 在隔离 Windows CI 中使用实际包内扩展、已安装 Host 和 FFmpeg，按专用测试扩展 ID 注册；执行 Chrome 60 秒和 Edge 短链路的真实 Native Messaging 控制和 WebSocket 捕捉，校验 FFprobe 输出及导航后片段保留。Chrome 必须取得至少两次有效内存采样；短链路不替代两小时门槛。
 
 `npm run test:capture:soak` 执行 7200 秒持续捕捉。测试生成连续 fMP4 片段，移除播放器旧缓冲，Native 持续落盘；每 30 秒采样自有进程树内存，限制总工作集 2 GiB、预热后增长 512 MiB，结束检查输出时长、容器和视频轨道。该固定夹具门槛不代表所有真实网站的内存预算。
+
+采样和进程清理由 `tools/capture-test-runtime.mjs` 管理；场景、HTTP 服务与媒体检查仍由捕捉测试脚本编排，不依赖产品模块。异步采样单次上限 10 秒，失败记录退出状态、信号、错误输出、耗时及所属进程身份，不补零或跳过。进程身份使用 PID 与创建时间，清理只终止核实归属的进程，等待退出后再删除测试目录。成功报告必须在清理完成后生成；主流程、清理和报告写入错误分别保留。
+
+`npm run test:capture:runtime` 覆盖采样异常、进程身份、内存边界和最终报告，接入 `test:unit`。`npm run test:capture:runtime:windows` 验证实际 PowerShell、临时进程树、父进程提前退出、无关进程保护与文件锁释放，接入 Windows 打包 CI，不修改本机 Native 注册。
 
 这两个入口要求 `GITHUB_ACTIONS=true`、`STREAMFIREFLY_ISOLATED_INSTALL_TEST=1`，扩展和 Host 必须来自 RUNNER_TEMP 中的包解压与安装目录。需提供 `STREAMFIREFLY_NATIVE_EXE`、`STREAMFIREFLY_EXTENSION_DIR`、`STREAMFIREFLY_FFMPEG_EXE` 和 `STREAMFIREFLY_FFPROBE_EXE`。本地误调用会在修改注册表之前失败。
 
@@ -115,6 +119,6 @@ if ($LASTEXITCODE -ne 0) { throw '框架捕捉验证失败' }
 
 安装态入口仅限隔离 Windows CI：不得本地伪造 `GITHUB_ACTIONS` 和隔离开关绕过保护，不得覆盖用户已有 Host 注册。Native 与扩展路径必须位于 `RUNNER_TEMP`；FFmpeg 使用包内安装文件，FFprobe 使用工作流指定的工具路径，不得用源码 Debug Host 替代包内产物。
 
-工作流将 JSON 上传到 `Capture-evidence-<run_id>`，当前保留期为 14 天；失败时也尝试上传，但缺少报告不能视为通过。验收记录应引用实际文件，短链路通常为 `chrome-installed-0.json`、`edge-installed-0.json`，长期测试为 `chrome-installed-7200.json`，失败报告带 `-failed` 后缀。安装包 artifact 与证据 artifact 分离，产出 artifact 不等于发布 Release。
+工作流将 JSON 上传到 `Capture-evidence-<run_id>`，当前保留期为 14 天；失败时也尝试上传，但缺少报告不能视为通过。验收记录应引用实际文件，短链路为 `chrome-installed-60.json`、`edge-installed-0.json`，长期测试为 `chrome-installed-7200.json`，失败报告带 `-failed` 后缀；旧记录的 Chrome 短链路文件为 `chrome-installed-0.json`。安装包 artifact 与证据 artifact 分离，产出 artifact 不等于发布 Release。
 
 身份隔离决策保持 `proposed`，安装态与两小时验收完成前不得标记 `implemented`。发布、版本调整和私人路线图不属于文档交接操作。

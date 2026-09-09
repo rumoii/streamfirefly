@@ -8,6 +8,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { buildSync } from 'esbuild';
 import { WebSocketServer } from 'ws';
+import { OwnedCaptureProcesses, checkMemoryBudget, errorDetails, finishCaptureTest, removeCaptureDirectory, resetCaptureReports } from './capture-test-runtime.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const argumentsList = process.argv.slice(2);
 const option = name => argumentsList[argumentsList.indexOf(name) + 1];
@@ -33,10 +34,14 @@ const stage = path.join(directory, 'extension'), profile = path.join(directory, 
 fs.mkdirSync(stage); fs.mkdirSync(profile); fs.mkdirSync(downloads);
 const key = generateKeyPairSync('rsa', { modulusLength: 2048 }).publicKey.export({ type: 'spki', format: 'der' });
 const extensionId = [...createHash('sha256').update(key).digest('hex').slice(0, 32)].map(value => String.fromCharCode(97 + parseInt(value, 16))).join('');
-let child, server, sockets, timer, failure, browserOutput = '';
+let child, ownedProcesses, processReady, server, sockets, timer, failure, result, stopping = false, browserOutput = '', soakStarted;
+const reportPath = path.join(root, `test-results/capture/${browser}-${installed ? 'installed' : 'transport'}-${duration}.json`);
+resetCaptureReports(reportPath);
+const log = message => console.log(`[${browser} capture ${duration}s] ${message}`);
 const socketState = { bytes: 0, chunks: 0, finished: false, error: '' };
 const diagnostics = [], memory = [];
 try {
+  log('generating media fixture');
   const sampleResult = spawnSync(ffmpeg, ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=160x90:rate=10', '-t', String(Math.max(2, duration + 3)), '-c:v', 'libx264', '-g', '10', '-pix_fmt', 'yuv420p', '-movflags', 'frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4', 'pipe:1'], { windowsHide: true, maxBuffer: 128 * 1024 * 1024, timeout: 300000 });
   assert.equal(sampleResult.status, 0, String(sampleResult.stderr));
   const initialization = [], fragments = []; let fragment = null;
@@ -54,6 +59,7 @@ try {
   let resolveReport; const report = new Promise(resolve => { resolveReport = resolve; });
   server = http.createServer(async (request, response) => {
     try {
+      if (stopping) { response.writeHead(503).end('Capture test is stopping'); return; }
       response.setHeader('access-control-allow-origin', '*');
       if (request.url.startsWith('/sample.mp4')) { const index = Number(new URL(request.url, 'http://fixture').searchParams.get('fragment') || 0); if (!Number.isInteger(index) || !fragments[index]) { response.writeHead(404).end(); return; } response.writeHead(200, { 'content-type': 'video/mp4' }).end(index === 0 ? sample : fragments[index]); return; }
       if (request.url === '/frames') { response.writeHead(200, { 'content-type': 'text/html' }).end(`<html><body>Main player<iframe src="${origin}/player"></iframe><iframe src="${origin.replace('127.0.0.1', 'localhost')}/player"></iframe></body></html>`); return; }
@@ -61,10 +67,12 @@ try {
       if (request.method === 'OPTIONS') { response.setHeader('access-control-allow-headers', 'content-type'); response.writeHead(204).end(); return; }
       if (request.url === '/heartbeat' && installed) {
         if (request.headers.origin !== `chrome-extension://${extensionId}`) { response.writeHead(403).end(); return; }
-        const measured = spawnSync('powershell.exe', ['-NoProfile', '-Command', `$processes=Get-CimInstance Win32_Process; $owned=@(${child.pid}); do { $next=@($processes | Where-Object { $_.ParentProcessId -in $owned -and $_.ProcessId -notin $owned } | ForEach-Object { $_.ProcessId }); $owned += $next } while($next.Count); ($processes | Where-Object { $_.ProcessId -in $owned } | Measure-Object WorkingSetSize -Sum).Sum`], { windowsHide: true, encoding: 'utf8', timeout: 10000 });
-        const bytes = Number(measured.stdout.trim()); if (measured.status !== 0 || !Number.isFinite(bytes) || bytes <= 0) throw Error('Owned process memory measurement failed');
-        memory.push({ at: Date.now(), bytes });
-        if (bytes > 2 * 1024 ** 3 || memory.length > 10 && bytes - memory[5].bytes > 512 * 1024 ** 2) throw Error('Owned browser and Host memory exceeded soak budget');
+        await processReady;
+        soakStarted ??= Date.now();
+        const measured = await ownedProcesses.sample();
+        memory.push(measured);
+        log(`soak elapsed=${Math.round((Date.now() - soakStarted) / 1000)}s samples=${memory.length} memoryMiB=${(measured.bytes / 1024 ** 2).toFixed(2)} samplingMs=${measured.elapsedMs}`);
+        checkMemoryBudget(memory);
         response.end('ok'); return;
       }
       if (request.url === '/report' || request.url === '/register') {
@@ -78,7 +86,12 @@ try {
         response.end('registered'); return;
       }
       response.writeHead(404).end();
-    } catch (error) { response.writeHead(500).end('fixture failed'); resolveReport({ ok: false, error: error.message }); }
+    } catch (error) {
+      failure ??= error;
+      console.error(JSON.stringify(errorDetails(error)));
+      response.writeHead(500).end(error.message);
+      resolveReport({ ok: false, error: error.message });
+    }
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
@@ -113,10 +126,20 @@ try {
   fs.writeFileSync(path.join(stage, 'manifest.json'), JSON.stringify(manifest));
   const candidates = browser === 'chrome' ? [process.env.CHROME_BINARY, 'C:/Program Files/Google/Chrome/Application/chrome.exe'] : [process.env.EDGE_BINARY, 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'];
   const executable = candidates.find(value => value && fs.existsSync(value)); assert.ok(executable, 'Browser executable not found');
+  log('starting isolated browser');
   child = spawn(process.execPath, [path.join(root, 'node_modules/web-ext/bin/web-ext.js'), 'run', '--source-dir', stage, '--no-reload', '--no-input', '--target', 'chromium', '--chromium-binary', executable, '--chromium-profile', profile, '--profile-create-if-missing', '--keep-profile-changes', '--args=--no-first-run', '--args=--window-position=-32000,-32000'], { cwd: root, env: { ...process.env, LOCALAPPDATA: directory }, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   child.stdout.on('data', chunk => { browserOutput = (browserOutput + chunk).slice(-16000); }); child.stderr.on('data', chunk => { browserOutput = (browserOutput + chunk).slice(-16000); });
-  const result = await Promise.race([report, new Promise((_, reject) => { timer = setTimeout(() => reject(Error('Browser capture report timed out: ' + browserOutput)), (duration + 120) * 1000); child.once('error', reject); child.once('exit', code => reject(Error('Browser runner exited: ' + code + '\n' + browserOutput))); })]);
+  const outcome = Promise.race([report, new Promise((_, reject) => { timer = setTimeout(() => reject(Error('Browser capture report timed out: ' + browserOutput)), (duration + 120) * 1000); child.once('error', reject); child.once('exit', code => reject(Error('Browser runner exited: ' + code + '\n' + browserOutput))); })]);
+  outcome.catch(() => {});
+  if (child.pid) {
+    ownedProcesses = new OwnedCaptureProcesses(child.pid, { rootExited: () => child.exitCode !== null || child.signalCode !== null });
+    processReady = ownedProcesses.sample();
+    await processReady;
+  }
+  result = await outcome;
   assert.equal(result.ok, true, JSON.stringify(result));
+  if (duration >= 60) assert.ok(memory.length >= 2, 'Repeated installed memory sampling required');
+  log('validating capture output');
   if (!installed) { assert.equal(socketState.error, ''); assert.equal(socketState.finished, true); assert.equal(socketState.chunks, 3); assert.equal(socketState.bytes, sample.length + fragments[1].length + fragments[2].length); }
   else {
     const ffprobe = process.env.STREAMFIREFLY_FFPROBE_EXE; assert.ok(ffprobe && fs.existsSync(ffprobe), 'FFprobe required for installed output validation');
@@ -126,20 +149,21 @@ try {
       const media = JSON.parse(inspected.stdout); assert.ok(Math.abs(Number(media.format.duration) - session.expectedDuration) <= 0.25, 'Output duration differs from the delivered media timeline'); assert.match(media.format.format_name, /matroska/); assert.equal(media.streams.filter(stream => stream.codec_type === 'video').length, 1); diagnostics.push(media);
     }
   }
-  fs.mkdirSync(path.join(root, 'test-results/capture'), { recursive: true });
-  fs.writeFileSync(path.join(root, `test-results/capture/${browser}-${installed ? 'installed' : 'transport'}-${duration}.json`), JSON.stringify({ ...result, socketState: installed ? undefined : socketState, media: diagnostics, memory }, null, 2));
-  console.log(`${browser} capture ${installed ? 'installed Native Messaging + real Host + FFmpeg' : 'test WebSocket receiver'} passed: ${result.checks.join(', ')}`);
 } catch (error) {
-  failure = error;
-  fs.mkdirSync(path.join(root, 'test-results/capture'), { recursive: true });
-  fs.writeFileSync(path.join(root, `test-results/capture/${browser}-${installed ? 'installed' : 'transport'}-${duration}-failed.json`), JSON.stringify({ error: error.message, installed, duration, socketState, memory, browserOutput }, null, 2));
+  failure ??= error;
 }
 finally {
+  stopping = true;
   clearTimeout(timer);
-  if (child && child.exitCode == null) { spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); await new Promise(resolve => setTimeout(resolve, 500)); }
-  if (sockets) { for (const socket of sockets.clients) socket.terminate(); await new Promise(resolve => sockets.close(resolve)); }
-  if (server?.listening) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
-  assert.equal(path.dirname(fs.realpathSync(directory)), fs.realpathSync(os.tmpdir())); assert.ok(path.basename(directory).startsWith('streamfirefly-capture-browser-'));
-  fs.rmSync(directory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+  log('stopping owned processes and releasing temporary resources');
+  await finishCaptureTest({ reportPath, failure,
+    result: { ...result, installed, duration, socketState, media: diagnostics, memory, browserOutput },
+    cleanup: [
+      ['processes', async () => ownedProcesses?.stop()],
+      ['websockets', async () => { if (sockets) { for (const socket of sockets.clients) socket.terminate(); await new Promise(resolve => sockets.close(resolve)); } }],
+      ['http', async () => { if (server?.listening) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } }],
+      ['directory', () => removeCaptureDirectory(directory)],
+    ],
+  });
 }
-if (failure) throw failure;
+log(`passed: ${result.checks.join(', ')}`);

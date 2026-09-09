@@ -74,6 +74,10 @@ for (const expected of [
 for (const expected of ['STREAMFIREFLY_EXTENSION_DIR', 'STREAMFIREFLY_FFPROBE_EXE', 'STREAMFIREFLY_ISOLATED_INSTALL_TEST', 'npm run test:capture:installed', 'npm run test:capture:soak', 'capture_soak_seconds']) requireText(workflow, expected, 'Installed capture workflow');
 for (const expected of ['npm run test:discovery', 'npm run test:discovery:native', 'Discovery-evidence-${{ github.run_id }}', 'test-results/generated-hls-browser.json', 'test-results/generated-hls-native.json']) requireText(workflow, expected, 'Discovery release evidence');
 const scripts = JSON.parse(read('package.json')).scripts;
+requireText(scripts['test:unit'], 'npm run test:capture:runtime', 'Capture runtime regression entry');
+requireText(workflow, 'npm run test:capture:runtime:windows', 'Windows capture runtime regression entry');
+requireText(scripts['test:capture:installed'], '--browser chrome --installed --duration 60', 'Repeated installed capture sampling');
+requireText(scripts['test:capture:soak'], '--duration 7200', 'Full capture soak requirement');
 requireText(scripts['test:native'], 'npm run test:dash:native', 'Native regression entry');
 requireText(scripts['test:discovery:native'], 'npm run test:dash:discovery', 'Discovery download entry');
 requireText(scripts['test:dash:native'], 'node tools/test-native-dash.mjs', 'DASH Native entry');

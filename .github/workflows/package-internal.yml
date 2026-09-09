@@ -75,6 +75,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run test:unit
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:capture:runtime:windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run test:ui:browser
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run test:browsers
