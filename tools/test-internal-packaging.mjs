@@ -6,7 +6,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = relative => fs.readFileSync(path.join(root, relative), 'utf8').replaceAll('\r\n', '\n');
 const requireText = (text, expected, label) => { if (!text.includes(expected)) throw new Error(`${label} is missing: ${expected}`); };
 
-const bundleVersion = '0.10.0-beta.3';
+const bundleVersion = '0.10.0-beta.4';
 const packageScript = read('tools/package-internal-test.ps1');
 const auditScript = read('tools/audit-internal-test.ps1');
 const nativeTest = read('tools/test-native.mjs');
