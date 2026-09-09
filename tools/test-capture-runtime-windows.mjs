@@ -5,13 +5,13 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { test } from 'node:test';
-import { OwnedCaptureProcesses, processSnapshot, removeCaptureDirectory, runPowerShell } from './capture-test-runtime.mjs';
+import { OwnedCaptureProcesses, errorDetails, processSnapshot, removeCaptureDirectory, runPowerShell } from './capture-test-runtime.mjs';
 
 assert.equal(process.platform, 'win32', 'Real process ownership tests require Windows');
 
 test('real PowerShell timeout and execution failures retain diagnostics', async () => {
   const failed = await runPowerShell("throw 'injected CIM failure'");
-  assert.equal(failed.status, 1);
+  assert.equal(failed.status, 1, JSON.stringify(failed));
   assert.match(failed.stderr, /injected CIM failure/);
   const timeout = await runPowerShell('Start-Sleep -Seconds 30', 1000);
   assert.equal(timeout.error.killed, true);
@@ -30,7 +30,7 @@ test('locked files fail within the deadline and can be removed after owned proce
     await owner.sample();
     await assert.rejects(removeCaptureDirectory(directory, 0), error => ['EPERM', 'EBUSY', 'EACCES'].includes(error.code));
     const removal = removeCaptureDirectory(directory);
-    await Promise.all([removal, owner.stop()]);
+    await Promise.all([removal, owner.stop().catch(error => { console.error(JSON.stringify(errorDetails(error))); throw error; })]);
     assert.equal(fs.existsSync(directory), false);
   } finally {
     await owner.stop();
