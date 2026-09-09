@@ -66,6 +66,7 @@ try {
   }, { origin });
   await page.goto(origin);
   await page.getByText('本地视频一', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '更多筛选' }).click();
   await page.getByRole('spinbutton', { name: '最短时长（秒）' }).fill('60');
   await page.getByText('本地视频一', { exact: true }).waitFor({ state: 'hidden' });
   await page.getByText('本地视频二', { exact: true }).waitFor();

@@ -120,7 +120,7 @@ jobs:
             npm run test:native
             if ($LASTEXITCODE -ne 0) { throw 'Packaged Native Host protocol test failed' }
             npm run test:discovery:native
-            if ($LASTEXITCODE -ne 0) { throw 'Generated HLS discovery and packaged Native download failed' }
+            if ($LASTEXITCODE -ne 0) { throw 'Generated HLS/DASH discovery and packaged Native download failed' }
             npm run test:capture:browser
             if ($LASTEXITCODE -ne 0) { throw 'Chrome capture transport test failed' }
             npm run test:capture:installed
@@ -166,5 +166,8 @@ jobs:
           path: |
             test-results/generated-hls-browser.json
             test-results/generated-hls-native.json
+            test-results/generated-dash-browser.json
+            test-results/native-dash.json
+            test-results/native-dash-browser.json
           if-no-files-found: warn
           retention-days: 14

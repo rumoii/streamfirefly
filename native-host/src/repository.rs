@@ -53,6 +53,10 @@ pub(crate) fn load_repository(path: &Path) -> TaskRepository {
                 .keys()
                 .any(|name| is_sensitive_request_header(name));
         strip_sensitive_headers(task);
+        if task.dash_selection && !matches!(task.state.as_str(), "succeeded" | "cancelled") {
+            task.resume_requirement = Some("dash_reparse_required".into());
+            task.message = Some("DASH 计划未持久化，请回到资源页重新解析并创建任务".into());
+        }
         if matches!(
             task.state.as_str(),
             "running"
@@ -70,7 +74,9 @@ pub(crate) fn load_repository(path: &Path) -> TaskRepository {
             task.state = if paused { "paused" } else { "interrupted" }.into();
             task.phase = "interrupted".into();
             task.error = Some("native_host_restarted".into());
-            task.resume_requirement = if !recoverable_hls {
+            task.resume_requirement = if task.dash_selection {
+                Some("dash_reparse_required".into())
+            } else if !recoverable_hls {
                 had_credentials.then(|| "authorization_required".into())
             } else if had_credentials && task.requires_key_override {
                 Some("authorization_and_key_required".into())
@@ -89,7 +95,9 @@ pub(crate) fn load_repository(path: &Path) -> TaskRepository {
                 }
                 .into()
             });
-            task.message = Some(if !recoverable_hls {
+            task.message = Some(if task.dash_selection {
+                "DASH 计划未持久化，请回到资源页重新解析并创建任务".into()
+            } else if !recoverable_hls {
                 if had_credentials {
                     "登录凭据未持久化，请从页面重新发起下载"
                 } else {
@@ -171,6 +179,7 @@ pub(crate) fn sanitized_task(task: &Task) -> Task {
     strip_sensitive_headers(&mut copy);
     copy.inline_manifest = None;
     copy.hls_plan = None;
+    copy.dash_plan = None;
     if copy.outputs.len() <= 1 {
         if let Some(primary) = copy
             .outputs

@@ -40,8 +40,22 @@ describe("capture and deep-search session state", () => {
   it("shows remembered sites and distinguishes injection failure from no keys", async () => {
     send.mockImplementation(async message => ({ ok: true, value: message.type === "deep.status" ? deepState : { ...deepState, enabled: true, requiresReload: true, frames: [{ frameId: 2, url: source.url, state: "failed", error: "permission denied" }] } }));
     const wrapper = mount(DeepSearchPanel, { props: { context } }); await flushPromises();
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+    await wrapper.get(".deep-search-trigger").trigger("click");
     expect((wrapper.find('input[type="checkbox"]').element as HTMLInputElement).checked).toBe(true);
-    await wrapper.findAll("button").find(button => button.text() === "开启")!.trigger("click"); await flushPromises();
+    expect(send.mock.calls.some(([message]) => message.type === "deep.set")).toBe(false);
+    await wrapper.findAll("button").find(button => button.text() === "开启深搜")!.trigger("click"); await flushPromises();
     expect(wrapper.text()).toContain("注入失败"); expect(wrapper.text()).toContain("permission denied"); expect(wrapper.text()).toContain("刷新来源页面"); expect(wrapper.text()).toContain("不代表此页面不存在资源"); wrapper.unmount();
+  });
+  it("shows request errors without opening details and clears them after a successful refresh", async () => {
+    send.mockResolvedValueOnce({ ok: false, error: "permission denied" }).mockResolvedValue({ ok: true, value: deepState });
+    const wrapper = mount(DeepSearchPanel, { props: { context } }); await flushPromises();
+    expect(wrapper.get('[role="alert"]').text()).toContain("permission denied");
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+    await wrapper.get(".deep-search-trigger").trigger("click");
+    await wrapper.findAll("button").find(button => button.text() === "刷新状态")!.trigger("click"); await flushPromises();
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("permission denied");
+    wrapper.unmount();
   });
 });

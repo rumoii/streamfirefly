@@ -1,10 +1,10 @@
 import { discoveryCases, discoveryManifest, stimulateDiscovery } from './discovery-cases.mjs';
 
 export function discoveryReporter(origin) {
-  return `(${runDiscoverySuite.toString()})(${JSON.stringify(origin)}, ${JSON.stringify(discoveryCases)}, ${discoveryManifest.toString()}, ${stimulateDiscovery.toString()}, ${JSON.stringify(process.env.DISCOVERY_MEDIA_ORIGIN || origin)});`;
+  return `(${runDiscoverySuite.toString()})(${JSON.stringify(origin)}, ${JSON.stringify(discoveryCases)}, ${discoveryManifest.toString()}, ${stimulateDiscovery.toString()}, ${JSON.stringify(process.env.DISCOVERY_MEDIA_ORIGIN || origin)}, ${JSON.stringify(process.env.DISCOVERY_DASH_MANIFEST || null)});`;
 }
 
-async function runDiscoverySuite(origin, cases, manifest, stimulate, mediaOrigin) {
+async function runDiscoverySuite(origin, cases, manifest, stimulate, mediaOrigin, dashText) {
   const api = globalThis.browser ?? globalThis.chrome;
   
   const pause = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
@@ -37,7 +37,7 @@ async function runDiscoverySuite(origin, cases, manifest, stimulate, mediaOrigin
       const frameId = spec.context?.endsWith('frame') ? frames.find(frame => frame.frameId !== 0)?.frameId : 0;
       if (frameId == null) throw new Error(spec.id + ': frame missing');
       await wait(() => execute(tab.id, frameId, () => Boolean(window.__streamFireflyAdvancedProbeInstalled), []), spec.id + ': probe ready');
-      const text = spec.format === 'dash' ? '<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT2S"><Period><AdaptationSet mimeType="video/mp4"><Representation id="video" bandwidth="1000"><BaseURL>' + mediaOrigin + '/discovery-media/video.mp4</BaseURL></Representation></AdaptationSet></Period></MPD>' : manifest(mediaOrigin);
+      const text = spec.format === 'dash' ? dashText || '<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT2S"><Period><AdaptationSet mimeType="video/mp4"><Representation id="video" bandwidth="1000"><BaseURL>' + mediaOrigin + '/discovery-media/video.mp4</BaseURL></Representation></AdaptationSet></Period></MPD>' : manifest(mediaOrigin);
       let returned;
       if (spec.context === 'worker') {
         returned = await execute(tab.id, frameId, (kind, text, base) => new Promise((resolve, reject) => {

@@ -56,6 +56,7 @@ export function candidatePayload(candidate: MediaCandidate) {
 }
 
 export async function prepareDefaultDownload(candidate: MediaCandidate, fetchManifest: ManifestLoader) {
+  if (candidate.type === "dash") throw new Error("DASH 请进入解析页面选择画质和音轨。");
   const payload = candidatePayload(candidate);
   if (candidate.type !== "hls") return { ...payload, hlsPlan: null };
   const root = candidate.inlineManifest ? { text: candidate.inlineManifest.text, url: candidate.inlineManifest.baseUrl || candidate.url } : await fetchManifest(candidate.url);

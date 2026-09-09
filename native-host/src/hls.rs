@@ -13,11 +13,7 @@ type Aes128CbcDec = cbc::Decryptor<Aes128>;
 
 pub const CHECKPOINT_VERSION: u8 = 2;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ByteRange {
-    pub start: u64,
-    pub length: u64,
-}
+pub use crate::segments::ByteRange;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct KeySpec {

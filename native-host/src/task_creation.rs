@@ -47,6 +47,7 @@ pub(crate) fn create_task(store: &TaskRuntime, payload: &Value) -> Result<Task, 
     if payload["hlsPlan"]["version"].as_u64() == Some(3) && scheduler_full(store) {
         return Err("live_capacity_unavailable");
     }
+    let dash_plan = crate::dash::parse_plan(payload)?;
     let inline_manifest = inline_manifest(payload)?;
     let hls_plan = hls_plan(payload)?;
     let hls_selection = hls_plan.is_some();
@@ -60,6 +61,16 @@ pub(crate) fn create_task(store: &TaskRuntime, payload: &Value) -> Result<Task, 
                 .is_some_and(|mime| mime.contains("mpegurl")))
     {
         return Err("hls_plan_required");
+    }
+    if dash_plan.is_none()
+        && (payload["mime"]
+            .as_str()
+            .is_some_and(|mime| mime.contains("dash+xml"))
+            || payload["url"]
+                .as_str()
+                .is_some_and(|url| url.to_ascii_lowercase().contains(".mpd")))
+    {
+        return Err("dash_plan_required");
     }
     let url = payload["url"]
         .as_str()
@@ -93,6 +104,7 @@ pub(crate) fn create_task(store: &TaskRuntime, payload: &Value) -> Result<Task, 
     let ext = hls_plan
         .as_ref()
         .map(|value| value.container.clone())
+        .or_else(|| dash_plan.as_ref().map(|plan| plan.container.clone()))
         .unwrap_or_else(|| extension_for(payload));
     let custom_name = match payload["fileName"].as_str() {
         Some(raw) => safe_file_stem(raw).ok_or("invalid_file_name")?,
@@ -191,6 +203,8 @@ pub(crate) fn create_task(store: &TaskRuntime, payload: &Value) -> Result<Task, 
         source_context_id: payload["sourceContextId"].as_str().map(str::to_string),
         outputs,
         hls_selection,
+        dash_selection: dash_plan.is_some(),
+        dash_plan,
         hls_plan_version,
         failed_segments: 0,
         retry_count: 0,

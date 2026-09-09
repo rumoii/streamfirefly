@@ -92,6 +92,10 @@ pub(crate) struct Task {
     #[serde(default)]
     pub(crate) hls_selection: bool,
     #[serde(default)]
+    pub(crate) dash_selection: bool,
+    #[serde(skip)]
+    pub(crate) dash_plan: Option<crate::dash::DashPlan>,
+    #[serde(default)]
     pub(crate) hls_plan_version: u8,
     #[serde(default)]
     pub(crate) failed_segments: u32,

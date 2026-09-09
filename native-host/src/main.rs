@@ -4,6 +4,8 @@ mod capture_merge;
 mod capture_model;
 mod capture_socket;
 mod capture_storage;
+mod dash;
+mod dash_download;
 mod hls;
 mod hls_download;
 mod hls_plan;
@@ -20,6 +22,8 @@ mod recovery;
 mod repository;
 mod runtime;
 mod scheduler;
+mod segment_transfer;
+mod segments;
 mod settings;
 #[cfg(test)]
 mod spec_tests;

@@ -80,11 +80,12 @@ export interface DownloadTask {
   error?: string | null;
   source_context_id?: string | null;
   hls_selection?: boolean;
+  dash_selection?: boolean;
   hls_plan_version?: number;
   failed_segments?: number;
   retry_count?: number;
   checkpoint_state?: string | null;
-  resume_requirement?: "authorization_required" | "key_required" | "authorization_and_key_required" | null;
+  resume_requirement?: "authorization_required" | "key_required" | "authorization_and_key_required" | "dash_reparse_required" | null;
   live_recording?: boolean;
   recorded_duration?: number;
   last_media_sequence?: number | null;

@@ -8,8 +8,10 @@ import BatchDownloadDialog from "./components/BatchDownloadDialog.vue";
 import ConnectionBanner from "./components/ConnectionBanner.vue";
 import DownloadsView from "./components/DownloadsView.vue";
 import SettingsView from "./components/SettingsView.vue";
-import ExternalAction from "./features/configuration/ExternalAction.vue";
+import ResourceTools from "./features/configuration/ResourceTools.vue";
+import { openDispatch } from "./features/configuration/client";
 import DownloadDialog from "./components/DownloadDialog.vue";
+import DashParserView from "./components/DashParserView.vue";
 import HlsParserView from "./components/HlsParserView.vue";
 
 const store = useAppStore();
@@ -27,7 +29,9 @@ function showToast(message: string) { toast.value = message; clearTimeout(toastT
 function navigate(value: string) { parserCandidate.value = null; route.value = value; }
 async function guard(action: () => Promise<any>, success?: string) { try { await action(); if (success) showToast(success); } catch (reason: any) { showToast(humanError(reason?.message)); } }
 async function resetSettings() { const next = { saveDir: "", downloadThreads: 6, detectImages: false, advancedDeepSearch: false, candidateSort: store.settings.candidateSort }; await guard(() => store.saveSettings(next), "已恢复默认设置"); }
-function openParser(candidate: MediaCandidate) { if (candidate.type !== "hls") { showToast("当前版本暂未提供 DASH 轨道选择，将按完整清单下载。"); downloadCandidate.value = candidate; return; } parserCandidate.value = candidate; }
+function openParser(candidate: MediaCandidate) { if (["hls", "dash"].includes(candidate.type)) parserCandidate.value = candidate; }
+function sendExternal(candidates: MediaCandidate[]) { const context = store.context; if (context) void guard(() => openDispatch(context.sourceTabId, context.sourceContextId, candidates.map(candidate => candidate.id))); }
+function openDownload(candidate: MediaCandidate) { if (candidate.type === "dash") openParser(candidate); else downloadCandidate.value = candidate; }
 function handleDelete(task: DownloadTask, deleteFile: boolean) { void guard(() => store.deleteTask(task, deleteFile), deleteFile ? "已删除任务和本地文件" : "已删除任务记录"); }
 
 function applyWorkspaceNavigation(view: string, candidateId = "") {
@@ -63,11 +67,10 @@ onBeforeUnmount(() => { clearTimeout(toastTimer); window.removeEventListener("st
     <nav class="primary-nav" aria-label="流萤功能"><div class="primary-nav-inner"><button :class="{ active: tab === 'resources' || tab === 'parser' }" @click="navigate('resources')"><span>资源</span><b>{{ store.candidates.filter(item => item.type !== 'segment').length }}</b></button><button :class="{ active: tab === 'downloads' }" @click="navigate('downloads')"><span>下载</span><b v-if="store.activeTasks.length" class="active-count">{{ store.activeTasks.length }}</b></button><button :class="{ active: tab === 'settings' }" @click="navigate('settings')"><span>设置</span></button></div></nav>
     <main class="app-content" :class="{ 'parser-content': tab === 'parser' }">
       <ConnectionBanner :state="store.connection" :error="store.connectionError" @retry="store.refresh" />
-      <ExternalAction v-if="tab === 'resources'" :candidates="store.candidates" :context="store.context" />
       <div v-if="store.error" class="status-banner error">{{ store.error }}</div>
       <Transition name="page" mode="out-in">
-        <ResourcesView v-if="tab === 'resources'" key="resources" :connected="store.connection === 'ready'" @batch-download="batchCandidates = $event" :candidates="store.candidates" :loading="store.loading" :view-state="store.resourceViewState" @download="downloadCandidate = $event" @parse="openParser" @remove="guard(() => store.removeCandidates($event), '已从列表移除资源')" @update-view-state="patch => guard(() => store.patchResourceView(patch))" @metadata="(candidate, metadata) => guard(() => store.updateCandidateMetadata(candidate, metadata))" />
-        <HlsParserView v-else-if="tab === 'parser' && parserCandidate && store.context" key="parser" :candidate="parserCandidate" :context="store.context" :connected="store.connection === 'ready'" :capabilities="store.capabilities" :save-dir="store.settings.saveDir" :download-threads="store.settings.downloadThreads" @back="parserCandidate = null" @created="message => { showToast(message); navigate('downloads'); }" />
+        <ResourcesView v-if="tab === 'resources'" key="resources" :connected="store.connection === 'ready'" @batch-download="batchCandidates = $event" :candidates="store.candidates" :loading="store.loading" :view-state="store.resourceViewState" @download="openDownload" @parse="openParser" @remove="guard(() => store.removeCandidates($event), '已从列表移除资源')" @update-view-state="patch => guard(() => store.patchResourceView(patch))" @metadata="(candidate, metadata) => guard(() => store.updateCandidateMetadata(candidate, metadata))" :external-enabled="Boolean(store.context?.supported)" @external-download="sendExternal"><template #header-tools><ResourceTools :context="store.context" /></template></ResourcesView>
+        <component :is="parserCandidate?.type === 'dash' ? DashParserView : HlsParserView" v-else-if="tab === 'parser' && parserCandidate && store.context" :key="parserCandidate.id" :candidate="parserCandidate" :context="store.context" :connected="store.connection === 'ready'" :capabilities="store.capabilities" :save-dir="store.settings.saveDir" :download-threads="store.settings.downloadThreads" @back="parserCandidate = null" @created="message => { showToast(message); navigate('downloads'); }" />
         <DownloadsView v-else-if="tab === 'downloads'" key="downloads" :connected="store.connection === 'ready'" :tasks="store.tasks" :source-tasks="store.sourceTasks" @control="(task, action, context) => guard(() => store.controlTask(task, action, context))" @delete="handleDelete" />
         <SettingsView v-else key="settings" :settings="store.settings" @save="settings => guard(() => store.saveSettings(settings), '设置已保存')" @reset="resetSettings" />
       </Transition>

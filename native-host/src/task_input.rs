@@ -287,6 +287,7 @@ pub(crate) fn recommended_file_stem(payload: &Value) -> String {
 }
 
 pub(crate) fn prepare_task(payload: &Value) -> Result<Value, &'static str> {
+    let dash = crate::dash::parse_plan(payload)?;
     let manifest = inline_manifest(payload)?;
     let plan = hls_plan(payload)?;
     if manifest.is_none() && plan.is_none() {
@@ -298,6 +299,7 @@ pub(crate) fn prepare_task(payload: &Value) -> Result<Value, &'static str> {
     let extension = plan
         .as_ref()
         .map(|value| value.container.clone())
+        .or_else(|| dash.as_ref().map(|plan| plan.container.clone()))
         .unwrap_or_else(|| extension_for(payload));
     Ok(json!({"fileName": recommended_file_stem(payload), "extension": extension}))
 }

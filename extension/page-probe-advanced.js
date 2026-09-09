@@ -4,7 +4,7 @@
   if (!api) return;
   let active = true;
   const restorers = [];
-  function installGeneratedHlsHooks(scope, emit, consume, baseUrl = scope.location.href) {
+  function installGeneratedManifestHooks(scope, emit, consume, baseUrl = scope.location.href) {
     let enabled = true, scanning = false;
     const encoder = new scope.TextEncoder();
     const restore = [];
@@ -12,11 +12,15 @@
       const original = owner[name];
       const wrapped = new Proxy(original, { apply(target, receiver, args) {
         const result = Reflect.apply(target, receiver, args);
-        if (!enabled || scanning || typeof result !== "string" || result.length > 512 * 1024 || !/^\s*#EXTM3U(?:\r?\n)/.test(result.slice(0, 32))) return result;
+        if (!enabled || scanning || typeof result !== "string" || result.length > 512 * 1024 || !/^\s*(?:#EXTM3U(?:\r?\n)|<)/.test(result.slice(0, 32))) return result;
         scanning = true;
         try {
           const bytes = encoder.encode(result).byteLength;
           if (bytes > 512 * 1024 || !consume(bytes)) return result;
+          if (/^\s*</.test(result)) {
+            if (/^\s*(?:<\?xml[^>]*>\s*)?(?:<!--[\s\S]*?-->\s*)*<(?:[\w.-]+:)?MPD(?:\s|>)/.test(result) && /<\/(?:[\w.-]+:)?MPD\s*>\s*$/.test(result)) emit(result, source);
+            return result;
+          }
           const lines = result.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
           let entries = 0;
           for (let index = 1; index < lines.length; index++) {
@@ -82,7 +86,7 @@
   wrapFunction(window, "atob", result => scan(result, "atob"));
   if (window.TextDecoder?.prototype) wrapFunction(TextDecoder.prototype, "decode", result => scan(result, "text-decoder"));
   if (window.Response?.prototype?.arrayBuffer) wrapFunction(Response.prototype, "arrayBuffer", result => { result.then(value => scan(value, "response-buffer")).catch(() => {}); });
-  restorers.push(installGeneratedHlsHooks(window, (text, source) => api.emitInlineManifest(text, location.href, location.href, source), api.consumeGeneratedHlsBudget));
+  restorers.push(installGeneratedManifestHooks(window, (text, source) => api.emitInlineManifest(text, location.href, location.href, source), api.consumeGeneratedManifestBudget));
 
   const OriginalWorker = window.Worker;
   if (typeof OriginalWorker !== "function" || typeof URL.createObjectURL !== "function") return;
@@ -102,7 +106,7 @@
       const report = value => { if (!active || ++reports > 1000) return; try { self.postMessage({ __streamFireflyWorkerProbe: marker, value }); } catch (_) {} };
       const walk = (value, seen = new WeakSet(), depth = 0, state = { nodes: 0 }) => {
         if (!active || state.nodes++ > 10000 || depth > 10 || value == null) return;
-        if (typeof value === "string") { if (value.length <= 65536 && (/^[a-f0-9]{32}$/i.test(value) || value.length === 16 || /\\.(?:m3u8?|mpd|mp4|webm|m4s|ts|key)(?:$|[?#&])/i.test(value) || value.includes("#EXTM3U"))) report(value); return; }
+        if (typeof value === "string") { if (value.length <= 65536 && (/^[a-f0-9]{32}$/i.test(value) || value.length === 16 || /\\.(?:m3u8?|mpd|mp4|webm|m4s|ts|key)(?:$|[?#&])/i.test(value) || value.includes("#EXTM3U") || /<(?:[\\w.-]+:)?MPD(?:\\s|>)/.test(value))) report(value); return; }
         if ((value instanceof ArrayBuffer || ArrayBuffer.isView(value)) && value.byteLength === 16) { report(value); return; }
         if (typeof value !== "object" || seen.has(value)) return;
         seen.add(value);
@@ -111,9 +115,9 @@
       };
       const originalParse = JSON.parse;
       let generatedBytes = 0;
-      const stopGeneratedHls = (${installGeneratedHlsHooks.toString()})(self, text => {
+      const stopGeneratedManifest = (${installGeneratedManifestHooks.toString()})(self, text => {
         if (!active || ++reports > 1000) return;
-        self.postMessage({ __streamFireflyWorkerProbe: marker, generatedHls: text });
+        self.postMessage({ __streamFireflyWorkerProbe: marker, generatedManifest: text });
       }, bytes => { generatedBytes = Math.min(16 * 1024 * 1024 + 1, generatedBytes + bytes); return generatedBytes <= 16 * 1024 * 1024; }, workerBase);
       JSON.parse = function (...args) { const result = Reflect.apply(originalParse, this, args); try { walk(result); } catch (_) {} return result; };
       const originalAtob = self.atob;
@@ -129,7 +133,7 @@
       const wrappers = { parse: JSON.parse, atob: self.atob, decode: self.TextDecoder?.prototype?.decode, text: self.Response?.prototype?.text, buffer: self.Response?.prototype?.arrayBuffer };
       self.addEventListener("message", event => {
         if (event.data?.__streamFireflyWorkerControl !== marker) return;
-        event.stopImmediatePropagation(); active = false; stopGeneratedHls();
+        event.stopImmediatePropagation(); active = false; stopGeneratedManifest();
         if (JSON.parse === wrappers.parse) JSON.parse = originalParse;
         if (self.atob === wrappers.atob) self.atob = originalAtob;
         if (originalDecode && TextDecoder.prototype.decode === wrappers.decode) TextDecoder.prototype.decode = originalDecode;
@@ -155,10 +159,10 @@
       worker.addEventListener("message", event => {
         if (event.data?.__streamFireflyWorkerProbe !== marker) return;
         event.stopImmediatePropagation();
-        if (typeof event.data.generatedHls === "string") {
-          const text = event.data.generatedHls;
-          if (active && text.length <= 512 * 1024 && api.consumeGeneratedHlsBudget(new TextEncoder().encode(text).byteLength)) api.emitInlineManifest(text, resolved.href, resolved.href, "worker-generated-hls");
-        } else scan(event.data.value, "worker");
+        if (typeof event.data.generatedManifest === "string") {
+          const text = event.data.generatedManifest;
+          if (active && text.length <= 512 * 1024 && api.consumeGeneratedManifestBudget(new TextEncoder().encode(text).byteLength)) api.emitInlineManifest(text, resolved.href, resolved.href, "worker-generated-hls");
+        } else if (active) { api.scanValue(event.data.value, resolved.href, "worker"); findKeys(event.data.value, "worker"); }
       });
       const timer = setTimeout(() => { URL.revokeObjectURL(bootstrapUrl); bootstrapUrls.delete(bootstrapUrl); }, 30000);
       bootstrapUrls.set(bootstrapUrl, timer);

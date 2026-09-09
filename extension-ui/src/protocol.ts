@@ -1,4 +1,5 @@
 import type { DownloadTask, MediaCandidate, ResourceViewState, UiContext } from "./types";
+import type { DashPlan } from "./dash";
 import type { buildHlsPlan } from "./download-plan";
 
 export interface DownloadRequest {
@@ -11,6 +12,7 @@ export interface DownloadRequest {
   saveDir?: string | null;
   downloadThreads?: number;
   requestHeaders: Record<string, string>;
+  dashPlan?: DashPlan | null;
   hlsPlan?: Awaited<ReturnType<typeof buildHlsPlan>> | null;
 }
 

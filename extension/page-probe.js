@@ -12,10 +12,10 @@
   const quotedMediaUrl = /(?:https?:\\?\/\\?\/|\/|\.\.\/|\.\/)?[^\s"'<>\\]+\.(?:m3u8?|mpd|mp4|webm|mov|mkv|flv|f4v|m4v|mpeg|mpg|avi|wmv|asf|ogv|3gp|mp3|m4a|aac|wav|flac|ogg|opus|wma|weba|ts|m4s|key)(?:\?[^\s"'<>\\]*)?/gi;
   const namespaceMediaReference = /^(?:[a-z_][a-z0-9_]*\.){4,}(?:m3u8?|mpd|mp4|webm|mov|mkv|flv|f4v|m4v|mpeg|mpg|avi|wmv|asf|ogv|3gp|mp3|m4a|aac|wav|flac|ogg|opus|wma|weba|ts|m4s|key)$/;
   let scannedScriptBytes = 0;
-  let generatedHlsBytes = 0;
-  const consumeGeneratedHlsBudget = bytes => {
-    generatedHlsBytes = Math.min(16 * 1024 * 1024 + 1, generatedHlsBytes + bytes);
-    return generatedHlsBytes <= 16 * 1024 * 1024;
+  let generatedManifestBytes = 0;
+  const consumeGeneratedManifestBudget = bytes => {
+    generatedManifestBytes = Math.min(16 * 1024 * 1024 + 1, generatedManifestBytes + bytes);
+    return generatedManifestBytes <= 16 * 1024 * 1024;
   };
   const scannedScripts = new WeakMap();
 
@@ -80,23 +80,24 @@
   };
 
   const emitInlineManifest = (text, baseUrl, sourceUrl, source) => {
-    if (typeof text !== "string" || !/^\s*#EXTM3U(?:\s|$)/i.test(text)) return false;
+    if (typeof text !== "string") return false;
+    const dash = /^\s*(?:<\?xml[^>]*>\s*)?(?:<!--[\s\S]*?-->\s*)*<(?:[\w.-]+:)?MPD(?:\s|>)/.test(text) && /<\/(?:[\w.-]+:)?MPD\s*>\s*$/.test(text);
+    if (!dash && !/^\s*#EXTM3U(?:\s|$)/i.test(text)) return false;
     const resolvedBase = absoluteUrl(baseUrl || sourceUrl || location.href) || location.href;
-    const normalized = normalizeManifest(text, resolvedBase);
+    const normalized = dash ? text : normalizeManifest(text, resolvedBase);
     const byteLength = encoder.encode(normalized).byteLength;
     if (!byteLength || byteLength > INLINE_MANIFEST_LIMIT) return false;
-    emit(sourceUrl || resolvedBase, "application/vnd.apple.mpegurl", source, {
-      inlineManifest: { format: "hls", text: normalized, baseUrl: resolvedBase, sourceUrl: sourceUrl || null }
+    emit(sourceUrl || resolvedBase, dash ? "application/dash+xml" : "application/vnd.apple.mpegurl", source, {
+      inlineManifest: { format: dash ? "dash" : "hls", text: normalized, baseUrl: resolvedBase, sourceUrl: sourceUrl || null }
     });
-    emitManifestMembers(normalized, resolvedBase, source);
+    if (!dash) emitManifestMembers(normalized, resolvedBase, source);
     return true;
   };
 
   const scanText = (text, baseUrl = location.href, source = "page-probe-text") => {
     if (typeof text !== "string" || !text || encoder.encode(text).byteLength > BODY_LIMIT) return;
     const resolvedBase = absoluteUrl(baseUrl) || location.href;
-    if (/^\s*#EXTM3U(?:\s|$)/i.test(text)) emitInlineManifest(text, resolvedBase, resolvedBase, source);
-    if (/<MPD(?:\s|>)/i.test(text)) emit(resolvedBase, "application/dash+xml", source);
+    if (emitInlineManifest(text, resolvedBase, resolvedBase, source) && /<(?:[\w.-]+:)?MPD(?:\s|>)/.test(text)) return;
     let matches = 0;
     for (const match of text.matchAll(quotedMediaUrl)) {
       if (matches++ >= 1000) break;
@@ -250,5 +251,5 @@
     record.addedNodes.forEach(node => { if (node.nodeType === Node.ELEMENT_NODE) scanScripts(node); else scanScript(node.parentElement); });
   })).observe(document.documentElement, { childList: true, characterData: true, subtree: true });
 
-  window.__streamFireflyProbeApi = Object.freeze({ emit, emitInlineManifest, scanText, scanValue, consumeGeneratedHlsBudget });
+  window.__streamFireflyProbeApi = Object.freeze({ emit, emitInlineManifest, scanText, scanValue, consumeGeneratedManifestBudget });
 })();

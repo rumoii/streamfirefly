@@ -35,6 +35,9 @@ use std::time::Duration;
 use std::time::Instant;
 
 pub(crate) fn ensure_restart_context(store: &TaskRuntime, task: &Task) -> Result<(), &'static str> {
+    if task.dash_selection && task.dash_plan.is_none() {
+        return Err("dash_plan_expired");
+    }
     if task.hls_selection
         && task.hls_plan.is_none()
         && !(task.hls_plan_version >= 2

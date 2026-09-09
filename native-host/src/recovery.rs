@@ -19,6 +19,7 @@ pub(crate) fn resume_recoverable_hls_tasks(store: &TaskRuntime, writer: &Writer)
         .filter(|task| {
             task.state == "interrupted"
                 && !task.live_recording
+                && !task.dash_selection
                 && task.resume_requirement.is_none()
                 && (!task.hls_selection
                     || checkpoint_available(&checkpoint_path_for_state(

@@ -1,21 +1,14 @@
 <script setup lang="ts">
 import { toRef } from "vue";
 import type { UiContext } from "../../types";
-import { sendMessage, surfaceFromUrl } from "../../api";
 import { createCaptureState } from "../capture/state";
 import { sessionError } from "../session-client";
 const props = defineProps<{ context: UiContext | null }>();
-const trusted = surfaceFromUrl() !== "workspace";
-const { sessions, catalog, error, message, busy, selected, acknowledged, directory, active, sourceKey, scan, start, stop, recover, refresh } = createCaptureState(toRef(props, "context"), trusted);
+const { sessions, catalog, error, message, busy, selected, acknowledged, directory, active, sourceKey, scan, start, stop, recover, refresh } = createCaptureState(toRef(props, "context"), true);
 const labels: Record<string, string> = { armed: "等待数据", capturing: "捕捉中", stopping: "停止排空中", finalizing: "整理输出中", complete: "已保存", partial: "部分结果", interrupted: "已中断", unavailable: "检查点不可用" };
-async function openControl() { const result = await sendMessage({ type: "capture.control.open", payload: { tabId: props.context?.sourceTabId } }); if (!result?.ok) error.value = sessionError(result?.error || "无法打开捕捉控制页"); }
 </script>
 <template>
-  <section v-if="!trusted" class="feature-panel">
-    <strong>缓存捕捉</strong><p>在独立扩展页面选择主页面或 iframe 媒体源、开启捕捉及整理片段。</p>
-    <button class="button" :disabled="!context?.supported" @click="openControl">打开捕捉控制页</button><p v-if="error" role="alert">{{ error }}</p>
-  </section>
-  <section v-else class="feature-panel">
+  <section class="feature-panel">
     <h3>缓存捕捉</h3><p>仅保存开启后的原始媒体数据，不回溯旧缓存，不处理 DRM。跳转或编码变化会分开保存，整理片段不会补齐遗漏数据。</p>
     <button class="button" :disabled="busy || !context?.supported || !!active" @click="scan">扫描媒体源</button>
     <label class="field"><span>媒体源</span><select v-model="selected" class="control" :disabled="busy || !!active"><option value="">请选择媒体源</option><option v-for="source in catalog.sources" :key="sourceKey(source)" :value="sourceKey(source)">{{ source.frameId === 0 ? '主页面' : `框架 ${source.frameId}` }} · {{ source.url }} · {{ source.tracks.join(', ') }} · {{ source.state }}</option></select></label>

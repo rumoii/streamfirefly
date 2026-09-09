@@ -5,7 +5,10 @@ export const discoveryCases = [
   { id: 'worker-join', kind: 'array-join', context: 'worker', format: 'hls', required: true },
   { id: 'same-frame', kind: 'array-join', context: 'same-frame', format: 'hls', required: true },
   { id: 'cross-frame', kind: 'from-char-code', context: 'cross-frame', format: 'hls', required: true },
-  { id: 'dynamic-mpd', kind: 'dynamic-mpd', format: 'dash', required: false },
+  { id: 'dynamic-mpd', kind: 'dynamic-mpd', format: 'dash', required: true },
+  { id: 'mpd-join', kind: 'array-join', format: 'dash', required: true },
+  { id: 'mpd-characters', kind: 'from-char-code', format: 'dash', required: true },
+  { id: 'mpd-worker', kind: 'array-join', context: 'worker', format: 'dash', required: true },
   { id: 'ordinary-text', kind: 'ordinary-text', format: null, required: true },
   { id: 'invalid-hls', kind: 'invalid-hls', format: null, required: true },
   { id: 'split-hls', kind: 'split-hls', format: 'hls', required: false }

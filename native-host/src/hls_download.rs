@@ -15,7 +15,6 @@ use crate::hls::KeySpec;
 use crate::hls::PersistedManifest;
 use crate::hls_plan::new_checkpoint;
 use crate::hls_plan::runtime_plan_from_persisted;
-use crate::http_download::add_header_args;
 use crate::media_process::run_ffmpeg_with_progress;
 use crate::media_process::set_output_state;
 use crate::model::HlsPlan;
@@ -26,23 +25,21 @@ use crate::paths::task_work_root_for_state;
 use crate::processes::cancel_requested;
 use crate::processes::clear_stop;
 use crate::processes::mark_stopped;
-use crate::processes::register_process;
 use crate::processes::stop_process;
 use crate::processes::stop_requested;
 use crate::processes::unregister_all_processes;
-use crate::processes::unregister_process;
 use crate::repository::is_sensitive_request_header;
 use crate::runtime::TaskRuntime;
+use crate::segment_transfer::{
+    authorization_error, curl_once, retry_after_seconds, retryable_error, wait_retry,
+};
 use crate::task_state::update;
 use crate::wire::Writer;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fs;
-use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
-use std::process::Stdio;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
@@ -73,180 +70,6 @@ pub(crate) struct HlsDownloadResult {
     error: Option<String>,
 }
 
-pub(crate) fn hls_curl_once(
-    store: &TaskRuntime,
-    task: &Task,
-    url: &str,
-    range: Option<&ByteRange>,
-    destination: &Path,
-    abort: &AtomicBool,
-) -> Result<(u64, u16), String> {
-    if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    let temporary = destination.with_extension(format!(
-        "{}.download",
-        destination
-            .extension()
-            .and_then(|value| value.to_str())
-            .unwrap_or("part")
-    ));
-    let response_headers = destination.with_extension(format!(
-        "{}.headers",
-        destination
-            .extension()
-            .and_then(|value| value.to_str())
-            .unwrap_or("part")
-    ));
-    let _ = fs::remove_file(&temporary);
-    let _ = fs::remove_file(&response_headers);
-    let mut args: Vec<String> = [
-        "--silent",
-        "--show-error",
-        "--location",
-        "--connect-timeout",
-        "10",
-        "--max-time",
-        "120",
-        "--output",
-    ]
-    .into_iter()
-    .map(str::to_string)
-    .collect();
-    args.push(temporary.to_string_lossy().into_owned());
-    args.extend([
-        "--dump-header".into(),
-        response_headers.to_string_lossy().into_owned(),
-    ]);
-    args.extend(["--write-out".into(), "%{http_code}".into()]);
-    if let Some(range) = range {
-        args.extend([
-            "--range".into(),
-            format!("{}-{}", range.start, range.start + range.length - 1),
-        ]);
-    }
-    add_header_args(&mut args, task);
-    args.push(url.into());
-    let mut child = Command::new("curl")
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| error.to_string())?;
-    let mut stdout = child.stdout.take();
-    let child = register_process(store, &task.id, child);
-    loop {
-        if abort.load(Ordering::Relaxed) || cancel_requested(store, &task.id) {
-            if let Ok(mut process) = child.lock() {
-                let _ = process.kill();
-                let _ = process.wait();
-            }
-            unregister_process(store, &task.id, &child);
-            let _ = fs::remove_file(&temporary);
-            let _ = fs::remove_file(&response_headers);
-            return Err("cancelled".into());
-        }
-        let status = child
-            .lock()
-            .map_err(|_| "process_lock_poisoned".to_string())?
-            .try_wait()
-            .map_err(|error| error.to_string())?;
-        if let Some(status) = status {
-            let mut response = String::new();
-            if let Some(mut stdout) = stdout.take() {
-                let _ = stdout.read_to_string(&mut response);
-            }
-            unregister_process(store, &task.id, &child);
-            let http_status = response.trim().parse::<u16>().unwrap_or(0);
-            if !status.success() || !(200..300).contains(&http_status) {
-                let retry_after = fs::read_to_string(&response_headers)
-                    .ok()
-                    .and_then(|headers| {
-                        headers.lines().rev().find_map(|line| {
-                            let (name, value) = line.split_once(':')?;
-                            name.trim()
-                                .eq_ignore_ascii_case("retry-after")
-                                .then(|| value.trim().parse::<u64>().ok())
-                                .flatten()
-                        })
-                    })
-                    .map(|seconds| seconds.min(30));
-                let _ = fs::remove_file(&temporary);
-                let _ = fs::remove_file(&response_headers);
-                return Err(match retry_after {
-                    Some(seconds) => {
-                        format!("http_status_{http_status}:retry_after={seconds}")
-                    }
-                    None => format!("http_status_{http_status}"),
-                });
-            }
-            let bytes = fs::metadata(&temporary)
-                .map_err(|error| error.to_string())?
-                .len();
-            if let Some(range) = range {
-                if bytes != range.length {
-                    let _ = fs::remove_file(&temporary);
-                    return Err("hls_byte_range_length_mismatch".into());
-                }
-            }
-            if destination.exists() {
-                fs::remove_file(destination).map_err(|error| error.to_string())?;
-            }
-            fs::rename(&temporary, destination).map_err(|error| error.to_string())?;
-            let _ = fs::remove_file(&response_headers);
-            return Ok((bytes, http_status));
-        }
-        thread::sleep(Duration::from_millis(50));
-    }
-}
-
-pub(crate) fn retryable_hls_error(error: &str) -> bool {
-    let status = error
-        .strip_prefix("http_status_")
-        .and_then(|value| value.split(':').next())
-        .and_then(|value| value.parse::<u16>().ok());
-    match status {
-        Some(0 | 408 | 429) => true,
-        Some(value) if value >= 500 => true,
-        Some(_) => false,
-        None => matches!(
-            error,
-            "hls_byte_range_length_mismatch"
-                | "connection_reset"
-                | "operation_timed_out"
-                | "curl_failed"
-        ),
-    }
-}
-
-pub(crate) fn authorization_hls_error(error: &str) -> bool {
-    error.starts_with("http_status_401") || error.starts_with("http_status_403")
-}
-
-pub(crate) fn retry_after_seconds(error: &str) -> Option<u64> {
-    error
-        .split(":retry_after=")
-        .nth(1)
-        .and_then(|value| value.parse::<u64>().ok())
-        .map(|value| value.min(30))
-}
-
-pub(crate) fn wait_retry(
-    store: &TaskRuntime,
-    task_id: &str,
-    abort: &AtomicBool,
-    seconds: u64,
-) -> bool {
-    let deadline = Instant::now() + Duration::from_secs(seconds);
-    while Instant::now() < deadline {
-        if abort.load(Ordering::Relaxed) || cancel_requested(store, task_id) {
-            return false;
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-    true
-}
-
 pub(crate) fn load_hls_key(
     store: &TaskRuntime,
     task: &Task,
@@ -273,7 +96,7 @@ pub(crate) fn load_hls_key(
         return Ok(value);
     }
     let key_file = work_dir.join(format!("key-{}.download", Uuid::new_v4()));
-    let result = hls_curl_once(store, task, url, None, &key_file, abort);
+    let result = curl_once(store, task, url, None, &key_file, abort);
     let bytes = match result {
         Ok(_) => fs::read(&key_file).map_err(|error| error.to_string())?,
         Err(error) => return Err(error),
@@ -311,7 +134,7 @@ pub(crate) fn execute_hls_job(
         } else {
             job.destination.clone()
         };
-        let attempt = hls_curl_once(
+        let attempt = curl_once(
             store,
             task,
             &job.uri,
@@ -375,7 +198,7 @@ pub(crate) fn execute_hls_job(
                     error: Some(error),
                 }
             }
-            Err(error) if retryable_hls_error(&error) && retries < 3 => {
+            Err(error) if retryable_error(&error) && retries < 3 => {
                 retries += 1;
                 let delay = retry_after_seconds(&error).unwrap_or(1 << (retries - 1));
                 if !wait_retry(store, &task.id, abort, delay) {
@@ -785,7 +608,7 @@ pub(crate) fn start_hls_checkpoint_download(
     let mut checkpoint = checkpoint;
     if task.live_recording && !stop_requested(&store, &task.id) {
         if let Err(error) = refresh_live_checkpoint(&store, &task, &mut checkpoint, &work_dir) {
-            let authorization = authorization_hls_error(&error);
+            let authorization = authorization_error(&error);
             update(&store, &writer, &task.id, |current| {
                 current.state = if authorization {
                     "interrupted"
@@ -865,16 +688,16 @@ pub(crate) fn start_hls_checkpoint_download(
                 return;
             }
             update(&store, &writer, &task.id, |current| {
-                if authorization_hls_error(&error) {
+                if authorization_error(&error) {
                     current.requires_authorization = true;
                 }
-                current.state = if authorization_hls_error(&error) {
+                current.state = if authorization_error(&error) {
                     "interrupted"
                 } else {
                     "failed"
                 }
                 .into();
-                current.phase = if authorization_hls_error(&error) {
+                current.phase = if authorization_error(&error) {
                     "authorization_required"
                 } else {
                     "failed"
@@ -884,10 +707,10 @@ pub(crate) fn start_hls_checkpoint_download(
                 current.active_connections = 0;
                 current.checkpoint_state = Some("recoverable".into());
                 current.resume_requirement =
-                    authorization_hls_error(&error).then(|| "authorization_required".into());
+                    authorization_error(&error).then(|| "authorization_required".into());
                 current.message = Some(if error == "hls_key_validation_failed" {
                     "AES-128 密钥验证失败，尚未开始批量下载".into()
-                } else if authorization_hls_error(&error) {
+                } else if authorization_error(&error) {
                     "资源授权已经失效，请从来源页面重新授权".into()
                 } else {
                     "无法验证首个加密切片".into()
@@ -1027,7 +850,7 @@ pub(crate) fn start_hls_checkpoint_download(
         return;
     }
     if let Some(error) = failure {
-        let authorization = authorization_hls_error(&error);
+        let authorization = authorization_error(&error);
         update(&store, &writer, &task.id, |current| {
             if authorization {
                 current.requires_authorization = true;
@@ -1114,7 +937,7 @@ pub(crate) fn start_hls_checkpoint_download(
                     result
                 };
                 if let Err(error) = refreshed {
-                    let authorization = authorization_hls_error(&error);
+                    let authorization = authorization_error(&error);
                     update(&store, &writer, &task.id, |current| {
                         current.state = if authorization {
                             "interrupted"
@@ -1236,9 +1059,9 @@ pub(crate) fn fetch_live_manifest(
     let abort = AtomicBool::new(false);
     let mut retries = 0;
     loop {
-        match hls_curl_once(store, task, url, None, destination, &abort) {
+        match curl_once(store, task, url, None, destination, &abort) {
             Ok(_) => break,
-            Err(error) if retryable_hls_error(&error) && retries < 3 => {
+            Err(error) if retryable_error(&error) && retries < 3 => {
                 retries += 1;
                 if !wait_retry(
                     store,

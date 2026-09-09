@@ -216,7 +216,7 @@ async function addCandidate(tabId, item) {
   await settings.ready;
   if (item.inlineManifest) {
     const bytes = new TextEncoder().encode(item.inlineManifest.text || "").byteLength;
-    if (item.inlineManifest.format !== "hls" || !bytes || bytes > INLINE_MANIFEST_MAX_BYTES) return false;
+    if (!["hls", "dash"].includes(item.inlineManifest.format) || !bytes || bytes > INLINE_MANIFEST_MAX_BYTES) return false;
   }
   return queueTab(tabId, async () => {
     const state = await loadTabState(tabId);

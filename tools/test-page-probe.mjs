@@ -91,7 +91,7 @@ if (!worker.scriptUrl.startsWith('blob:')) throw new Error('Same-origin classic 
 const bootstrap = await createdBlobs.at(-1).text();
 if (!bootstrap.includes('importScripts("https://page.example/worker.js")') || !bootstrap.includes('JSON.parse =')) throw new Error('Worker bootstrap does not install deep-search hooks');
 const beforeWorkerManifest = messages.length;
-worker.listeners.message({ data: { __streamFireflyWorkerProbe: /const marker = "([^"]+)"/.exec(bootstrap)[1], generatedHls: '#EXTM3U\n#EXTINF:2,\npart.ts\n' }, stopImmediatePropagation() {} });
+worker.listeners.message({ data: { __streamFireflyWorkerProbe: /const marker = "([^"]+)"/.exec(bootstrap)[1], generatedManifest: '#EXTM3U\n#EXTINF:2,\npart.ts\n' }, stopImmediatePropagation() {} });
 assert.equal(messages.slice(beforeWorkerManifest).filter(item => item?.inlineManifest).length, 1, 'probe normalization must not trigger the join hook');
 context.__streamFireflyAdvancedProbeInstalled.dispose();
 if (context.Worker !== TestWorker || !worker.control?.__streamFireflyWorkerControl) throw new Error('Deep-search shutdown did not restore Worker and disable existing hooks');
@@ -114,6 +114,14 @@ for (const oversized of [`${valid}#${'x'.repeat(512 * 1024)}`, `${valid}#${'中'
   const before = messages.length;
   assert.equal(generate('array-join', oversized), oversized);
   assert.equal(messages.length, before, 'both character and UTF-8 byte limits must be enforced');
+}
+const mpd = '<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static"><Period/></MPD>';
+for (const source of ['from-char-code', 'array-join']) {
+  const before = messages.length;
+  generate(source, mpd);
+  const candidates = messages.slice(before).filter(item => item?.inlineManifest?.format === 'dash');
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].inlineManifest.text, mpd);
 }
 const beforeFragments = messages.length;
 generate('from-char-code', '#EXTM3U\n#EXTINF:2,\n');
@@ -150,8 +158,10 @@ const workerContext = { URL, TextEncoder, TextDecoder: class extends TextDecoder
 workerContext.self = workerContext;
 vm.runInNewContext(bootstrap, workerContext);
 vm.runInContext(`${JSON.stringify(valid.split('\n'))}.join(${JSON.stringify('\n')})`, workerContext);
-assert.equal(workerMessages.filter(item => item.generatedHls === valid).length, 1);
+assert.equal(workerMessages.filter(item => item.generatedManifest === valid).length, 1);
+vm.runInContext(`${JSON.stringify(mpd.split('>'))}.join('>')`, workerContext);
+assert.equal(workerMessages.filter(item => item.generatedManifest === mpd).length, 1);
 stopWorker({ data: worker.control, stopImmediatePropagation() {} });
 vm.runInContext(`${JSON.stringify(valid.split('\n'))}.join(${JSON.stringify('\n')})`, workerContext);
-assert.equal(workerMessages.filter(item => item.generatedHls === valid).length, 1);
+assert.equal(workerMessages.filter(item => item.generatedManifest === valid).length, 1);
 console.log('Page probe deep-search tests passed');

@@ -1,7 +1,4 @@
 use crate::hls::save_checkpoint;
-use crate::hls_download::authorization_hls_error;
-use crate::hls_download::retry_after_seconds;
-use crate::hls_download::retryable_hls_error;
 use crate::hls_plan::new_checkpoint;
 use crate::model::InlineManifest;
 use crate::model::Task;
@@ -9,6 +6,9 @@ use crate::paths::checkpoint_path_for_state;
 use crate::repository::sanitized_task;
 use crate::repository::STORE_VERSION;
 use crate::runtime::load_store;
+use crate::segment_transfer::authorization_error;
+use crate::segment_transfer::retry_after_seconds;
+use crate::segment_transfer::retryable_error;
 use crate::settings::DEFAULT_DOWNLOAD_THREADS;
 use crate::task_control::delete_output;
 use crate::task_control::delete_task_outputs;
@@ -230,6 +230,8 @@ fn unique_output_adds_sequence_for_existing_and_reserved_names() {
         source_context_id: None,
         outputs: Vec::new(),
         hls_selection: false,
+        dash_selection: false,
+        dash_plan: None,
         hls_plan_version: 0,
         failed_segments: 0,
         retry_count: 0,
@@ -449,11 +451,11 @@ fn restarted_hls_v2_task_exposes_reauthorization_only_with_checkpoint() {
 }
 #[test]
 fn retry_and_authorization_classification_is_bounded() {
-    assert!(retryable_hls_error("http_status_429:retry_after=90"));
-    assert!(retryable_hls_error("http_status_503"));
-    assert!(!retryable_hls_error("http_status_404"));
-    assert!(authorization_hls_error("http_status_401"));
-    assert!(authorization_hls_error("http_status_403:retry_after=1"));
+    assert!(retryable_error("http_status_429:retry_after=90"));
+    assert!(retryable_error("http_status_503"));
+    assert!(!retryable_error("http_status_404"));
+    assert!(authorization_error("http_status_401"));
+    assert!(authorization_error("http_status_403:retry_after=1"));
     assert_eq!(
         retry_after_seconds("http_status_429:retry_after=90"),
         Some(30)

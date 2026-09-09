@@ -218,6 +218,7 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     taskPayloadForSender(message.payload || {}, sender).then(async payload => {
       const info = await nativeInfo();
       if (!info.ok) return info;
+      if (payload.dashPlan && !info.capabilities.includes("dash-selection-v1")) return { ok: false, error: "dash_native_upgrade_required" };
       if (payload.hlsPlan && ![2, 3].includes(payload.hlsPlan.version)) return { ok: false, error: "hls_plan_version_unsupported" };
       if (!payload.fileName) { const filename = await outputTemplates.filename(payload); if (filename) payload = { ...payload, fileName: filename }; }
       return nativeRequestPromise(message.type, payload);

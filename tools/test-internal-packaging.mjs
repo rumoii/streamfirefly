@@ -12,6 +12,7 @@ const auditScript = read('tools/audit-internal-test.ps1');
 const nativeTest = read('tools/test-native.mjs');
 const nativeDownloadTest = read('tools/test-native-download.mjs');
 const nativeHlsTest = read('tools/test-native-hls.mjs');
+const nativeDashTest = read('tools/test-native-dash.mjs');
 const readme = read('README-INTERNAL.md');
 const workflow = read('.github/workflows/package-internal.yml');
 
@@ -72,5 +73,12 @@ for (const expected of [
 ]) requireText(workflow, expected, 'Internal package workflow');
 for (const expected of ['STREAMFIREFLY_EXTENSION_DIR', 'STREAMFIREFLY_FFPROBE_EXE', 'STREAMFIREFLY_ISOLATED_INSTALL_TEST', 'npm run test:capture:installed', 'npm run test:capture:soak', 'capture_soak_seconds']) requireText(workflow, expected, 'Installed capture workflow');
 for (const expected of ['npm run test:discovery', 'npm run test:discovery:native', 'Discovery-evidence-${{ github.run_id }}', 'test-results/generated-hls-browser.json', 'test-results/generated-hls-native.json']) requireText(workflow, expected, 'Discovery release evidence');
+const scripts = JSON.parse(read('package.json')).scripts;
+requireText(scripts['test:native'], 'npm run test:dash:native', 'Native regression entry');
+requireText(scripts['test:discovery:native'], 'npm run test:dash:discovery', 'Discovery download entry');
+requireText(scripts['test:dash:native'], 'node tools/test-native-dash.mjs', 'DASH Native entry');
+requireText(scripts['test:dash:discovery'], 'node tools/test-native-dash.mjs --browser', 'DASH browser entry');
+for (const expected of ['STREAMFIREFLY_NATIVE_EXE', 'STREAMFIREFLY_FFMPEG_EXE', 'STREAMFIREFLY_FFPROBE_EXE', 'passed: false', 'browserCases, scenarios']) requireText(nativeDashTest, expected, 'DASH integration evidence');
+for (const expected of ['test-results/generated-dash-browser.json', 'test-results/native-dash.json', 'test-results/native-dash-browser.json']) requireText(workflow, expected, 'DASH release evidence');
 
 console.log('Internal packaging version, provenance, workflow, and audit contracts passed');

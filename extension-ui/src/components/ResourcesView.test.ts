@@ -51,6 +51,39 @@ describe("resource preview lifecycle", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
+  it("keeps advanced filters effective while collapsed and clears them explicitly", async () => {
+    const wrapper = mount(ResourcesView, { props: { candidates: [candidate], loading: false, viewState: { ...defaultState(""), minDuration: "60" } } });
+    expect(wrapper.find('[aria-label="最短时长（秒）"]').exists()).toBe(false);
+    expect(wrapper.get(".more-filters").text()).toContain("1");
+    await wrapper.get(".more-filters").trigger("click");
+    expect((wrapper.get('[aria-label="最短时长（秒）"]').element as HTMLInputElement).value).toBe("60");
+    await wrapper.get(".more-filters").trigger("click");
+    expect(wrapper.emitted("updateViewState")).toBeUndefined();
+    await wrapper.get(".more-filters").trigger("click");
+    await wrapper.findAll("button").find(button => button.text() === "清除高级筛选")!.trigger("click");
+    expect(wrapper.emitted("updateViewState")?.at(-1)).toEqual([{ minMb: "", maxMb: "", minDuration: "", maxDuration: "" }]);
+    wrapper.unmount();
+  });
+
+  it("dispatches only selected visible resources without requiring the native host", async () => {
+    const second = { ...candidate, id: "second", title: "另一个资源" };
+    const wrapper = mount(ResourcesView, { props: { candidates: [candidate, second], loading: false, viewState: defaultState(""), connected: false, externalEnabled: true } });
+    await wrapper.findAll('.resource-select input')[0].setValue(true);
+    const batch = wrapper.findAll('.batch-bar button');
+    expect(batch.find(button => button.text() === "批量下载")!.attributes("disabled")).toBeDefined();
+    await batch.find(button => button.text() === "发送到外部工具…")!.trigger("click");
+    expect(wrapper.emitted("externalDownload")?.at(-1)).toEqual([[candidate]]);
+    await wrapper.setProps({ candidates: [second] });
+    expect(batch.find(button => button.text() === "发送到外部工具…")!.attributes("disabled")).toBeDefined();
+    await wrapper.get(".download-more").trigger("click");
+    const choices = wrapper.findAll('[role="dialog"] .delete-choices button');
+    expect(choices[0].attributes("disabled")).toBeDefined();
+    await choices[1].trigger("click");
+    expect(wrapper.emitted("externalDownload")?.at(-1)).toEqual([[second]]);
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
   it("shows an existing poster immediately and keeps HLS alive across candidate refreshes", async () => {
     const viewState = defaultState();
     const wrapper = mount(ResourcesView, { props: { candidates: [{ ...candidate, poster: "https://media.example/poster.jpg" }], loading: false, viewState } });

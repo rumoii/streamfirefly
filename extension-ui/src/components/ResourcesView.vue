@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { copyResources } from "../features/configuration/copy";
+import { vModalFocus } from "../modal-focus";
 import Hls from "hls.js";
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import type { MediaCandidate, ResourceViewState } from "../types";
@@ -9,15 +10,19 @@ import { sendMessage } from "../api";
 
 type PreviewState = "idle" | "preparing" | "ready" | "playing" | "failed";
 
-const props = defineProps<{ candidates: MediaCandidate[]; loading: boolean; viewState: ResourceViewState; compact?: boolean; connected?: boolean }>();
+const props = defineProps<{ candidates: MediaCandidate[]; loading: boolean; viewState: ResourceViewState; compact?: boolean; connected?: boolean; externalEnabled?: boolean }>();
 const emit = defineEmits<{
   download: [candidate: MediaCandidate];
+  externalDownload: [candidates: MediaCandidate[]];
   batchDownload: [candidates: MediaCandidate[]];
   parse: [candidate: MediaCandidate];
   remove: [ids: string[]];
   updateViewState: [patch: Partial<Omit<ResourceViewState, "revision">>];
   metadata: [candidate: MediaCandidate, metadata: Partial<Pick<MediaCandidate, "duration" | "width" | "height" | "poster" | "live">>];
 }>();
+const moreFilters = ref(false);
+const downloadMenu = ref<MediaCandidate | null>(null);
+const advancedFilterCount = computed(() => [props.viewState.minMb, props.viewState.maxMb, props.viewState.minDuration, props.viewState.maxDuration].filter(value => value !== "" && value != null).length);
 const selectedIds = ref(new Set<string>());
 const previewState = ref<PreviewState>("idle");
 const previewError = ref("");
@@ -42,6 +47,7 @@ const segments = computed(() => props.candidates.filter(item => item.type === "s
 
 watch(visible, items => {
   selectedIds.value = new Set([...selectedIds.value].filter(id => items.some(item => item.id === id)));
+  if (downloadMenu.value) downloadMenu.value = items.find(item => item.id === downloadMenu.value?.id) || null;
   if (props.viewState.expandedId && !items.some(item => item.id === props.viewState.expandedId)) emit("updateViewState", { expandedId: "" });
 });
 
@@ -286,7 +292,7 @@ onBeforeUnmount(() => { void disposePreview(); });
     <div class="resource-list-panel panel">
       <div class="panel-title">
         <div><h2>发现资源</h2><p>{{ resourceCandidates.length }} 个媒体资源<span v-if="segments.length"> · {{ segments.length }} 个分片已收起</span></p></div>
-        <div class="panel-title-actions"><span class="live-dot">实时</span><button class="collapse-button" type="button" :aria-expanded="!viewState.collapsed" @click="toggleList">{{ viewState.collapsed ? '展开资源' : '收起资源' }}<i></i></button></div>
+        <div class="panel-title-actions"><slot name="header-tools" /><button class="collapse-button" type="button" :aria-expanded="!viewState.collapsed" @click="toggleList">{{ viewState.collapsed ? '展开资源' : '收起资源' }}<i></i></button></div>
       </div>
       <Transition name="panel-collapse">
         <div v-if="!viewState.collapsed" class="resource-panel-content">
@@ -294,12 +300,11 @@ onBeforeUnmount(() => { void disposePreview(); });
             <input :value="viewState.pattern" class="control search" type="search" placeholder="正则筛选名称、URL 或 MIME" @input="updateViewState('pattern', ($event.target as HTMLInputElement).value)">
             <select :value="viewState.type" class="control" @change="updateViewState('type', ($event.target as HTMLSelectElement).value as ResourceViewState['type'])"><option value="all">全部类型</option><option value="video">视频与流媒体</option><option value="audio">音频</option><option value="image">图片</option></select>
             <select :value="viewState.sortMode" class="control" @change="updateViewState('sortMode', ($event.target as HTMLSelectElement).value as ResourceViewState['sortMode'])"><option value="detected">嗅探顺序</option><option value="size">文件大小</option><option value="duration">媒体时长</option><option value="type">类型分组</option></select>
-            <div class="range-controls"><input :value="viewState.minMb" class="control" type="number" min="0" placeholder="最小 MB" @input="updateViewState('minMb', ($event.target as HTMLInputElement).value)"><span>—</span><input :value="viewState.maxMb" class="control" type="number" min="0" placeholder="最大 MB" @input="updateViewState('maxMb', ($event.target as HTMLInputElement).value)"></div>
+            <button class="button subtle more-filters" :aria-expanded="moreFilters" @click="moreFilters = !moreFilters">更多筛选<span v-if="advancedFilterCount"> · {{ advancedFilterCount }}</span></button>
           </div>
-          <div class="sort-hint">提示：视频资源通常体积较大，按文件大小排序可以更快找到视频。</div>
+          <div v-if="moreFilters" class="advanced-resource-filters"><div class="range-controls" aria-label="文件大小范围"><input :value="viewState.minMb" class="control" type="number" min="0" placeholder="最小 MB" @input="updateViewState('minMb', ($event.target as HTMLInputElement).value)"><span>—</span><input :value="viewState.maxMb" class="control" type="number" min="0" placeholder="最大 MB" @input="updateViewState('maxMb', ($event.target as HTMLInputElement).value)"></div><div class="filter-row"><input :value="viewState.minDuration" class="control" type="number" min="0" aria-label="最短时长（秒）" placeholder="最短时长（秒）" @input="updateViewState('minDuration', ($event.target as HTMLInputElement).value)"><input :value="viewState.maxDuration" class="control" type="number" min="0" aria-label="最长时长（秒）" placeholder="最长时长（秒）" @input="updateViewState('maxDuration', ($event.target as HTMLInputElement).value)"></div><button class="text-button" :disabled="!advancedFilterCount" @click="$emit('updateViewState', { minMb: '', maxMb: '', minDuration: '', maxDuration: '' })">清除高级筛选</button></div>
           <div v-if="filtered.error" class="inline-error">{{ filtered.error }}</div>
-          <div class="filter-row"><input :value="viewState.minDuration" class="control" type="number" min="0" aria-label="最短时长（秒）" placeholder="最短时长（秒）" @input="updateViewState('minDuration', ($event.target as HTMLInputElement).value)"><input :value="viewState.maxDuration" class="control" type="number" min="0" aria-label="最长时长（秒）" placeholder="最长时长（秒）" @input="updateViewState('maxDuration', ($event.target as HTMLInputElement).value)"></div>
-          <div v-if="visible.length" class="batch-bar"><label><input type="checkbox" :checked="selectedIds.size === visible.length" @change="selectAll"> 全选当前结果</label><span>已选 {{ selectedIds.size }} 项</span><div><button class="text-button" :disabled="!selectedIds.size || connected === false" @click="$emit('batchDownload', visible.filter(item => selectedIds.has(item.id)))">批量下载</button><button class="text-button" :disabled="!selectedIds.size" @click="copySelected">复制</button><button class="text-button danger" :disabled="!selectedIds.size" @click="$emit('remove', [...selectedIds])">移除</button></div></div>
+          <div v-if="visible.length" class="batch-bar"><label><input type="checkbox" :checked="selectedIds.size === visible.length" @change="selectAll"> 全选当前结果</label><span>已选 {{ selectedIds.size }} 项</span><div><button v-if="externalEnabled" class="text-button" :disabled="!selectedIds.size" @click="$emit('externalDownload', visible.filter(item => selectedIds.has(item.id)))">发送到外部工具…</button><button class="text-button" :disabled="!selectedIds.size || connected === false" @click="$emit('batchDownload', visible.filter(item => selectedIds.has(item.id)))">批量下载</button><button class="text-button" :disabled="!selectedIds.size" @click="copySelected">复制</button><button class="text-button danger" :disabled="!selectedIds.size" @click="$emit('remove', [...selectedIds])">移除</button></div></div>
           <div ref="resourceScroll" class="resource-scroll resource-cards">
             <template v-if="loading"><article v-for="index in 3" :key="index" class="resource-card skeleton-card"><i></i><div><b></b><span></span></div></article></template>
             <article v-for="item in visible" v-else :key="item.id" class="resource-card" :class="{ expanded: !compact && viewState.expandedId === item.id }">
@@ -307,7 +312,7 @@ onBeforeUnmount(() => { void disposePreview(); });
                 <label class="resource-select"><input type="checkbox" :checked="selectedIds.has(item.id)" :aria-label="`选择${resourceName(item)}`" @change="toggleSelection(item.id)"></label>
                 <span class="resource-type">{{ typeLabel(item.type) }}</span>
                 <span class="resource-identity"><strong>{{ resourceName(item) }}</strong><small>{{ resourceMeta(item) }}</small><em>{{ item.url }}</em></span>
-                <span class="card-actions"><button v-if="item.type === 'hls' || item.type === 'dash'" class="button subtle" type="button" @click="$emit('parse', item)">{{ compact ? '详细解析' : '解析' }}</button><button v-if="!compact" class="button subtle" type="button" :aria-expanded="viewState.expandedId === item.id" @click="toggleDetails(item)">{{ viewState.expandedId === item.id ? '收起' : '详情' }}</button><button class="button primary" type="button" :disabled="connected === false" @click="$emit('download', item)">{{ compact && item.type === 'hls' ? '快速下载' : '下载' }}</button></span>
+                <span class="card-actions"><button v-if="item.type === 'hls' || item.type === 'dash'" class="button subtle" type="button" @click="$emit('parse', item)">{{ compact ? '详细解析' : '解析' }}</button><button v-if="!compact" class="button subtle" type="button" :aria-expanded="viewState.expandedId === item.id" @click="toggleDetails(item)">{{ viewState.expandedId === item.id ? '收起' : '详情' }}</button><button class="button primary" type="button" :disabled="connected === false" @click="$emit('download', item)">{{ compact && item.type === 'hls' ? '快速下载' : '下载' }}</button><button v-if="externalEnabled" class="button subtle download-more" type="button" :aria-label="`更多下载方式：${resourceName(item)}`" @click="downloadMenu = item">▾</button></span>
               </div>
               <Transition name="resource-detail">
                 <div v-if="!compact && viewState.expandedId === item.id" class="expanded-detail"><div class="expanded-detail-inner">
@@ -331,6 +336,12 @@ onBeforeUnmount(() => { void disposePreview(); });
           </div>
         </div>
       </Transition>
+    </div>
+    <div v-if="downloadMenu" class="dialog-backdrop" @click.self="downloadMenu = null">
+      <section v-modal-focus="() => { downloadMenu = null; }" class="dialog download-choice-dialog" role="dialog" aria-modal="true" aria-label="下载方式">
+        <div class="dialog-heading"><div><h2>下载方式</h2><p>{{ resourceName(downloadMenu) }}</p></div><button class="icon-button" aria-label="关闭下载方式" @click="downloadMenu = null">×</button></div>
+        <div class="delete-choices"><button :disabled="connected === false" @click="$emit('download', downloadMenu); downloadMenu = null"><strong>内置下载</strong><span>加入流萤任务队列；DASH 先选择画质和音轨。</span></button><button @click="$emit('externalDownload', [downloadMenu]); downloadMenu = null"><strong>发送到外部工具…</strong><span>打开确认页，选择已配置的下载工具。</span></button></div>
+      </section>
     </div>
   </section>
 </template>
