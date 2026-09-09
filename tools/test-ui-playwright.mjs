@@ -94,7 +94,9 @@ try {
   await page.locator('.resource-panel-content').waitFor({ state: 'hidden' });
   await page.screenshot({ path: path.join(output, 'disconnected-retains-tasks.png') });
   assert.equal(await page.evaluate(() => window.__uiFixture.tasks.length), 2);
-  await page.evaluate(() => { window.__uiFixture.disconnected = false; });
+  await page.getByRole('button', { name: '重新连接', exact: true }).evaluate(element => {
+    element.addEventListener('click', () => { window.__uiFixture.disconnected = false; }, { capture: true, once: true });
+  });
   await page.getByRole('button', { name: '重新连接', exact: true }).click();
   await page.getByText('本地助手已断开', { exact: true }).waitFor({ state: 'hidden' });
   assert.equal(await page.locator('.overview-list article').count(), 2);
