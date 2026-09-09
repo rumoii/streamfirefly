@@ -11,6 +11,7 @@
     "test:unit": "npm run test:ui && node tools/check-module-boundaries.mjs && node tools/test-discovery-integrations.mjs && node tools/test-capture-probe.mjs && node tools/test-capture-sessions.mjs && npm run test:capture:runtime && node tools/test-extension-logic.mjs && node tools/test-page-probe.mjs && node tools/test-discovery-comparison.mjs && node tools/test-firefox-integration.mjs && node tools/test-internal-packaging.mjs",
     "test:capture:runtime": "node --test tools/test-capture-runtime.mjs",
     "test:capture:runtime:windows": "node --test tools/test-capture-runtime-windows.mjs",
+    "diagnose:capture:sampling": "node tools/diagnose-capture-sampling.mjs",
     "test:native": "cargo build --manifest-path native-host/Cargo.toml && node tools/test-native.mjs && node tools/test-native-download.mjs && node tools/test-native-hls.mjs && npm run test:dash:native && node tools/test-native-queue.mjs && node tools/test-native-capture.mjs",
     "test:dash:native": "node tools/test-native-dash.mjs",
     "test:dash:discovery": "node tools/test-native-dash.mjs --browser",

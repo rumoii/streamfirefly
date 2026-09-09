@@ -1,0 +1,46 @@
+name: Diagnose capture sampling
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_commit:
+        description: Exact main commit to diagnose
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diagnose-capture-sampling
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    runs-on: windows-2025
+    timeout-minutes: 25
+    steps:
+      - name: Check out the requested source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Verify source identity
+        shell: pwsh
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: |
+          if ($env:GITHUB_REF -ne 'refs/heads/main') { throw 'Diagnostics must run from main' }
+          if ((git rev-parse HEAD).Trim() -ne $env:EXPECTED_COMMIT) { throw 'Unexpected source SHA' }
+          if (@(git status --porcelain).Count) { throw 'Checkout is dirty' }
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - name: Run one isolated sampling experiment
+        run: node tools/diagnose-capture-sampling.mjs
+      - name: Upload sampling diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Sampling-diagnostic-${{ github.run_id }}
+          path: test-results/sampling-diagnostic/*
+          if-no-files-found: error
+          retention-days: 14

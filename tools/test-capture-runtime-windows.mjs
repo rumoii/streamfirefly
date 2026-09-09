@@ -30,8 +30,32 @@ test('an already exited termination target is successful without suppressing com
   await owner.sample();
   const result = await owner.stop();
   assert.equal(result.attempts[0].status, 0);
-  assert.equal(result.attempts[0].stderr, '');
+  assert.match(result.attempts[0].stderr, /SFF_STAGE script-entered/);
   assert.match(result.attempts[0].stdout, /owned-process-stop-completed/);
+});
+
+test('real sampling reports separate child stages and parent lifecycle timestamps', async () => {
+  const snapshot = await processSnapshot();
+  assert.deepEqual(snapshot.trace.stages.map(item => item.stage), ['script-entered', 'query-completed', 'conversion-completed', 'serialization-completed', 'output-completed']);
+  assert.ok(snapshot.trace.events.close >= snapshot.trace.events.exit);
+  assert.ok(snapshot.trace.stdoutBytes > 0);
+  assert.ok(snapshot.trace.stderrBytes > 0);
+});
+
+test('timed out PowerShell preserves stages received before termination', async () => {
+  const result = await runPowerShell("Write-SffStage 'query-completed'; Start-Sleep -Seconds 30", 5000);
+  assert.equal(result.killed, true);
+  assert.equal(result.trace.stages.at(-1).stage, 'query-completed');
+  assert.ok(result.trace.events.close >= result.trace.events.exit);
+});
+
+test('parent event-loop blockage is visible separately from the child stopwatch', async () => {
+  const resultPromise = runPowerShell("Write-SffStage 'control-completed'", 10000);
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1500);
+  const result = await resultPromise;
+  assert.equal(result.status, 0, JSON.stringify(result));
+  assert.ok(result.trace.maxEventLoopDelayMs >= 1000);
+  assert.ok(result.trace.stages.every(item => Number.isFinite(item.childMs) && Number.isFinite(item.receivedMs)));
 });
 
 for (const exitsBeforeIdentityRead of [true, false]) {

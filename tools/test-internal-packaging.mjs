@@ -78,6 +78,10 @@ requireText(scripts['test:unit'], 'npm run test:capture:runtime', 'Capture runti
 requireText(workflow, 'npm run test:capture:runtime:windows', 'Windows capture runtime regression entry');
 requireText(scripts['test:capture:installed'], '--browser chrome --installed --duration 60', 'Repeated installed capture sampling');
 requireText(scripts['test:capture:soak'], '--duration 7200', 'Full capture soak requirement');
+requireText(scripts['diagnose:capture:sampling'], 'node tools/diagnose-capture-sampling.mjs', 'Standalone sampling diagnostic entry');
+const samplingWorkflow = read('.github/workflows/diagnose-capture-sampling.yml');
+for (const expected of ['windows-2025', "node-version: '24'", 'expected_commit:', 'if: always()', 'node tools/diagnose-capture-sampling.mjs', 'test-results/sampling-diagnostic/*']) requireText(samplingWorkflow, expected, 'Standalone sampling diagnostic workflow');
+for (const forbidden of ['npm ci', 'cargo ', 'package-internal-test', 'install-internal-test', 'test:capture:soak']) if (samplingWorkflow.includes(forbidden)) throw new Error(`Diagnostic workflow must not invoke ${forbidden}`);
 requireText(scripts['test:native'], 'npm run test:dash:native', 'Native regression entry');
 requireText(scripts['test:discovery:native'], 'npm run test:dash:discovery', 'Discovery download entry');
 requireText(scripts['test:dash:native'], 'node tools/test-native-dash.mjs', 'DASH Native entry');

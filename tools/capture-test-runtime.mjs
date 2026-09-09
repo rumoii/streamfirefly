@@ -3,25 +3,69 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { setTimeout as pause } from 'node:timers/promises';
+import { performance } from 'node:perf_hooks';
+
+export function createCommandTrace(clock = () => performance.now()) {
+  const started = clock();
+  let pending = '', nextTick = 50;
+  const trace = { stages: [], events: {}, maxEventLoopDelayMs: 0, stderrBytes: 0, stdoutBytes: 0 };
+  const elapsed = () => Math.round((clock() - started) * 1000) / 1000;
+  return {
+    trace,
+    elapsed,
+    event(name) { trace.events[name] = elapsed(); },
+    tick() { const now = elapsed(); trace.maxEventLoopDelayMs = Math.max(trace.maxEventLoopDelayMs, now - nextTick); nextTick = now + 50; },
+    stderr(chunk) {
+      trace.stderrBytes += Buffer.byteLength(chunk);
+      pending += chunk.toString();
+      const lines = pending.split('\n'); pending = lines.pop().slice(-1024);
+      for (const line of lines) {
+        const match = /^SFF_STAGE ([a-z-]+) ([0-9.]+)\r?$/.exec(line);
+        if (match && trace.stages.length < 32) trace.stages.push({ stage: match[1], childMs: Number(match[2]), receivedMs: elapsed() });
+      }
+    },
+  };
+}
+
+const stagePrelude = `$ErrorActionPreference='Stop'; $sffClock=[Diagnostics.Stopwatch]::StartNew();
+function Write-SffStage([string]$stage) { [Console]::Error.WriteLine('SFF_STAGE ' + $stage + ' ' + $sffClock.Elapsed.TotalMilliseconds.ToString('F3', [Globalization.CultureInfo]::InvariantCulture)); [Console]::Error.Flush() }
+Write-SffStage 'script-entered'; `;
 
 export function errorDetails(error) {
   return { message: error.message, code: error.code, stack: error.stack, diagnostics: error.diagnostics };
 }
 
 export function runPowerShell(script, timeout = 10000) {
-  const started = Date.now();
+  const observation = createCommandTrace();
+  const ticker = setInterval(() => observation.tick(), 50);
+  let drainTimer, pipesForcedClosed = false;
   return new Promise(resolve => {
-    const child = execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "$ErrorActionPreference='Stop'; " + script],
+    const child = execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', stagePrelude + script],
       { windowsHide: true, encoding: 'utf8', timeout, maxBuffer: 4 * 1024 * 1024 },
-      (error, stdout, stderr) => resolve({
-        status: error ? (typeof error.code === 'number' ? error.code : null) : 0,
-        signal: error?.signal ?? null, error: error ? { message: error.message, code: error.code, killed: error.killed } : null,
-        stdout, stderr, elapsedMs: Date.now() - started, timeoutMs: timeout, killed: child.killed,
-      }));
+      (error, stdout, stderr) => {
+        observation.event('callback'); observation.tick();
+        clearInterval(ticker); clearTimeout(drainTimer);
+        queueMicrotask(() => resolve({
+          status: error ? (typeof error.code === 'number' ? error.code : null) : 0,
+          signal: error?.signal ?? null, error: error ? { message: error.message, code: error.code, killed: error.killed } : null,
+          stdout, stderr, elapsedMs: observation.elapsed(), timeoutMs: timeout, killed: child.killed, pipesForcedClosed, trace: observation.trace,
+        }));
+      });
+    child.once('spawn', () => observation.event('spawn'));
+    child.once('exit', () => observation.event('exit'));
+    child.once('close', () => observation.event('close'));
+    child.stdout.on('data', chunk => { observation.trace.stdoutBytes += Buffer.byteLength(chunk); });
+    child.stderr.on('data', chunk => observation.stderr(chunk));
+    drainTimer = setTimeout(() => {
+      pipesForcedClosed = true; observation.event('forced-pipe-close');
+      if (child.exitCode === null && child.signalCode === null) child.kill();
+      child.stdout.destroy(); child.stderr.destroy();
+    }, timeout + 2000);
   });
 }
 
-function commandFailure(result) {
+export function commandFailure(result) {
+  if (result.pipesForcedClosed) return 'pipe-close-timeout';
   if (result.error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') return 'output-limit';
   if (result.killed || result.error?.killed) return 'timeout';
   if (result.error && result.status === null) return 'start-or-execution-failure';
@@ -36,7 +80,10 @@ function diagnosticError(message, diagnostics) {
 }
 
 export async function processSnapshot(run = runPowerShell) {
-  const result = await run('@(Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ pid=[int]$_.ProcessId; parentPid=[int]$_.ParentProcessId; created=$_.CreationDate.ToUniversalTime().ToString("o"); bytes=[double]$_.WorkingSetSize } }) | ConvertTo-Json -Compress');
+  const result = await run(`$sffProcesses=@(Get-CimInstance Win32_Process); Write-SffStage 'query-completed';
+    $sffRows=@($sffProcesses | ForEach-Object { [pscustomobject]@{ pid=[int]$_.ProcessId; parentPid=[int]$_.ParentProcessId; created=$_.CreationDate.ToUniversalTime().ToString("o"); bytes=[double]$_.WorkingSetSize } }); Write-SffStage 'conversion-completed';
+    $sffJson=$sffRows | ConvertTo-Json -Compress; Write-SffStage 'serialization-completed';
+    [Console]::Out.WriteLine($sffJson); [Console]::Out.Flush(); Write-SffStage 'output-completed'`);
   let reason = commandFailure(result), processes;
   if (!reason) {
     if (!result.stdout?.trim()) reason = 'empty-output';
@@ -51,7 +98,7 @@ export async function processSnapshot(run = runPowerShell) {
     }
   }
   if (reason) throw diagnosticError('Owned process memory measurement failed: ' + reason, { ...result, stdout: result.stdout?.slice(-16000), reason });
-  return { processes, elapsedMs: result.elapsedMs };
+  return { processes, elapsedMs: result.elapsedMs, trace: result.trace };
 }
 
 export class OwnedCaptureProcesses {
@@ -96,7 +143,7 @@ export class OwnedCaptureProcesses {
         const processes = this.observe(snapshot.processes, true);
         const bytes = processes.reduce((total, item) => total + item.bytes, 0);
         if (!Number.isFinite(bytes) || bytes <= 0) throw new Error('Owned process memory measurement failed: invalid-total');
-        return { at: Date.now(), bytes, elapsedMs: snapshot.elapsedMs, rootPid: this.rootPid, processes };
+        return { at: Date.now(), bytes, elapsedMs: snapshot.elapsedMs, trace: snapshot.trace, rootPid: this.rootPid, processes };
       } catch (error) {
         error.diagnostics = { ...error.diagnostics, rootPid: this.rootPid, knownProcesses: [...this.known.values()] };
         throw error;

@@ -1,0 +1,27 @@
+# Windows 捕捉采样超时诊断
+
+## 入口与范围
+
+`npm run diagnose:capture:sampling` 执行一次独立的 15 分钟实验：前 5 分钟保持专用 Node 进程树稳定，后 10 分钟保持三个工作进程并逐个启停。每次真实采样完成后串行执行只输出阶段标记的 PowerShell 对照命令，再等待 30 秒；不并发采样、不重试失败。
+
+`node tools/diagnose-capture-sampling.mjs --smoke` 仅检查本地编排、阶段切换和清理，不能证明长时间稳定性。实验只启动自己的测试进程，不修改 Native 注册或浏览器配置。
+
+GitHub Actions 的 **Diagnose capture sampling** 工作流使用 `windows-2025`、Node 24 和显式指定的 main SHA，不运行 npm 安装、Rust 构建、FFmpeg、打包或 Native 安装。工作流只手动触发，禁止并行运行同类诊断；一次失败后应先分析证据，不自动重跑。
+
+## 模块与证据
+
+- `capture-test-runtime.mjs` 保持采样、所属进程身份、内存口径和清理的唯一实现；阶段信息扩展测试报告，不改变产品协议。
+- `diagnose-capture-sampling.mjs` 编排实验与对照；`capture-sampling-fixture.mjs` 仅持有专用测试进程树。
+- 标准输出仍为采样 JSON；标准错误的 `SFF_STAGE` 行实时记录脚本进入、CIM 查询、字段转换、JSON 序列化和输出完成。保留原始错误输出。
+- Node 单调时钟记录 spawn、exit、close、回调与阶段接收时间；PowerShell Stopwatch 记录子进程内部耗时。两种时钟不直接相减；事件循环延迟用于识别父进程调度影响。
+- 单次命令仍为 10 秒上限；超时后最多再等待 2 秒关闭输出管道。被强制关闭的管道明确判失败，不将缓冲区中的结果当作成功采样。
+
+每轮记录写入 `test-results/sampling-diagnostic/attempts.jsonl`；最终报告为 `result.json` 或 `result-failed.json`。主流程和清理错误分别保留，只有两者均成功才写成功报告。工作流始终尝试上传 `Sampling-diagnostic-<run_id>`，保留 14 天。缺少报告不代表通过。
+
+## 判断边界
+
+没有脚本进入标记，只能确认入口前或标记送达路径未完成，不能断言解释器启动慢。查询完成标记之前超时，应进一步区分解释器入口与 CIM 执行；转换、序列化和输出阶段分别依据最后完成标记判断。exit 已到达而 close 未到达，指向管道收尾路径。父进程事件循环延迟升高时，不把接收延迟直接算作子进程执行时间。
+
+对照命令与采样命令是相邻而非同时执行：对照正常不能排除采样期间的瞬时启动延迟。独立实验未复现只表示该次环境和负载未触发问题，不证明真实捕捉稳定，也不证明历史缺陷已修复。
+
+发布仍要求最终 SHA 的完整短 CI 和同 SHA 的 7200 秒捕捉通过；总工作集 2 GiB、预热后增长 512 MiB 的阈值保持不变。诊断工作流不产生安装包或 Release。

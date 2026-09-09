@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { OwnedCaptureProcesses, checkMemoryBudget, finishCaptureTest, removeCaptureDirectory, resetCaptureReports } from './capture-test-runtime.mjs';
+import { OwnedCaptureProcesses, checkMemoryBudget, createCommandTrace, finishCaptureTest, removeCaptureDirectory, resetCaptureReports } from './capture-test-runtime.mjs';
 
 const created = '2026-09-09T00:00:00.0000000Z';
 const root = { pid: 101, parentPid: 99, created, bytes: 100 };
@@ -15,6 +15,7 @@ for (const [reason, override] of [
   ['timeout', { status: null, signal: 'SIGTERM', error: { code: 'ETIMEDOUT', killed: true } }],
   ['timeout', { killed: true, status: 0, error: null, stdout: '' }],
   ['output-limit', { status: null, error: { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', killed: true } }],
+  ['pipe-close-timeout', { pipesForcedClosed: true }],
   ['nonzero-exit', { status: 1, stderr: 'CIM unavailable' }],
   ['empty-output', { stdout: '  ' }],
   ['invalid-json', { stdout: 'not json' }],
@@ -32,6 +33,43 @@ for (const [reason, override] of [
       assert.equal(error.diagnostics.signal, result.signal);
       assert.equal(error.diagnostics.stderr, result.stderr);
       assert.equal(error.diagnostics.elapsedMs, 7);
+      return true;
+    });
+  });
+}
+
+test('stage trace preserves partial markers, event ordering and delayed parent scheduling', () => {
+  let now = 0;
+  const observation = createCommandTrace(() => now);
+  now = 10; observation.event('spawn');
+  now = 100; observation.stderr('SFF_STAGE script-enter');
+  assert.equal(observation.trace.stages.length, 0);
+  now = 1200; observation.stderr('ed 0.100\r\nSFF_STAGE query-completed 2.000\n'); observation.tick();
+  assert.equal(observation.trace.stages[0].stage, 'script-entered');
+  assert.equal(observation.trace.stages[1].childMs, 2);
+  assert.equal(observation.trace.stages[1].receivedMs, 1200);
+  assert.equal(observation.trace.maxEventLoopDelayMs, 1150);
+  now = 1300; observation.event('exit');
+  assert.equal(observation.trace.events.close, undefined);
+  now = 5000; observation.event('close');
+  assert.equal(observation.trace.events.close - observation.trace.events.exit, 3700);
+});
+
+test('trace is bounded and absent entry markers do not imply a startup cause', () => {
+  const observation = createCommandTrace(() => 0);
+  observation.stderr('not a stage\n');
+  assert.deepEqual(observation.trace.stages, []);
+  for (let index = 0; index < 100; index++) observation.stderr('SFF_STAGE script-entered 0\n');
+  assert.equal(observation.trace.stages.length, 32);
+});
+
+for (const stage of ['script-entered', 'query-completed', 'conversion-completed', 'serialization-completed', 'output-completed']) {
+  test(`timeout preserves the last observed stage ${stage}`, async () => {
+    const trace = { stages: [{ stage, childMs: 10, receivedMs: 20 }] };
+    const owner = new OwnedCaptureProcesses(root.pid, { run: async () => ({ ...success([root]), status: null, killed: true, trace }) });
+    await assert.rejects(owner.sample(), error => {
+      assert.equal(error.diagnostics.reason, 'timeout');
+      assert.equal(error.diagnostics.trace.stages.at(-1).stage, stage);
       return true;
     });
   });
