@@ -13,6 +13,8 @@ const success = processes => ({ status: 0, signal: null, error: null, stdout: JS
 for (const [reason, override] of [
   ['start-or-execution-failure', { status: null, error: { code: 'ENOENT' } }],
   ['timeout', { status: null, signal: 'SIGTERM', error: { code: 'ETIMEDOUT', killed: true } }],
+  ['timeout', { killed: true, status: 0, error: null, stdout: '' }],
+  ['output-limit', { status: null, error: { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', killed: true } }],
   ['nonzero-exit', { status: 1, stderr: 'CIM unavailable' }],
   ['empty-output', { stdout: '  ' }],
   ['invalid-json', { stdout: 'not json' }],

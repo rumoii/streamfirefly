@@ -11,18 +11,19 @@ export function errorDetails(error) {
 export function runPowerShell(script, timeout = 10000) {
   const started = Date.now();
   return new Promise(resolve => {
-    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "$ErrorActionPreference='Stop'; " + script],
+    const child = execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "$ErrorActionPreference='Stop'; " + script],
       { windowsHide: true, encoding: 'utf8', timeout, maxBuffer: 4 * 1024 * 1024 },
       (error, stdout, stderr) => resolve({
         status: error ? (typeof error.code === 'number' ? error.code : null) : 0,
         signal: error?.signal ?? null, error: error ? { message: error.message, code: error.code, killed: error.killed } : null,
-        stdout, stderr, elapsedMs: Date.now() - started,
+        stdout, stderr, elapsedMs: Date.now() - started, timeoutMs: timeout, killed: child.killed,
       }));
   });
 }
 
 function commandFailure(result) {
-  if (result.error?.killed) return 'timeout';
+  if (result.error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') return 'output-limit';
+  if (result.killed || result.error?.killed) return 'timeout';
   if (result.error && result.status === null) return 'start-or-execution-failure';
   if (result.status !== 0 || result.signal) return 'nonzero-exit';
   return null;

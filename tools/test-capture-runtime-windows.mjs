@@ -15,6 +15,8 @@ test('real PowerShell timeout and execution failures retain diagnostics', async 
   assert.match(failed.stderr, /injected CIM failure/);
   const timeout = await runPowerShell('Start-Sleep -Seconds 30', 1000);
   assert.equal(timeout.error.killed, true);
+  assert.equal(timeout.killed, true);
+  assert.equal(timeout.timeoutMs, 1000);
   assert.ok(timeout.elapsedMs < 10000);
 });
 

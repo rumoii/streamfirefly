@@ -4,12 +4,14 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash, generateKeyPairSync } from 'node:crypto';
-import { spawn, spawnSync } from 'node:child_process';
+import { execFile, spawn, spawnSync } from 'node:child_process';
+import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { buildSync } from 'esbuild';
 import { WebSocketServer } from 'ws';
 import { OwnedCaptureProcesses, checkMemoryBudget, errorDetails, finishCaptureTest, removeCaptureDirectory, resetCaptureReports } from './capture-test-runtime.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
+const executeFile = promisify(execFile);
 const argumentsList = process.argv.slice(2);
 const option = name => argumentsList[argumentsList.indexOf(name) + 1];
 const installed = argumentsList.includes('--installed');
@@ -81,8 +83,8 @@ try {
         const data = JSON.parse(body);
         if (request.url === '/report') { resolveReport(data); response.end('ok'); return; }
         if (!installed || data.id !== extensionId) { response.writeHead(403).end(); return; }
-        const result = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'tools/register-native-host.ps1'), browser === 'chrome' ? '-ChromeExtensionId' : '-EdgeExtensionId', extensionId, '-NativeHostPath', native, '-InstallDir', path.dirname(native)], { windowsHide: true, encoding: 'utf8' });
-        if (result.status !== 0) throw Error('Isolated registration failed: ' + result.stderr);
+        await processReady;
+        await executeFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'tools/register-native-host.ps1'), browser === 'chrome' ? '-ChromeExtensionId' : '-EdgeExtensionId', extensionId, '-NativeHostPath', native, '-InstallDir', path.dirname(native)], { windowsHide: true, encoding: 'utf8', timeout: 30000 });
         response.end('registered'); return;
       }
       response.writeHead(404).end();
