@@ -34,6 +34,31 @@ test('an already exited termination target is successful without suppressing com
   assert.match(result.attempts[0].stdout, /owned-process-stop-completed/);
 });
 
+for (const exitsBeforeIdentityRead of [true, false]) {
+  test(`termination rechecks identity after a failed read, exited=${exitsBeforeIdentityRead}`, { timeout: 60000 }, async () => {
+    const child = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { windowsHide: true, stdio: 'ignore' });
+    let injectFailure = true;
+    const owner = new OwnedCaptureProcesses(child.pid, { rootExited: () => child.exitCode !== null || child.signalCode !== null,
+      run: (script, timeout) => {
+        if (injectFailure && script.startsWith('$targets=')) {
+          injectFailure = false;
+          const prefix = exitsBeforeIdentityRead ? '$ownedProcess.Kill(); $ownedProcess.WaitForExit(); ' : '';
+          script = script.replace('$ticks=$ownedProcess.StartTime.ToUniversalTime().Ticks;', prefix + "throw 'injected identity read failure';");
+        }
+        return runPowerShell(script, timeout);
+      },
+    });
+    try {
+      await owner.sample();
+      if (exitsBeforeIdentityRead) await owner.stop();
+      else await assert.rejects(owner.stop(), error => {
+        assert.match(error.diagnostics.attempts[0].stderr, /injected identity read failure/);
+        return true;
+      });
+    } finally { await owner.stop(); }
+  });
+}
+
 test('locked files fail within the deadline and can be removed after owned process exit', { timeout: 60000 }, async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'streamfirefly-capture-browser-'));
   const filename = path.join(directory, 'locked');

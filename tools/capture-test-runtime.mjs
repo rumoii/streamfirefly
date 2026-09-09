@@ -117,7 +117,23 @@ export class OwnedCaptureProcesses {
       if (!owned.length) return { attempts, remaining: [] };
       const targets = owned.map(({ pid, created }) => ({ pid, created }));
       const encoded = Buffer.from(JSON.stringify(targets), 'utf8').toString('base64');
-      const result = await this.run(`$targets=ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}'))); foreach($target in $targets) { $current=Get-CimInstance Win32_Process -Filter "ProcessId = $($target.pid)"; if($current -and $current.CreationDate.ToUniversalTime().ToString('o') -eq $target.created) { $ownedProcess=Get-Process | Where-Object { $_.Id -eq $target.pid }; if($ownedProcess) { $ticks=$ownedProcess.StartTime.ToUniversalTime().Ticks; $expected=([DateTime]::Parse($target.created)).ToUniversalTime().Ticks; if(($ticks - ($ticks % 10)) -eq $expected) { Stop-Process -InputObject $ownedProcess -Force } } } }; Write-Output 'owned-process-stop-completed'`, Math.min(10000, Math.max(1, deadline - Date.now())));
+      const result = await this.run(`$targets=ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}'))); foreach($target in $targets) {
+        try {
+          $current=Get-CimInstance Win32_Process -Filter "ProcessId = $($target.pid)";
+          if($current -and $current.CreationDate.ToUniversalTime().ToString('o') -eq $target.created) {
+            $ownedProcess=Get-Process | Where-Object { $_.Id -eq $target.pid };
+            if($ownedProcess) {
+              $ticks=$ownedProcess.StartTime.ToUniversalTime().Ticks;
+              $expected=([DateTime]::Parse($target.created)).ToUniversalTime().Ticks;
+              if(($ticks - ($ticks % 10)) -eq $expected) { Stop-Process -InputObject $ownedProcess -Force }
+            }
+          }
+        } catch {
+          $terminationError=$_;
+          $remaining=Get-CimInstance Win32_Process -Filter "ProcessId = $($target.pid)";
+          if($remaining -and $remaining.CreationDate.ToUniversalTime().ToString('o') -eq $target.created) { throw $terminationError }
+        }
+      }; Write-Output 'owned-process-stop-completed'`, Math.min(10000, Math.max(1, deadline - Date.now())));
       attempts.push({ targets, ...result });
       if (commandFailure(result)) throw diagnosticError('Owned capture process termination failed', { attempts });
       await pause(250);
