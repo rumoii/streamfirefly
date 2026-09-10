@@ -76,6 +76,10 @@ for (const expected of ['npm run test:discovery', 'npm run test:discovery:native
 const scripts = JSON.parse(read('package.json')).scripts;
 requireText(scripts['test:unit'], 'npm run test:capture:runtime', 'Capture runtime regression entry');
 requireText(workflow, 'npm run test:capture:runtime:windows', 'Windows capture runtime regression entry');
+requireText(scripts['test:packaging:windows'], 'node --test tools/test-internal-packaging-windows.mjs', 'Windows packaging regression entry');
+requireText(workflow, 'npm run test:packaging:windows', 'Windows packaging workflow entry');
+requireText(workflow, "$ffmpegVersion = @(& (Join-Path $installDir 'ffmpeg.exe') -version)\n            $ffmpegExitCode = $LASTEXITCODE", 'Complete FFmpeg execution and immediate exit status capture');
+if (/&[^\r\n]*-version\s*\|\s*Select-Object\s+-First\s+1/.test(workflow)) throw new Error('FFmpeg version checks must finish before selecting output');
 requireText(scripts['test:capture:installed'], '--browser chrome --installed --duration 60', 'Repeated installed capture sampling');
 requireText(scripts['test:capture:soak'], '--duration 7200', 'Full capture soak requirement');
 requireText(scripts['diagnose:capture:sampling'], 'node tools/diagnose-capture-sampling.mjs', 'Standalone sampling diagnostic entry');

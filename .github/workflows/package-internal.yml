@@ -77,6 +77,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run test:capture:runtime:windows
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:packaging:windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run test:ui:browser
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run test:browsers
@@ -131,8 +133,11 @@ jobs:
               npm run test:capture:soak
               if ($LASTEXITCODE -ne 0) { throw 'Two-hour installed capture soak failed' }
             }
-            & (Join-Path $installDir 'ffmpeg.exe') -version | Select-Object -First 1
-            if ($LASTEXITCODE -ne 0) { throw 'Packaged FFmpeg failed to start' }
+            $ffmpegVersion = @(& (Join-Path $installDir 'ffmpeg.exe') -version)
+            $ffmpegExitCode = $LASTEXITCODE
+            if ($ffmpegExitCode -ne 0) { throw "Packaged FFmpeg version check failed with exit code $ffmpegExitCode" }
+            if ($ffmpegVersion.Count -eq 0 -or [string]::IsNullOrWhiteSpace($ffmpegVersion[0])) { throw 'Packaged FFmpeg returned no version output' }
+            $ffmpegVersion[0]
           } finally {
             if ($installed) { & $uninstallScript -InstallDir $installDir }
           }
