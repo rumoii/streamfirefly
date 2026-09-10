@@ -70,6 +70,8 @@ export function commandFailure(result) {
   if (result.killed || result.error?.killed) return 'timeout';
   if (result.error && result.status === null) return 'start-or-execution-failure';
   if (result.status !== 0 || result.signal) return 'nonzero-exit';
+  if (!Number.isFinite(result.elapsedMs) || result.elapsedMs < 0 || !Number.isFinite(result.timeoutMs) || result.timeoutMs <= 0) return 'invalid-command-timing';
+  if (result.elapsedMs > result.timeoutMs) return 'completion-after-deadline';
   return null;
 }
 
@@ -216,6 +218,13 @@ export function resetCaptureReports(reportPath) {
   fs.mkdirSync(path.dirname(reportPath), { recursive: true });
   fs.rmSync(reportPath, { force: true });
   fs.rmSync(reportPath.replace(/\.json$/, '-failed.json'), { force: true });
+}
+
+export function resetCaptureEvidence(reportPath) {
+  const directory = path.join(path.dirname(reportPath), `${path.basename(reportPath, '.json')}-evidence`);
+  if (!fs.existsSync(directory)) return;
+  if (fs.lstatSync(directory).isSymbolicLink() || path.dirname(fs.realpathSync(directory)) !== fs.realpathSync(path.dirname(reportPath))) throw new Error('Invalid previous capture evidence directory');
+  fs.rmSync(directory, { recursive: true });
 }
 
 export async function finishCaptureTest({ reportPath, result, failure, cleanup }) {

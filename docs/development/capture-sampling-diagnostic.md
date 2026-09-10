@@ -58,3 +58,17 @@ GitHub Actions 的 **Diagnose capture sampling** 工作流使用 `windows-2025`�
 卸载前的 `ffmpeg -version | Select-Object -First 1` 提前终止管道，不能保证进程退出及退出码更新。本地隔离复现原写法五次中四次立即删除失败；完整接收输出后五次均成功。修复仅将工作流改为完整接收、立即校验退出码及非空输出，再显示第一行，不改变卸载或捕捉实现。
 
 本地 Node `v20.19.0`、PowerShell `7.6.5` 下，`npm run test:packaging:windows` 四项回归及 `npm run test:unit` 通过；工作流 YAML 解析和 diff 空白检查通过。执行实际版本检查片段，使用缓存 FFmpeg `n8.1.2-46-g139afe709a-20260826` 的临时副本，五次立即删除均成功。该版本不同于失败 CI 中的 `n8.1.2-51-g7ba069f4f1-20260908`，本地结果不替代修复后的同 SHA 短 CI 和两小时门禁；历史采样超时仍未解决。
+
+## 2026-09-10 长测收尾与超期结果判定
+
+提交 `7a3a25219fad43dc1445e1adc741b6a473089e2e` 的短 CI [34426522650](https://github.com/rumoii/streamfirefly/actions/runs/34426522650) 成功；同提交长测 [34427651251](https://github.com/rumoii/streamfirefly/actions/runs/34427651251) 在两小时循环后的最终状态等待中超时，清理与卸载成功。229 条采样记录中有一条耗时 24412.085 ms，父事件循环最大延迟 14363.588 ms；不能把这条超期结果算作满足 10 秒门槛的成功采样。
+
+命令成功判定现要求有效的执行耗时和期限，耗时超过期限时报 `completion-after-deadline`，即使进程退出码为零、强杀标记为假也拒绝接纳。定时器不能保证在父事件循环阻塞时准时运行；此判定保证恢复调度后不会将超期命令当作成功，不改变原有超时及管道清理上限。
+
+浏览器报告的 `finalization` 保存停止前快照、两次停止结果、最多 32 次状态变化和最后一次查询结果。Native 在会话目录内写入 `diagnostics.json`，最多保留 128 条阶段记录；每个 generation 的 `ffmpeg-stderr-<generation>.txt` 只保留最后 16 KiB，读取线程持续排空管道并在进程退出后回收。诊断写入错误独立记录，不覆盖原业务错误，不改变公开快照或停止协议。
+
+测试在停止进程前收集元数据，在停止后、删除目录前归档最终证据到 `test-results/capture/<报告名>-evidence/`。失败时仅保存本次隔离会话的合成媒体，总上限 64 MiB；manifest 记录未保存原因、文件大小和收集错误。不收集浏览器 profile、凭据或用户媒体。归档错误不阻止其余清理，且阻止成功报告。CI 递归上传整个 capture 证据目录。
+
+`node tools/test-native-capture-volume.mjs` 使用真实 Native stdin/WebSocket 链路，逐块等待 6500 个分片的持久化 ACK，发送 finish 后关闭连接并校验 FFprobe 时长；额外使用坏媒体验证非零合并退出及错误尾部。整体测试上限 10 分钟，最终状态仍等待 60 秒。首次本地验证成功，6500 分片合并耗时 502 ms；这不是两小时浏览器运行的替代证据。Native 每次合并仍允许 120 秒；两处期限的差异被保留以继续取证，不以延长等待掩盖未知原因。
+
+本轮只安排修复后的一次完整短 CI，不自动重跑长测或发布。历史失败缺少最后会话状态及 FFmpeg 证据，尚不能确认是停止通知、Native 合并还是状态保存问题。

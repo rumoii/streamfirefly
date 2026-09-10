@@ -1,4 +1,5 @@
 use crate::capture_catalog::{load, save_index};
+use crate::capture_diagnostics::record;
 use crate::capture_merge::finalize;
 use crate::capture_model::{Session, Snapshot};
 use crate::capture_socket::receive;
@@ -103,6 +104,11 @@ impl CaptureManager {
         {
             let current = session.lock().map_err(|_| "capture_unavailable")?;
             save(&current).map_err(|_| "capture_checkpoint_failed")?;
+            record(
+                &current,
+                "session-created",
+                json!({"state":current.snapshot.state}),
+            );
         }
         let working = session.clone();
         let mut directories = sessions
@@ -123,6 +129,11 @@ impl CaptureManager {
             .spawn(move || {
                 let result = receive(listener, &origin, &secret, &working);
                 if let Ok(mut session) = working.lock() {
+                    record(
+                        &session,
+                        "receive-ended",
+                        json!({"error":result.as_ref().err()}),
+                    );
                     if let Err(error) = result {
                         session.snapshot.error = Some(error);
                         session.snapshot.state = "interrupted".into();
@@ -136,6 +147,11 @@ impl CaptureManager {
                 }
                 if let Ok(mut current) = working.lock() {
                     current.worker_active = false;
+                    record(
+                        &current,
+                        "worker-ended",
+                        json!({"state":current.snapshot.state}),
+                    );
                 }
             })
             .map_err(|_| {

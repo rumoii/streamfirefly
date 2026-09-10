@@ -3,12 +3,21 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { OwnedCaptureProcesses, checkMemoryBudget, createCommandTrace, finishCaptureTest, removeCaptureDirectory, resetCaptureReports } from './capture-test-runtime.mjs';
+import { OwnedCaptureProcesses, checkMemoryBudget, commandFailure, createCommandTrace, finishCaptureTest, removeCaptureDirectory, resetCaptureReports } from './capture-test-runtime.mjs';
 
 const created = '2026-09-09T00:00:00.0000000Z';
 const root = { pid: 101, parentPid: 99, created, bytes: 100 };
 const descendant = { pid: 102, parentPid: 101, created, bytes: 200 };
-const success = processes => ({ status: 0, signal: null, error: null, stdout: JSON.stringify(processes), stderr: '', elapsedMs: 7 });
+const success = processes => ({ status: 0, signal: null, error: null, stdout: JSON.stringify(processes), stderr: '', elapsedMs: 7, timeoutMs: 10000 });
+
+test('command deadlines reject late success and missing timing without hiding existing failures', () => {
+  for (const elapsedMs of [0, 9999, 10000]) assert.equal(commandFailure({ ...success([root]), elapsedMs }), null);
+  assert.equal(commandFailure({ ...success([root]), elapsedMs: 10000.001 }), 'completion-after-deadline');
+  for (const override of [{ elapsedMs: undefined }, { elapsedMs: NaN }, { elapsedMs: -1 }, { timeoutMs: undefined }, { timeoutMs: 0 }]) {
+    assert.equal(commandFailure({ ...success([root]), ...override }), 'invalid-command-timing');
+  }
+  assert.equal(commandFailure({ ...success([root]), elapsedMs: 20000, killed: true }), 'timeout');
+});
 
 for (const [reason, override] of [
   ['start-or-execution-failure', { status: null, error: { code: 'ENOENT' } }],
@@ -19,6 +28,8 @@ for (const [reason, override] of [
   ['nonzero-exit', { status: 1, stderr: 'CIM unavailable' }],
   ['empty-output', { stdout: '  ' }],
   ['invalid-json', { stdout: 'not json' }],
+  ['completion-after-deadline', { timeoutMs: 6 }],
+  ['invalid-command-timing', { timeoutMs: undefined }],
   ['invalid-process-snapshot', { stdout: '{}' }],
   ['invalid-process-snapshot', { stdout: '[]' }],
   ['invalid-process-snapshot', { stdout: JSON.stringify([{ ...root, bytes: null }]) }],

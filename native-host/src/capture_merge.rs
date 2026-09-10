@@ -1,7 +1,9 @@
+use crate::capture_diagnostics::{drain_stderr, record};
 use crate::capture_model::{Session, Track};
 use crate::capture_storage::save;
 use crate::media_process::bundled_tool;
 use crate::persistence::replace_file;
+use serde_json::json;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
@@ -12,6 +14,11 @@ use std::time::{Duration, Instant};
 pub(crate) fn finalize(session: &Arc<Mutex<Session>>) {
     let (directory, tracks) = {
         let current = session.lock().unwrap();
+        record(
+            &current,
+            "finalization-started",
+            json!({"state":current.snapshot.state,"bytes":current.snapshot.bytes}),
+        );
         (current.directory.clone(), current.snapshot.tracks.clone())
     };
     let mut generations: BTreeMap<u32, Vec<Track>> = BTreeMap::new();
@@ -33,9 +40,18 @@ pub(crate) fn finalize(session: &Arc<Mutex<Session>>) {
         }
         let output = directory.join(format!("capture-{generation}.mkv"));
         let temporary = directory.join(format!("capture-{generation}.pending.mkv"));
-        if merge(&directory, tracks, &temporary, session)
-            && replace_file(&temporary, &output).is_ok()
-        {
+        let merged = merge(&directory, tracks, &temporary, session);
+        let replaced = if merged {
+            Some(replace_file(&temporary, &output))
+        } else {
+            None
+        };
+        record(
+            &session.lock().unwrap(),
+            "output-replacement",
+            json!({"generation":generation,"attempted":merged,"error":replaced.as_ref().and_then(|result| result.as_ref().err()).map(ToString::to_string)}),
+        );
+        if replaced.is_some_and(|result| result.is_ok()) {
             outputs.push(output.to_string_lossy().into_owned());
         } else {
             complete = false;
@@ -60,6 +76,17 @@ pub(crate) fn finalize(session: &Arc<Mutex<Session>>) {
     if save(&current).is_err() {
         current.snapshot.state = "partial".into();
         current.snapshot.error = Some("capture_checkpoint_failed".into());
+        record(
+            &current,
+            "final-state-save-failed",
+            json!({"state":current.snapshot.state}),
+        );
+    } else {
+        record(
+            &current,
+            "final-state-saved",
+            json!({"state":current.snapshot.state,"error":current.snapshot.error}),
+        );
     }
 }
 
@@ -77,38 +104,104 @@ fn merge(directory: &Path, tracks: &[Track], output: &Path, session: &Arc<Mutex<
         .arg(output)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000);
     }
-    let Ok(mut child) = command.spawn() else {
-        return false;
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            record(
+                &session.lock().unwrap(),
+                "merge-start-failed",
+                json!({"error":error.to_string()}),
+            );
+            return false;
+        }
+    };
+    let started = Instant::now();
+    record(
+        &session.lock().unwrap(),
+        "merge-started",
+        json!({"pid":child.id(),"generation":tracks[0].generation,"timeoutMs":120000}),
+    );
+    let stderr = child.stderr.take().unwrap();
+    let stderr_path = directory.join(format!("ffmpeg-stderr-{}.txt", tracks[0].generation));
+    let reader = match thread::Builder::new()
+        .name("capture-merge-stderr".into())
+        .spawn(move || drain_stderr(stderr, &stderr_path))
+    {
+        Ok(reader) => reader,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            record(
+                &session.lock().unwrap(),
+                "stderr-reader-start-failed",
+                json!({"error":error.to_string()}),
+            );
+            return false;
+        }
     };
     let deadline = Instant::now() + Duration::from_secs(120);
-    loop {
+    let success = loop {
         if session
             .lock()
             .map_or(true, |current| current.snapshot.state == "interrupted")
         {
             let _ = child.kill();
             let _ = child.wait();
-            return false;
+            record(
+                &session.lock().unwrap(),
+                "merge-interrupted",
+                json!({"elapsedMs":started.elapsed().as_millis()}),
+            );
+            break false;
         }
         match child.try_wait() {
-            Ok(Some(status)) => return status.success(),
-            Err(_) => {
+            Ok(Some(status)) => {
+                record(
+                    &session.lock().unwrap(),
+                    "merge-exited",
+                    json!({"exitCode":status.code(),"success":status.success(),"elapsedMs":started.elapsed().as_millis()}),
+                );
+                break status.success();
+            }
+            Err(error) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return false;
+                record(
+                    &session.lock().unwrap(),
+                    "merge-wait-failed",
+                    json!({"error":error.to_string()}),
+                );
+                break false;
             }
             Ok(None) if Instant::now() >= deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return false;
+                record(
+                    &session.lock().unwrap(),
+                    "merge-timeout",
+                    json!({"elapsedMs":started.elapsed().as_millis()}),
+                );
+                break false;
             }
             Ok(None) => thread::sleep(Duration::from_millis(100)),
         }
+    };
+    match reader.join() {
+        Ok(Ok(())) => {}
+        outcome => {
+            record(
+                &session.lock().unwrap(),
+                "stderr-read-failed",
+                json!({"error":format!("{outcome:?}")}),
+            );
+            eprintln!("capture merge stderr collection failed");
+        }
     }
+    success
 }

@@ -1,3 +1,5 @@
+import { observeCaptureFinalization } from './capture-finalization.mjs';
+
 export async function runCaptureScenario(origin, installed, durationSeconds, directory) {
   const api = globalThis.browser ?? globalThis.chrome;
   const pause = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
@@ -134,8 +136,8 @@ export async function runCaptureScenario(origin, installed, durationSeconds, dir
         if (Date.now() >= nextHeartbeat) { const response = await fetch(origin + '/heartbeat', { method: 'POST' }); if (!response.ok) throw new Error('Capture heartbeat failed: ' + await response.text()); nextHeartbeat = Date.now() + 30000; }
         await pause(Math.min(1000, Math.max(0, deadline - Date.now())));
       }
-      await Promise.all([request('capture.close', { tabId: tab.id, id: opened.id }), request('capture.close', { tabId: tab.id, id: opened.id })]);
-      const completed = await until(async () => (await request('capture.list')).find(session => session.id === opened.id && ['complete', 'partial', 'interrupted'].includes(session.state)), 'capture finalization', 60000);
+      output.finalization = {};
+      const completed = await observeCaptureFinalization(request, tab.id, opened.id, output.finalization);
       if (completed.state !== 'complete' || completed.outputs.length !== 1 || completed.bytes < initialBytes) throw new Error('Capture output incomplete: ' + JSON.stringify(completed));
       output.sessions.push({ ...completed, expectedDuration: fragmentCount }); output.checks.push('installed-native-capture-and-idempotent-stop');
       const interrupted = await request('capture.open', { tabId: tab.id, sourceContextId: context.sourceContextId, source: same, directory });

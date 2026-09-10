@@ -87,6 +87,8 @@ const samplingWorkflow = read('.github/workflows/diagnose-capture-sampling.yml')
 for (const expected of ['windows-2025', "node-version: '24'", 'expected_commit:', 'if: always()', 'node tools/diagnose-capture-sampling.mjs', 'test-results/sampling-diagnostic/*']) requireText(samplingWorkflow, expected, 'Standalone sampling diagnostic workflow');
 for (const forbidden of ['npm ci', 'cargo ', 'package-internal-test', 'install-internal-test', 'test:capture:soak']) if (samplingWorkflow.includes(forbidden)) throw new Error(`Diagnostic workflow must not invoke ${forbidden}`);
 requireText(scripts['test:native'], 'npm run test:dash:native', 'Native regression entry');
+requireText(scripts['test:native'], 'node tools/test-native-capture-volume.mjs', 'Native volume finalization regression entry');
+requireText(workflow, 'path: test-results/capture/**', 'Capture evidence archive upload');
 requireText(scripts['test:discovery:native'], 'npm run test:dash:discovery', 'Discovery download entry');
 requireText(scripts['test:dash:native'], 'node tools/test-native-dash.mjs', 'DASH Native entry');
 requireText(scripts['test:dash:discovery'], 'node tools/test-native-dash.mjs --browser', 'DASH browser entry');

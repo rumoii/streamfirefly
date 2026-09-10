@@ -1,3 +1,4 @@
+use crate::capture_diagnostics::record;
 use crate::capture_model::Session;
 use crate::capture_storage::{append, save};
 use serde_json::Value;
@@ -129,7 +130,15 @@ fn receive_frames(
                     .send(Message::Text("{\"pong\":true}".into()))
                     .map_err(|_| "capture_disconnected")?;
             }
-            Ok(Message::Text(text)) if text == "finish" => return Ok(()),
+            Ok(Message::Text(text)) if text == "finish" => {
+                let current = session.lock().map_err(|_| "capture_unavailable")?;
+                record(
+                    &current,
+                    "finish-received",
+                    serde_json::json!({"bytes":current.snapshot.bytes}),
+                );
+                return Ok(());
+            }
             Ok(Message::Close(_)) => return Err("capture_disconnected".into()),
             Ok(_) => {}
             Err(tungstenite::Error::Io(error))

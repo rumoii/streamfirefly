@@ -5,9 +5,19 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { test } from 'node:test';
-import { OwnedCaptureProcesses, errorDetails, processSnapshot, removeCaptureDirectory, runPowerShell } from './capture-test-runtime.mjs';
+import { OwnedCaptureProcesses, commandFailure, errorDetails, processSnapshot, removeCaptureDirectory, runPowerShell } from './capture-test-runtime.mjs';
 
 assert.equal(process.platform, 'win32', 'Real process ownership tests require Windows');
+
+test('delayed parent scheduling cannot accept an expired command', async () => {
+  const pending = runPowerShell("Write-Output 'complete'", 1000);
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2200);
+  const result = await pending;
+  assert.ok(result.elapsedMs > result.timeoutMs);
+  assert.ok(['completion-after-deadline', 'timeout', 'pipe-close-timeout'].includes(commandFailure(result)), JSON.stringify(result));
+  const normal = await runPowerShell("Write-Output 'complete'");
+  assert.equal(commandFailure(normal), null, JSON.stringify(normal));
+});
 
 test('real PowerShell timeout and execution failures retain diagnostics', async () => {
   const failed = await runPowerShell("throw 'injected CIM failure'", 30000);
@@ -25,7 +35,7 @@ test('an already exited termination target is successful without suppressing com
   const owner = new OwnedCaptureProcesses(2147483647, { run: async (script, timeout) => {
     if (script.startsWith('$targets=')) return runPowerShell(script, timeout);
     snapshots++;
-    return { status: 0, stdout: JSON.stringify([{ pid: snapshots < 3 ? 2147483647 : 2147483646, parentPid: 0, created: '2026-09-09T00:00:00.0000000Z', bytes: 1 }]) };
+    return { status: 0, elapsedMs: 1, timeoutMs: 10000, stdout: JSON.stringify([{ pid: snapshots < 3 ? 2147483647 : 2147483646, parentPid: 0, created: '2026-09-09T00:00:00.0000000Z', bytes: 1 }]) };
   } });
   await owner.sample();
   const result = await owner.stop();

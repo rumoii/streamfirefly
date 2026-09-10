@@ -9,7 +9,8 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { buildSync } from 'esbuild';
 import { WebSocketServer } from 'ws';
-import { OwnedCaptureProcesses, checkMemoryBudget, errorDetails, finishCaptureTest, removeCaptureDirectory, resetCaptureReports } from './capture-test-runtime.mjs';
+import { OwnedCaptureProcesses, checkMemoryBudget, errorDetails, finishCaptureTest, removeCaptureDirectory, resetCaptureEvidence, resetCaptureReports } from './capture-test-runtime.mjs';
+import { archiveCaptureEvidence } from './capture-test-evidence.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const executeFile = promisify(execFile);
 const argumentsList = process.argv.slice(2);
@@ -39,6 +40,7 @@ const extensionId = [...createHash('sha256').update(key).digest('hex').slice(0, 
 let child, ownedProcesses, processReady, server, sockets, timer, failure, result, stopping = false, browserOutput = '', soakStarted;
 const reportPath = path.join(root, `test-results/capture/${browser}-${installed ? 'installed' : 'transport'}-${duration}.json`);
 resetCaptureReports(reportPath);
+resetCaptureEvidence(reportPath);
 const log = message => console.log(`[${browser} capture ${duration}s] ${message}`);
 const socketState = { bytes: 0, chunks: 0, finished: false, error: '' };
 const diagnostics = [], memory = [];
@@ -161,7 +163,9 @@ finally {
   await finishCaptureTest({ reportPath, failure,
     result: { ...result, installed, duration, socketState, media: diagnostics, memory, browserOutput },
     cleanup: [
+      ['evidence-before-stop', () => installed ? archiveCaptureEvidence(directory, reportPath, 'before-stop') : undefined],
       ['processes', async () => ownedProcesses?.stop()],
+      ['evidence-after-stop', () => installed ? archiveCaptureEvidence(directory, reportPath, 'after-stop', Boolean(failure)) : undefined],
       ['websockets', async () => { if (sockets) { for (const socket of sockets.clients) socket.terminate(); await new Promise(resolve => sockets.close(resolve)); } }],
       ['http', async () => { if (server?.listening) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } }],
       ['directory', () => removeCaptureDirectory(directory)],

@@ -161,7 +161,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: Capture-evidence-${{ github.run_id }}
-          path: test-results/capture/*.json
+          path: test-results/capture/**
           if-no-files-found: warn
           retention-days: 14
 
