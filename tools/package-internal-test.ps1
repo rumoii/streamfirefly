@@ -1,6 +1,6 @@
 param(
   [ValidatePattern('^\d+\.\d+\.\d+(-beta\.\d+)?$')]
-  [string]$BundleVersion = '0.10.0-beta.4',
+  [string]$BundleVersion = '0.10.0-beta.5',
   [string]$OutputDir = (Join-Path (Split-Path -Parent $PSScriptRoot) 'release'),
   [switch]$AllowDirtySource
 )

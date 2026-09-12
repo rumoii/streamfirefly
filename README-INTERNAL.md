@@ -1,16 +1,20 @@
-# StreamFirefly 0.10.0-beta.4 测试包指南
+# StreamFirefly 0.10.0-beta.5 测试包指南
 
 此版本仅用于受邀测试，通过私有仓库 `rumoii/streamfirefly-internal-releases` 的 Pre-release 交付，不是稳定版或 Chrome Web Store 正式发布版本。测试人员使用受邀 GitHub 账号下载，不需要源码仓库权限。发布以 Release 页面实际可见为准；请勿转发安装包、Release 链接或测试数据。
 
 StreamFirefly 不绕过 DRM。请只测试自己拥有版权或已获授权的内容。
 
-本批包含实验性 DASH 选轨与资源优先布局。发布前须取得最终源码提交的成功 CI 和两小时捕捉证据；是否已发布以私有 Release 页面为准。
+本批修复 Blob 媒体捕捉、工作区与侧栏切换及外部工具返回路径，并保留实验性 DASH 选轨。发布前须取得最终源码提交的成功 CI 和两小时捕捉证据；是否已发布以私有 Release 页面为准。
 
 ## 本次更新与升级要求
 
 - 高级深搜支持字符生成、数组拼接及现有经典 Worker、iframe 路径的完整 HLS/MPD 清单识别；保持有界扫描，不拼接多次调用的片段。
 - DASH 选轨下载为实验性：支持静态、单 Period、非加密点播，选择一条视频与一条音轨，或仅音频/仅视频，输出 MP4/MKV；不支持直播、多 Period、SegmentBase/SIDX 或 DRM。同一助手进程内暂停/重试保留已完成分片，助手重启后必须重新解析。
 - 资源列表优先显示，深搜点击打开详情后启停，缓存捕捉打开独立控制页；外部工具入口归入资源下载方式和勾选结果，大小/时长条件收进“更多筛选”，收起不清除条件。
+- Blob 视频不再尝试脱离来源页面直接预览或下载；扩展按 `URL.createObjectURL(MediaSource)` 的精确对应关系打开缓存捕捉，不按 MIME、顺序或时间猜测媒体源。
+- Chromium 展开网页工作区后关闭原生侧栏，收起前先恢复侧栏；Firefox 因浏览器能力限制保留原生侧栏。切换失败时保持原界面，避免同时丢失两个入口。
+- 外部工具确认页提供返回资源页入口，来源标签页已经关闭时可以关闭确认页；删除重复的类型分组排序，只保留类型筛选、发现顺序、大小和时长排序。
+- HLS 预览模块按需加载，避免未展开预览时预加载媒体解析代码。
 
 - 完善 iframe 媒体缓存捕捉与深度搜索，按来源框架和文档隔离会话，展示中断和部分结果。
 - 增加下载工具结构化配置、草稿检查、识别规则调试和独立 URL 提取；提取候选不继承原请求凭据，也不自动发送到外部工具。
@@ -30,10 +34,10 @@ Windows ARM64 包完成构建及包审计不等于 ARM64 设备实机验收；�
 ## 一、下载测试包
 
 1. 登录受邀 GitHub 账号，进入私有仓库 `rumoii/streamfirefly-internal-releases` 的 **Releases**。
-2. 打开标记为 Pre-release 的 `v0.10.0-beta.4`，核对正文中的源码提交、成功 CI 和两小时捕捉结果。维护者可在源码仓库 **Actions → Package internal test bundles** 查阅构建及证据，Actions artifact 保留 14 天。
+2. 打开标记为 Pre-release 的 `v0.10.0-beta.5`，核对正文中的源码提交、成功 CI 和两小时捕捉结果。维护者可在源码仓库 **Actions → Package internal test bundles** 查阅构建及证据，Actions artifact 保留 14 天。
 3. 在 Release 附件中选择与当前 Windows 架构匹配的压缩包：
-   - Intel 或 AMD Windows 电脑：`StreamFirefly-0.10.0-beta.4-internal-x64.zip`
-   - Windows ARM 电脑：`StreamFirefly-0.10.0-beta.4-internal-arm64.zip`
+   - Intel 或 AMD Windows 电脑：`StreamFirefly-0.10.0-beta.5-internal-x64.zip`
+   - Windows ARM 电脑：`StreamFirefly-0.10.0-beta.5-internal-arm64.zip`
 4. 同时下载该 Release 的 `INTERNAL-SHA256SUMS.txt`，用于核对压缩包完整性。
 
 可以在 Windows 的“设置 → 系统 → 系统信息 → 系统类型”中查看架构。大多数 Intel、AMD 电脑使用 x64；仅骁龙等 Windows ARM 设备使用 ARM64。
@@ -45,7 +49,7 @@ Windows ARM64 包完成构建及包审计不等于 ARM64 设备实机验收；�
 在下载目录打开 PowerShell，计算压缩包的 SHA-256：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 -LiteralPath '.\StreamFirefly-0.10.0-beta.4-internal-x64.zip'
+Get-FileHash -Algorithm SHA256 -LiteralPath '.\StreamFirefly-0.10.0-beta.5-internal-x64.zip'
 ```
 
 ARM64 测试人员将文件名替换为 ARM64 包。输出应与 `INTERNAL-SHA256SUMS.txt` 中对应记录一致；不一致时不要继续安装，请重新下载并反馈。
@@ -53,8 +57,8 @@ ARM64 测试人员将文件名替换为 ARM64 包。输出应与 `INTERNAL-SHA25
 为避免 Windows 保留互联网下载标记，先解除 ZIP 锁定，再完整解压：
 
 ```powershell
-Unblock-File -LiteralPath '.\StreamFirefly-0.10.0-beta.4-internal-x64.zip'
-Expand-Archive -LiteralPath '.\StreamFirefly-0.10.0-beta.4-internal-x64.zip' -DestinationPath '.\StreamFirefly-Test'
+Unblock-File -LiteralPath '.\StreamFirefly-0.10.0-beta.5-internal-x64.zip'
+Expand-Archive -LiteralPath '.\StreamFirefly-0.10.0-beta.5-internal-x64.zip' -DestinationPath '.\StreamFirefly-Test'
 ```
 
 不要直接在压缩包内运行脚本，也不要单独移动 `extension`、`native-host` 或 `tools` 文件夹。
@@ -106,7 +110,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 - 使用正则、类型、大小和时长范围筛选资源，并验证时长排序、批量复制、下载和移除；
 - 用 Tab 和 Shift+Tab 检查下载弹窗焦点不离开弹窗，Escape 关闭后焦点回到触发按钮；
 - 对 HLS 分别点击“快速下载”和“详细解析”；快速下载应采用最高画质、默认音轨、完整范围且不默认下载字幕，详细解析应在展开工作区中提供清晰度、音轨、多字幕、时间范围和切片范围；
-- 点击“展开工作区”，确认界面只覆盖网页内容可视区域，地址栏、标签栏和原生侧栏仍可使用；点击“设置”应直接展开到设置视图；
+- 点击“展开工作区”，确认界面只覆盖网页内容可视区域；Chromium 应在工作区就绪后关闭原生侧栏，收起时先恢复侧栏，Firefox 则保持原生侧栏可见；点击“设置”应直接展开到设置视图；
 - 切换到另一标签再切回，确认原标签工作区仍保留筛选和 HLS 选择状态；在第二个标签展开工作区后，确认第一个标签的工作区已卸载；
 - 分别通过网页导航、关闭标签、Escape 和“收起”结束工作区，确认页面恢复且没有遗留预览、计时器或重复响应；重复展开和重复收起不应产生多个工作区或报错；
 - 分别打开含视频和音频的网页，确认资源可以被识别；图片默认不显示，在设置中开启“识别图片”并刷新目标网页后再确认图片识别；
@@ -114,9 +118,11 @@ Set-ExecutionPolicy -Scope Process Bypass
 - 如果页面产生大量 TS、M4S 或 KEY 请求，确认它们只出现在默认折叠的“媒体分片”区域，并按每次 100 个展开；
 - 在设置中开启“高级深度搜索”并刷新目标网页，确认由 JSON、Base64、文本解码或同源 Worker 生成的媒体地址可以出现；完成后关闭该选项并刷新；
 - 展开资源详情，检查类型、地址、大小、分辨率和时长等已知信息；
-- 切换嗅探顺序、文件大小和类型分组，确认排序结果、分组数量和大小提示符合预期；
+- 切换发现顺序、文件大小和媒体时长排序，确认排序结果和提示符合预期；类型只作为筛选条件，不再提供类型分组排序；
 - 在侧栏确认当前来源和活动任务概览；展开工作区后点击顶部“下载”，确认可在“当前页面”和“全部任务”之间切换，删除与输出文件管理只出现在完整工作区；
+- 从资源行发送到外部工具，确认确认页可以返回资源页；关闭来源标签页后，确认页应提示来源不可用并允许关闭当前页；
 - 检查视频封面；点击可预览资源时，确认能够播放或查看；
+- 播放使用 MediaSource 的 Blob 视频，确认资源行不再等待封面或直接下载，点击“缓存捕捉”后只选择与该 Blob 精确对应的媒体源；
 - 刷新、重复播放或重复请求同一资源，确认列表不会产生明显重复项。
 
 ### 2. 下载行为
@@ -167,7 +173,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 ### 源码里的规则、外部工具和捕捉入口
 
-这些入口由 0.10.0-beta.4 测试包提供，旧版 0.9.1 内测包不会自动获得。扩展和助手必须成套更新，并通过本地程序调用和缓存捕捉能力握手，不支持新旧组件混用。安装态短链路结果以对应 CI 运行和证据为准；真实下载工具、真实网站捕捉、长时压力及 ARM64 实机仍待验收。捕捉只保存开启后的媒体数据，异常停止会保留片段，不自动删除已有下载。
+这些入口由 0.10.0-beta.5 测试包提供，旧版 0.9.1 内测包不会自动获得。扩展和助手必须成套更新，并通过本地程序调用和缓存捕捉能力握手，不支持新旧组件混用。安装态短链路结果以对应 CI 运行和证据为准；真实下载工具、真实网站捕捉、长时压力及 ARM64 实机仍待验收。捕捉只保存开启后的媒体数据，异常停止会保留片段，不自动删除已有下载。
 
 ### 扩展提示 Native Host 不可用
 

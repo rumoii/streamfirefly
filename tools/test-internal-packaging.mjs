@@ -6,7 +6,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = relative => fs.readFileSync(path.join(root, relative), 'utf8').replaceAll('\r\n', '\n');
 const requireText = (text, expected, label) => { if (!text.includes(expected)) throw new Error(`${label} is missing: ${expected}`); };
 
-const bundleVersion = '0.10.0-beta.4';
+const bundleVersion = '0.10.0-beta.5';
+const releaseTitleVersion = bundleVersion.replace(/-beta\.(\d+)$/, ' Beta $1');
 const packageScript = read('tools/package-internal-test.ps1');
 const auditScript = read('tools/audit-internal-test.ps1');
 const nativeTest = read('tools/test-native.mjs');
@@ -14,6 +15,7 @@ const nativeDownloadTest = read('tools/test-native-download.mjs');
 const nativeHlsTest = read('tools/test-native-hls.mjs');
 const nativeDashTest = read('tools/test-native-dash.mjs');
 const readme = read('README-INTERNAL.md');
+const releaseNotes = read(`docs/releases/${bundleVersion}.md`);
 const workflow = read('.github/workflows/package-internal.yml');
 
 const version = JSON.parse(read('package.json')).version;
@@ -53,6 +55,8 @@ requireText(nativeHlsTest, 'process.env.STREAMFIREFLY_FFMPEG_EXE', 'Native HLS F
 requireText(readme, `StreamFirefly-${bundleVersion}-internal-x64.zip`, 'Internal test guide');
 requireText(readme, `StreamFirefly-${bundleVersion}-internal-arm64.zip`, 'Internal test guide');
 requireText(readme, `# StreamFirefly ${bundleVersion} 测试包指南`, 'Internal test guide version');
+requireText(releaseNotes, `# StreamFirefly ${releaseTitleVersion} 内测版`, 'Internal release notes');
+requireText(releaseNotes, `\`${bundleVersion}\``, 'Internal release notes version');
 requireText(readme, 'Actions → Package internal test bundles', 'Test artifact delivery');
 requireText(readme, 'streamfirefly-internal-releases', 'Private release delivery');
 requireText(readme, 'Pre-release', 'Pre-release delivery boundary');

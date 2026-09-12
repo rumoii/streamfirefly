@@ -6,7 +6,7 @@ on:
       bundle_version:
         description: Internal bundle version
         required: true
-        default: 0.10.0-beta.4
+        default: 0.10.0-beta.5
         type: string
       expected_commit:
         description: Exact main commit to package
