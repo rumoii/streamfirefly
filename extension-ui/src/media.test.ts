@@ -58,7 +58,6 @@ test("sorts resources without treating manifest bytes as media size", () => {
   expect(sortCandidates(items, "detected").map(item => item.id)).toEqual(["unknown", "image", "audio", "manifest", "video"]);
   expect(sortCandidates(items, "size").map(item => item.id)).toEqual(["image", "video", "audio", "unknown", "manifest"]);
   expect(sortCandidates(items, "duration")[0].id).toBe("video");
-  expect(sortCandidates(items, "type").map(item => item.id)).toEqual(["unknown", "manifest", "video", "audio", "image"]);
 });
 
 test("chooses a compatible output container from codecs", () => {

@@ -3,15 +3,16 @@ import { toRef } from "vue";
 import type { UiContext } from "../../types";
 import { createCaptureState } from "../capture/state";
 import { sessionError } from "../session-client";
-const props = defineProps<{ context: UiContext | null }>();
-const { sessions, catalog, error, message, busy, selected, acknowledged, directory, active, sourceKey, scan, start, stop, recover, refresh } = createCaptureState(toRef(props, "context"), true);
+const props = defineProps<{ context: UiContext | null; targetObjectUrl?: string }>();
+const { sessions, catalog, error, message, busy, selected, acknowledged, directory, active, sourceKey, scan, start, stop, recover, refresh } = createCaptureState(toRef(props, "context"), true, toRef(props, "targetObjectUrl"));
 const labels: Record<string, string> = { armed: "等待数据", capturing: "捕捉中", stopping: "停止排空中", finalizing: "整理输出中", complete: "已保存", partial: "部分结果", interrupted: "已中断", unavailable: "检查点不可用" };
 </script>
 <template>
   <section class="feature-panel">
     <h3>缓存捕捉</h3><p>仅保存开启后的原始媒体数据，不回溯旧缓存，不处理 DRM。跳转或编码变化会分开保存，整理片段不会补齐遗漏数据。</p>
+    <p v-if="targetObjectUrl">正在处理资源列表中的 Blob 临时媒体；开始捕捉后请回到来源页面，从头重新播放视频。</p>
     <button class="button" :disabled="busy || !context?.supported || !!active" @click="scan">扫描媒体源</button>
-    <label class="field"><span>媒体源</span><select v-model="selected" class="control" :disabled="busy || !!active"><option value="">请选择媒体源</option><option v-for="source in catalog.sources" :key="sourceKey(source)" :value="sourceKey(source)">{{ source.frameId === 0 ? '主页面' : `框架 ${source.frameId}` }} · {{ source.url }} · {{ source.tracks.join(', ') }} · {{ source.state }}</option></select></label>
+    <label class="field"><span>媒体源</span><select v-model="selected" class="control" :disabled="busy || !!active || !!targetObjectUrl"><option value="">{{ targetObjectUrl ? '尚未定位对应媒体源' : '请选择媒体源' }}</option><option v-for="source in catalog.sources" :key="sourceKey(source)" :value="sourceKey(source)">{{ source.frameId === 0 ? '主页面' : `框架 ${source.frameId}` }} · {{ source.url }} · {{ source.tracks.join(', ') }} · {{ source.state }}</option></select></label>
     <p v-for="frame in catalog.frames.filter(item => item.state !== 'ready')" :key="frame.frameId">框架 {{ frame.frameId }} · {{ frame.url }}：{{ frame.state === 'unsupported' ? '此框架不支持捕捉' : sessionError(frame.error) }}</p>
     <label class="field"><span>保存目录（留空使用默认目录）</span><input v-model="directory" class="control" :disabled="busy || !!active" placeholder="绝对路径"></label>
     <label><input v-model="acknowledged" type="checkbox">我有权保存此媒体，并了解仅捕捉开启后的数据</label>

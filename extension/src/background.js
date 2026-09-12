@@ -11,6 +11,7 @@ import { createNative } from './native.js';
 import { createResources } from './resources.js';
 import { createPreview } from './preview.js';
 import { createWorkspace } from './workspace.js';
+import { supportedPage } from './platform.js';
 const api = globalThis.browser ?? globalThis.chrome;
 const settings = createSettings(api);
 const evaluation = createEvaluation(api);
@@ -21,7 +22,7 @@ const { loadTabState, uiContextForTab, resolveUiTab, notifyUiContext, queueTab, 
 const preview = createPreview(api, resources.candidateFor);
 const { updatePreviewHeaders } = preview;
 const workspace = createWorkspace(api, preview.clearPreviewHeadersForTab);
-const { openWorkspace, unmountWorkspace } = workspace;
+const { openWorkspace, closeWorkspace, unmountWorkspace } = workspace;
 const native = createNative(api, workspace.notifyWorkspaceMessage);
 const { nativeRequestPromise, nativeInfo } = native;
 const integrations = createIntegrations(api, resources, nativeRequestPromise, evaluation.run);
@@ -82,6 +83,7 @@ api.tabs.onUpdated?.addListener((tabId, changeInfo, tab) => {
 api.tabs.onActivated?.addListener(activeInfo => { notifyUiContext(activeInfo.tabId, activeInfo.windowId); });
 
 async function taskPayloadForSender(payload = {}, sender = {}) {
+  if (typeof payload.url === "string" && payload.url.startsWith("blob:")) throw new Error("blob_resource_requires_capture");
   if (!Number.isInteger(sender.tab?.id)) return payload;
   const state = await loadTabState(sender.tab.id);
   if (payload.sourceContextId && payload.sourceContextId !== state.sourceContextId) throw new Error("resource_view_context_stale");
@@ -104,10 +106,31 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "capture.control.open") {
     const tabId = sender.tab?.id ?? message.payload?.tabId;
     if (!Number.isInteger(tabId)) { sendResponse({ ok: false, error: "来源页面无效" }); return false; }
-    capture.openControl(tabId).then(() => sendResponse({ ok: true }), () => sendResponse({ ok: false, error: "捕捉控制页打开失败" })); return true;
+    (async () => {
+      const state = await loadTabState(tabId);
+      if (message.payload?.sourceContextId && state.sourceContextId !== message.payload.sourceContextId) throw new Error("capture_document_changed");
+      await capture.openControl(tabId, message.payload?.objectUrl || "");
+    })().then(() => sendResponse({ ok: true }), error => sendResponse({ ok: false, error: error.message || "捕捉控制页打开失败" })); return true;
   }
   if (message?.type === "capture.context" && sender.url?.split(/[?#]/, 1)[0] === api.runtime.getURL("dist/app.html")) {
     api.tabs.get(message.payload.tabId).then(uiContextForTab).then(value => sendResponse({ ok: true, value }), () => sendResponse({ ok: false, error: "来源页面已关闭" })); return true;
+  }
+  if (message?.type === "ui.source.activate" && sender.url?.split(/[?#]/, 1)[0] === api.runtime.getURL("dist/app.html")) {
+    (async () => {
+      if (!Number.isInteger(message.payload?.tabId)) throw new Error("source_tab_unavailable");
+      let tab;
+      try { tab = await api.tabs.get(message.payload.tabId); } catch (_) { throw new Error("source_tab_unavailable"); }
+      if (!Number.isInteger(tab?.id) || !Number.isInteger(tab?.windowId) || !supportedPage(tab.url)) throw new Error("source_tab_unavailable");
+      try { await api.tabs.update(tab.id, { active: true }); await api.windows?.update?.(tab.windowId, { focused: true }); }
+      catch (_) { throw new Error("source_tab_unavailable"); }
+      if (message.payload.closeCurrent && Number.isInteger(sender.tab?.id) && sender.tab.id !== tab.id) {
+        try { await api.tabs.remove(sender.tab.id); } catch (_) { throw new Error("page_close_unavailable"); }
+      }
+    })().then(() => sendResponse({ ok: true }), error => sendResponse({ ok: false, error: error.message })); return true;
+  }
+  if (message?.type === "ui.page.close" && sender.url?.split(/[?#]/, 1)[0] === api.runtime.getURL("dist/app.html")) {
+    if (!Number.isInteger(sender.tab?.id)) { sendResponse({ ok: false, error: "page_close_unavailable" }); return false; }
+    api.tabs.remove(sender.tab.id).then(() => sendResponse({ ok: true }), () => sendResponse({ ok: false, error: "page_close_unavailable" })); return true;
   }
   const administrative = ["extraction.get", "extraction.save", "extraction.test", "discovery.get", "discovery.save", "discovery.test", "template.render", "templates.get", "templates.save", "integration.preview", "integration.get", "integration.save", "integration.test", "integration.invoke", "integration.secret", "integration.intent", "capture.sources", "capture.open", "capture.close", "capture.list", "capture.recover"];
   if (administrative.includes(message?.type)) {
@@ -148,7 +171,7 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message?.type === "workspace.close") {
     if (!Number.isInteger(sender?.tab?.id)) { sendResponse({ ok: false, error: "workspace_sender_required" }); return false; }
-    unmountWorkspace(sender.tab.id).then(() => sendResponse({ ok: true })).catch(error => sendResponse({ ok: false, error: error.message }));
+    closeWorkspace(sender.tab).then(() => sendResponse({ ok: true })).catch(error => sendResponse({ ok: false, error: error.message }));
     return true;
   }
   if (message?.type === "workspace.ready") {

@@ -6,8 +6,9 @@ import RulesPanel from "../features/configuration/RulesPanel.vue";
 import ExtractionPanel from "../features/configuration/ExtractionPanel.vue";
 import ToolsPanel from "../features/configuration/ToolsPanel.vue";
 import TemplatesPanel from "../features/configuration/TemplatesPanel.vue";
+import type { AppSettings } from "../features/settings/state";
 
-const props = defineProps<{ settings: { saveDir: string; downloadThreads: number; detectImages: boolean; advancedDeepSearch: boolean; candidateSort: string } }>();
+const props = defineProps<{ settings: AppSettings }>();
 const emit = defineEmits<{ save: [settings: typeof props.settings]; reset: [] }>();
 const form = reactive({ ...props.settings });
 watch(() => props.settings, value => Object.assign(form, value), { deep: true });

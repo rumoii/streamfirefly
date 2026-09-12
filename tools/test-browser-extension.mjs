@@ -133,14 +133,16 @@ function reporterSource(origin) {
         const source = new MediaSource(); video.src = URL.createObjectURL(source);
         await new Promise(resolve => source.addEventListener('sourceopen', resolve, { once: true }));
         window.captureFixtureBuffer = source.addSourceBuffer('video/mp4; codecs="avc1.64000a"');
-        return window.__streamFireflyCaptureProbe.sources().at(-1).id;
+        const discovered = window.__streamFireflyCaptureProbe.sources().at(-1);
+        return { id: discovered.id, objectUrl: video.src, mapped: discovered.objectUrls.includes(video.src) };
       } });
       const url = testApi.runtime.getURL('offscreen.html');
       if (!(await testApi.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'], documentUrls: [url] })).length) await testApi.offscreen.createDocument({ url: 'offscreen.html', reasons: ['WORKERS'], justification: 'Capture test fixture' });
       const identity = await testApi.tabs.sendMessage(tab.id, { type: 'capture.identity' }, { frameId: 0 });
       const opened = await testApi.runtime.sendMessage({ type: 'capture.transport.open', payload: { id: 'browser-capture', tabId: tab.id, frameId: 0, documentToken: identity.documentToken, endpoint: origin.replace('http:', 'ws:'), token: 'a'.repeat(64) } });
       if (!opened?.ok) throw new Error(JSON.stringify(opened));
-      const started = await testApi.tabs.sendMessage(tab.id, { type: 'capture.start', id: 'browser-capture', sourceId: setup[0].result, documentToken: identity.documentToken }, { frameId: 0 });
+      if (!setup[0].result.mapped) throw new Error('MediaSource Blob URL was not mapped to its capture source');
+      const started = await testApi.tabs.sendMessage(tab.id, { type: 'capture.start', id: 'browser-capture', sourceId: setup[0].result.id, documentToken: identity.documentToken }, { frameId: 0 });
       if (!started?.ok) throw new Error(JSON.stringify(started));
       await testApi.scripting.executeScript({ target: { tabId: tab.id }, world: 'MAIN', args: [origin], func: async base => {
         const bytes = await fetch(base + '/capture-sample.mp4').then(response => response.arrayBuffer());

@@ -1,5 +1,6 @@
 {
   "manifest_version": 3,
+  "minimum_chrome_version": "141",
   "name": "流萤 StreamFirefly",
   "version": "0.10.0",
   "description": "本地优先的网页媒体发现与下载工具",

@@ -6,6 +6,7 @@ export interface CaptureSource {
   url: string;
   state: string;
   tracks: string[];
+  objectUrls: string[];
 }
 export interface FrameStatus {
   frameId: number;
@@ -35,7 +36,7 @@ export interface DeepSearchStatus {
 }
 export interface CaptureRequests {
   "capture.sources": { payload: { tabId: number }; value: CaptureSources };
-  "capture.open": { payload: { tabId: number; sourceContextId: string; source: CaptureSource; directory: string }; value: { id: string } };
+  "capture.open": { payload: { tabId: number; sourceContextId: string; source: CaptureSource; directory: string; objectUrl?: string }; value: { id: string } };
   "capture.close": { payload: { tabId: number; id: string }; value: void };
   "capture.list": { payload: undefined; value: CaptureSnapshot[] };
   "capture.recover": { payload: { id: string }; value: unknown };

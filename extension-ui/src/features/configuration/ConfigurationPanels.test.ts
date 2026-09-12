@@ -3,6 +3,7 @@ import { flushPromises, mount } from "@vue/test-utils";
 import RulesPanel from "./RulesPanel.vue";
 import ToolsPanel from "./ToolsPanel.vue";
 import DispatchView from "./DispatchView.vue";
+import CaptureView from "./CaptureView.vue";
 import ExtractionPanel from "./ExtractionPanel.vue";
 import { defaultExtraction, extractResource, extractAddress } from "../../../../shared/extraction";
 import { defaultDiscovery } from "../../../../shared/discovery";
@@ -95,6 +96,7 @@ describe("configuration serialization", () => {
       if (message.type === "integration.get") return { ok: true, value: { config: { version: 1, profiles: [profile] } } };
       if (message.type === "integration.preview") return { ok: true, value: { endpoint: profile.endpoint, arguments: ["https://media.test/video.mp4"] } };
       if (message.type === "integration.invoke") { dispatches++; return { ok: true, value: { requestId: message.payload.requestId, profileId: profile.id, createdAt: 1, state: message.payload.candidateId === "unknown" ? "unknown" : dispatches > 2 ? "started" : "failed" } }; }
+      if (message.type === "ui.source.activate") return { ok: true };
       throw new Error(message.type);
     });
     const wrapper = mount(DispatchView); await flushPromises();
@@ -107,7 +109,44 @@ describe("configuration serialization", () => {
     expect(calls).toHaveLength(3);
     expect(calls[2][0].payload.candidateId).toBe("first");
     expect(calls[2][0].payload.requestId).not.toBe(calls[0][0].payload.requestId);
-    expect(wrapper.text()).toContain("结果未知，未自动重试"); wrapper.unmount();
+    expect(wrapper.text()).toContain("结果未知，未自动重试");
+    await wrapper.findAll("button").find(button => button.text() === "返回资源页")!.trigger("click");
+    expect(send.mock.calls.find(([message]) => message.type === "ui.source.activate")?.[0].payload).toEqual({ tabId: 1, closeCurrent: true });
+    wrapper.unmount();
+  });
+  it("offers to close an external confirmation page when its source tab is gone", async () => {
+    const profile = { ...preset("program"), enabled: true };
+    send.mockImplementation(async (message: any) => {
+      if (message.type === "integration.intent") return { ok: true, value: { tabId: 1, sourceContextId: "page", candidates: [{ id: "first", url: "https://media.test/video.mp4", title: "视频", inline: false }] } };
+      if (message.type === "integration.get") return { ok: true, value: { config: { version: 1, profiles: [profile] } } };
+      if (message.type === "integration.preview") return { ok: true, value: {} };
+      if (message.type === "ui.source.activate") return { ok: false, error: "source_tab_unavailable" };
+      if (message.type === "ui.page.close") return { ok: true };
+      throw new Error(message.type);
+    });
+    const wrapper = mount(DispatchView); await flushPromises();
+    await wrapper.findAll("button").find(button => button.text() === "返回资源页")!.trigger("click"); await flushPromises();
+    expect(wrapper.text()).toContain("来源标签页已关闭");
+    await wrapper.findAll("button").find(button => button.text() === "关闭此页")!.trigger("click");
+    expect(send.mock.calls.some(([message]) => message.type === "ui.page.close")).toBe(true);
+    wrapper.unmount();
+  });
+  it("opens a Blob capture intent on its exact source and can return to playback", async () => {
+    const objectUrl = "blob:https://media.test/source";
+    history.replaceState({}, "", `/?surface=options&captureTab=7&captureBlob=${encodeURIComponent(objectUrl)}`);
+    send.mockImplementation(async (message: any) => {
+      if (message.type === "capture.context") return { ok: true, value: { sourceTabId: 7, sourceContextId: "page", pageUrl: "https://media.test/watch", pageTitle: "播放页", supported: true } };
+      if (message.type === "capture.list") return { ok: true, value: [] };
+      if (message.type === "capture.sources") return { ok: true, value: { sources: [{ id: "1", frameId: 0, documentToken: "doc", url: "https://media.test/watch", tracks: ["video/mp4"], state: "open", objectUrls: [objectUrl] }], frames: [] } };
+      if (message.type === "ui.source.activate") return { ok: true };
+      throw new Error(message.type);
+    });
+    const wrapper = mount(CaptureView); await flushPromises();
+    expect(send.mock.calls.some(([message]) => message.type === "capture.sources" && message.payload.tabId === 7)).toBe(true);
+    expect(wrapper.text()).toContain("已定位此 Blob 对应的媒体源");
+    await wrapper.findAll("button").find(button => button.text() === "返回来源播放")!.trigger("click");
+    expect(send.mock.calls.find(([message]) => message.type === "ui.source.activate")?.[0].payload).toEqual({ tabId: 7, closeCurrent: false });
+    wrapper.unmount();
   });
   it("saves edited rules as plain JSON instead of a Vue proxy", async () => {
     send.mockImplementation(async (message: any) => message.type === "discovery.get" ? { ok: true, value: { config: defaultDiscovery(), disabled: {}, error: "" } } : { ok: true, value: structuredClone(message.payload) });

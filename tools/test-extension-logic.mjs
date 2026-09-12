@@ -19,6 +19,8 @@ const executedScripts = [];
 const tabMessages = [];
 const previewRuleUpdates = [];
 let sidePanelBehavior = null;
+const sidePanelCalls = [];
+let rejectSidePanelOpen = false, rejectSidePanelClose = false;
 let nativeInfoError = null;
 let nextTabId = 100;
 const tabsById = new Map([
@@ -40,8 +42,8 @@ const storageArea = (values, queries = null) => ({
 });
 const api = {
   action: { setBadgeText: async () => {}, onClicked: { addListener: listener => { listeners.actionClicked = listener; } } },
-  sidePanel: { setPanelBehavior: async value => { sidePanelBehavior = value; } },
-  scripting: { executeScript: async value => { executedScripts.push(structuredClone(value)); return []; } },
+  sidePanel: { setPanelBehavior: async value => { sidePanelBehavior = value; }, close: async value => { sidePanelCalls.push({ type: 'close', value: structuredClone(value) }); if (rejectSidePanelClose) throw new Error('close rejected'); }, open: async value => { sidePanelCalls.push({ type: 'open', value: structuredClone(value) }); if (rejectSidePanelOpen) throw new Error('open rejected'); } },
+  scripting: { executeScript: async value => { executedScripts.push(structuredClone(value)); if (value.files?.includes('dist/workspace.js')) queueMicrotask(() => listeners.message({ type: 'workspace.ready' }, { tab: { ...tabsById.get(value.target.tabId) } }, () => {})); return []; } },
   storage: { local: storageArea(localValues, localGetQueries), session: storageArea(sessionValues), onChanged: { addListener: listener => { listeners.storageChanged = listener; } } },
   webRequest: {
     OnBeforeSendHeadersOptions: { EXTRA_HEADERS: 'extraHeaders' },
@@ -81,6 +83,7 @@ const api = {
       if (!tab) throw new Error('tab_not_found');
       Object.assign(tab, properties); tabUpdates.push({ id, properties: { ...properties } }); return { ...tab };
     },
+    remove: async id => { tabsById.delete(id); },
     sendMessage: async (id, message) => { tabMessages.push({ id, message: structuredClone(message) }); return { ok: true }; },
     onRemoved: { addListener: listener => { listeners.removed = listener; } },
     onUpdated: { addListener: listener => { listeners.updated = listener; } },
@@ -95,7 +98,7 @@ class FixtureWorker {
   postMessage(job) { queueMicrotask(() => { if (!this.stopped) this.scope.self.onmessage({ data: structuredClone(job) }); }); }
   terminate() { this.stopped = true; }
 }
-vm.runInNewContext(source, { chrome: api, Worker: FixtureWorker, Error, URL, Map, Set, Number, Object, Date, Promise, TextEncoder, TextDecoder, Headers, Uint8Array, crypto: webcrypto, structuredClone, fetch: async () => fetchResponse, setTimeout, clearTimeout, console });
+vm.runInNewContext(source, { chrome: api, Worker: FixtureWorker, Error, URL, URLSearchParams, Map, Set, Number, Object, Date, Promise, TextEncoder, TextDecoder, Headers, Uint8Array, crypto: webcrypto, structuredClone, fetch: async () => fetchResponse, setTimeout, clearTimeout, console });
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const flush = async () => { for (let index = 0; index < 6; index += 1) await settle(); };
@@ -112,6 +115,9 @@ const rejectedV1 = await send({ type: 'task.create', payload: { hlsPlan: { versi
 if (rejectedV1.ok || rejectedV1.error !== 'hls_plan_version_unsupported') throw new Error('Legacy HLS plan was accepted');
 const acceptedV2 = await send({ type: 'task.create', payload: { hlsPlan: { version: 2 } } });
 if (!acceptedV2.ok) throw new Error('Current HLS plan was rejected');
+const nativeBeforeBlob = nativePosted.length;
+const rejectedBlobTask = await send({ type: 'task.create', payload: { url: 'blob:https://media.example/source' } });
+if (rejectedBlobTask.ok || rejectedBlobTask.error !== 'blob_resource_requires_capture' || nativePosted.length !== nativeBeforeBlob) throw new Error(`Blob media reached Native download: ${JSON.stringify(rejectedBlobTask)}`);
 
 listeners.beforeHeaders({ tabId: 7, url: 'https://media.example/a.mp4#fragment', requestId: '1', requestHeaders: [{ name: 'Referer', value: 'https://media.example/page' }, { name: 'Authorization', value: 'Bearer preview' }, { name: 'X-Secret', value: 'must-not-leak' }] });
 listeners.headers({ tabId: 7, url: 'https://media.example/a.mp4#fragment', requestId: '1', statusCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'video/mp4' }, { name: 'Content-Length', value: '1024' }, { name: 'Content-Disposition', value: 'attachment; filename=movie.mp4' }] });
@@ -217,6 +223,7 @@ tabsById.get(9).active = false;
 tabsById.get(7).active = true;
 const firstWorkspace = await send({ type: 'workspace.open', view: 'resources' });
 if (!firstWorkspace.ok || executedScripts.at(-1)?.target?.tabId !== 7 || executedScripts.at(-1)?.files?.[0] !== 'dist/workspace.js') throw new Error(`Workspace was not injected into the active source tab: ${JSON.stringify({ firstWorkspace, executedScripts })}`);
+if (!sidePanelCalls.some(call => call.type === 'close' && call.value.windowId === 1)) throw new Error(`Ready workspace did not close the Chromium side panel: ${JSON.stringify(sidePanelCalls)}`);
 if (createdTabs.length) throw new Error(`Workspace entry created a browser tab: ${JSON.stringify(createdTabs)}`);
 if (!tabMessages.some(entry => entry.id === 8 && entry.message.type === 'workspace.unmount')) throw new Error('Opening a workspace did not clean other tabs in the window');
 
@@ -239,9 +246,39 @@ if (staleTask.ok || staleTask.error !== 'resource_view_context_stale' || nativeP
 await send({ type: 'task.create', payload: { url: 'https://video.example/file.mp4', sourceTabId: 7, sourceContextId: senderView.context.sourceContextId } }, { tab: { ...tabsById.get(8) } });
 const workspaceTask = nativePosted.at(-1)?.payload;
 if (workspaceTask?.sourceTabId !== 8 || workspaceTask?.sourceContextId !== senderView.context.sourceContextId) throw new Error(`Workspace task escaped its sender context: ${JSON.stringify(workspaceTask)}`);
+const unmountsBeforeRejectedClose = tabMessages.filter(entry => entry.id === 8 && entry.message.type === 'workspace.unmount').length;
+rejectSidePanelOpen = true;
+const rejectedClose = await send({ type: 'workspace.close' }, { tab: { ...tabsById.get(8) } });
+rejectSidePanelOpen = false;
+if (rejectedClose.ok || rejectedClose.error !== 'workspace_sidebar_open_failed' || tabMessages.filter(entry => entry.id === 8 && entry.message.type === 'workspace.unmount').length !== unmountsBeforeRejectedClose) throw new Error(`Workspace disappeared when the Chromium side panel could not reopen: ${JSON.stringify(rejectedClose)}`);
 const firstClose = await send({ type: 'workspace.close' }, { tab: { ...tabsById.get(8) } });
 const secondClose = await send({ type: 'workspace.close' }, { tab: { ...tabsById.get(8) } });
 if (!firstClose.ok || !secondClose.ok || tabMessages.filter(entry => entry.id === 8 && entry.message.type === 'workspace.unmount').length < 2) throw new Error('Repeated workspace disposal was not idempotent');
+if (sidePanelCalls.filter(call => call.type === 'open' && call.value.windowId === 1).length < 2) throw new Error(`Workspace disposal did not restore the Chromium side panel: ${JSON.stringify(sidePanelCalls)}`);
+
+const controlTab = { id: 10, active: true, url: 'chrome-extension://streamfirefly-test/dist/app.html?surface=options&dispatch=test', title: '确认', windowId: 1 };
+tabsById.set(controlTab.id, controlTab);
+const returned = await send({ type: 'ui.source.activate', payload: { tabId: 7, closeCurrent: true } }, { url: controlTab.url, tab: { ...controlTab } });
+if (!returned.ok || tabsById.has(controlTab.id) || !tabUpdates.some(update => update.id === 7 && update.properties.active) || !windowUpdates.some(update => update.id === 1 && update.properties.focused)) throw new Error(`Control page did not return to and focus its source tab: ${JSON.stringify({ returned, tabUpdates, windowUpdates })}`);
+const missingReturn = await send({ type: 'ui.source.activate', payload: { tabId: 999, closeCurrent: false } }, { url: controlTab.url, tab: { ...controlTab } });
+if (missingReturn.ok || missingReturn.error !== 'source_tab_unavailable') throw new Error(`Missing source tab did not fail clearly: ${JSON.stringify(missingReturn)}`);
+
+const captureContext = oldSourceContextId;
+const openedCapture = await send({ type: 'capture.control.open', payload: { tabId: 7, sourceContextId: captureContext, objectUrl: 'blob:https://media.example/source' } });
+const captureTab = createdTabs.at(-1);
+if (!openedCapture.ok || !captureTab?.url.includes('captureTab=7') || !captureTab.url.includes('captureBlob=blob%3Ahttps%3A%2F%2Fmedia.example%2Fsource')) throw new Error(`Blob capture intent was not encoded into its control page: ${JSON.stringify({ openedCapture, captureTab })}`);
+const staleCapture = await send({ type: 'capture.control.open', payload: { tabId: 7, sourceContextId: 'stale', objectUrl: 'blob:https://media.example/source' } });
+if (staleCapture.ok || staleCapture.error !== 'capture_document_changed') throw new Error(`Stale Blob capture intent was accepted: ${JSON.stringify(staleCapture)}`);
+await send({ type: 'media.add', candidate: { url: 'blob:https://media.example/source', mime: 'video/unknown', source: 'dom' } }, { tab: { id: 7 } });
+const blobCandidate = (await send({ type: 'media.candidates', tabId: 7 })).find(candidate => candidate.url === 'blob:https://media.example/source');
+const tabsBeforeBlobDispatch = createdTabs.length;
+const rejectedBlobDispatch = await send({ type: 'integration.open', payload: { tabId: 7, sourceContextId: oldSourceContextId, candidateIds: [blobCandidate.id] } });
+if (rejectedBlobDispatch.ok || rejectedBlobDispatch.error !== 'blob_resource_requires_capture' || createdTabs.length !== tabsBeforeBlobDispatch) throw new Error(`Blob media reached external dispatch: ${JSON.stringify(rejectedBlobDispatch)}`);
+
+rejectSidePanelClose = true;
+const failedWorkspaceExchange = await send({ type: 'workspace.open', view: 'resources' });
+rejectSidePanelClose = false;
+if (failedWorkspaceExchange.ok || failedWorkspaceExchange.error !== 'workspace_sidebar_close_failed' || !tabMessages.slice(-2).some(entry => entry.message.type === 'workspace.unmount')) throw new Error(`Workspace was not rolled back when the Chromium side panel stayed open: ${JSON.stringify(failedWorkspaceExchange)}`);
 
 tabsById.get(8).active = false;
 tabsById.get(7).active = true;

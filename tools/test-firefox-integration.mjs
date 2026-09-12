@@ -14,6 +14,8 @@ const background = readBackgroundSource();
 if (!background.includes('api.storage.local.get(Object.keys(DEFAULT_SETTINGS))')) throw new Error('Firefox-safe settings key-array load is missing');
 if (/\btabs\.create\s*\(/.test(readBackgroundSource(['background.js', 'workspace.js']))) throw new Error('Toolbar entry still creates an application tab');
 if (!background.includes('api.sidebarAction.open()')) throw new Error('Firefox toolbar action does not open the sidebar');
+const workspace = read('extension/src/workspace.js');
+if (/sidebarAction\.(?:open|close|toggle)/.test(workspace)) throw new Error('Firefox page workspace must leave the native sidebar visible');
 if (!background.includes('type === "ui.context.get"') || !background.includes('type === "workspace.open"')) throw new Error('Sidebar context or workspace message contract is missing');
 
 const register = read('tools/register-native-host.ps1');

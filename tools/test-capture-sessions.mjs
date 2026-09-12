@@ -19,7 +19,7 @@ const api = {
     if (message.documentToken !== (options.frameId === 0 ? 'main-document' : documentToken)) return { ok: false, error: 'capture_document_changed' };
     return { ok: !(rejectStart && message.type === 'capture.start') };
   } },
-  scripting: { executeScript: async ({ target }) => [{ documentId: `browser-document-${target.frameIds[0]}`, result: { installed: true, sources: [{ id: '1', tracks: ['video/mp4'], state: 'open' }] } }] }
+  scripting: { executeScript: async ({ target }) => [{ documentId: `browser-document-${target.frameIds[0]}`, result: { installed: true, sources: [{ id: '1', tracks: ['video/mp4'], state: 'open', objectUrls: [`blob:https://frame.test/source-${target.frameIds[0]}`] }] } }] }
 };
 const native = async (type, payload) => {
   calls.push({ type, payload });
@@ -32,6 +32,7 @@ const coordinator = factory(api, native, { ensureDocument: async () => {} }, { l
 const catalog = await coordinator.sources(1);
 assert.equal(catalog.sources.length, 2); assert.equal(catalog.frames.find(frame => frame.frameId === 3).state, 'unsupported');
 const source = catalog.sources.find(item => item.frameId === 2), payload = { tabId: 1, sourceContextId: 'page', source };
+assert.deepEqual(source.objectUrls, ['blob:https://frame.test/source-2']);
 const opened = await coordinator.open(payload);
 assert.equal(calls.find(call => call.type === 'capture.start').frameId, 2);
 assert.equal(calls.find(call => call.type === 'capture.transport.open').payload.documentToken, 'frame-document');
@@ -60,6 +61,7 @@ await coordinator.interrupted(1, 2, 'frame-document', nextSession.id); unblock()
 const freshSession = await fresh; releaseOpen = undefined;
 await coordinator.interrupted(1, 2, 'frame-document', freshSession.id);
 assert.equal(timers.size, 0);
+await assert.rejects(coordinator.open({ ...payload, objectUrl: 'blob:https://frame.test/missing' }), /capture_source_unavailable/);
 const sockets = [];
 class Socket {
   constructor() { sockets.push(this); this.readyState = 1; }

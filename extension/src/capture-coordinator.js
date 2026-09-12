@@ -21,7 +21,7 @@ export function createCaptureCoordinator(api, nativeRequest, evaluation, resourc
     const result = results[0];
     if (!result?.result?.installed) throw new Error("capture_probe_unavailable");
     if (!Array.isArray(result.result.sources) || result.result.sources.length > 64) throw new Error("capture_sources_invalid");
-    return result.result.sources.filter(item => typeof item?.id === "string" && /^\d{1,8}$/.test(item.id) && Array.isArray(item.tracks) && item.state !== "closed").map(item => ({ id: item.id, frameId: frame.frameId, documentToken: before, documentId: result.documentId, url: frame.url, state: String(item.state).slice(0, 30), tracks: item.tracks.slice(0, 8).map(value => String(value).slice(0, 200)) }));
+    return result.result.sources.filter(item => typeof item?.id === "string" && /^\d{1,8}$/.test(item.id) && Array.isArray(item.tracks) && item.state !== "closed").map(item => ({ id: item.id, frameId: frame.frameId, documentToken: before, documentId: result.documentId, url: frame.url, state: String(item.state).slice(0, 30), tracks: item.tracks.slice(0, 8).map(value => String(value).slice(0, 200)), objectUrls: Array.isArray(item.objectUrls) ? item.objectUrls.filter(value => typeof value === "string" && value.startsWith("blob:")).slice(0, 16).map(value => value.slice(0, 16384)) : [] }));
   }
   async function sources(tabId) {
     const frames = await api.webNavigation.getAllFrames({ tabId });
@@ -70,6 +70,8 @@ export function createCaptureCoordinator(api, nativeRequest, evaluation, resourc
     if (sessions.has(payload.tabId) || opening.has(payload.tabId)) throw new Error("capture_already_open");
     const selected = payload.source;
     if (!selected || !Number.isInteger(selected.frameId) || typeof selected.documentToken !== "string") throw new Error("capture_source_required");
+    const objectUrl = payload.objectUrl == null || payload.objectUrl === "" ? "" : String(payload.objectUrl);
+    if (objectUrl && (!objectUrl.startsWith("blob:") || objectUrl.length > 16384)) throw new Error("capture_object_url_invalid");
     const operation = { frameId: selected.frameId, documentToken: selected.documentToken, cancelled: false };
     opening.set(payload.tabId, operation);
     let session;
@@ -78,6 +80,7 @@ export function createCaptureCoordinator(api, nativeRequest, evaluation, resourc
       await check();
       const found = (await sources(payload.tabId)).sources.find(source => source.id === selected.id && source.frameId === selected.frameId && source.documentToken === selected.documentToken);
       if (!found) throw new Error("capture_source_unavailable");
+      if (objectUrl && !found.objectUrls.includes(objectUrl)) throw new Error("capture_source_unavailable");
       const prepared = await api.tabs.sendMessage(payload.tabId, { type: "capture.prepare", documentToken: found.documentToken }, { frameId: found.frameId });
       if (!prepared?.ok) throw new Error("capture_document_changed");
       await check();
@@ -117,5 +120,11 @@ export function createCaptureCoordinator(api, nativeRequest, evaluation, resourc
     const result = await nativeRequest("capture.list"); if (!result.ok) throw new Error(result.error || "capture_host_disconnected");
     return result.value.map(snapshot => { const session = history.get(snapshot.id); return { ...snapshot, bytes: snapshot.bytes ?? 0, tracks: snapshot.tracks || [], outputs: snapshot.outputs || [], tabId: session?.tabId, source: session?.source, state: session?.state === "stopping" && ["armed", "capturing"].includes(snapshot.state) ? "stopping" : snapshot.state, error: snapshot.error || (snapshot.state !== "complete" ? session?.error || (session?.cleanupFailed ? "capture_cleanup_failed" : undefined) : undefined) }; });
   }
-  return { open, close, sources, interrupted, list, openControl: tabId => api.tabs.create({ url: api.runtime.getURL(`dist/app.html?surface=options&captureTab=${tabId}`) }), recover: async id => { const result = await nativeRequest("capture.close", { id }); if (!result.ok) throw new Error(result.error); return result.value; }, push: (payload, sender) => local ? local.push(payload, sender) : null, isLocal: Boolean(local) };
+  function openControl(tabId, objectUrl = "") {
+    if (objectUrl && (!String(objectUrl).startsWith("blob:") || String(objectUrl).length > 16384)) throw new Error("capture_object_url_invalid");
+    const params = new URLSearchParams({ surface: "options", captureTab: String(tabId) });
+    if (objectUrl) params.set("captureBlob", String(objectUrl));
+    return api.tabs.create({ url: api.runtime.getURL(`dist/app.html?${params}`) });
+  }
+  return { open, close, sources, interrupted, list, openControl, recover: async id => { const result = await nativeRequest("capture.close", { id }); if (!result.ok) throw new Error(result.error); return result.value; }, push: (payload, sender) => local ? local.push(payload, sender) : null, isLocal: Boolean(local) };
 }

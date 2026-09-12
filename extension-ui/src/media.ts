@@ -206,7 +206,6 @@ export function sortCandidates(items: MediaCandidate[], mode: string): MediaCand
   const values = [...items];
   if (mode === "size") return values.sort((a, b) => candidateSize(b) - candidateSize(a) || (b.detectedAt || 0) - (a.detectedAt || 0));
   if (mode === "duration") return values.sort((a, b) => (b.duration || 0) - (a.duration || 0) || (b.detectedAt || 0) - (a.detectedAt || 0));
-  if (mode === "type") { const order: Record<string, number> = { video: 0, hls: 0, dash: 0, audio: 1, image: 2, segment: 3 }; return values.sort((a, b) => (order[a.type] ?? 9) - (order[b.type] ?? 9) || (b.detectedAt || 0) - (a.detectedAt || 0)); }
   return values.sort((a, b) => (b.detectedAt || 0) - (a.detectedAt || 0));
 }
 

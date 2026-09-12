@@ -1,9 +1,32 @@
 (() => {
   if (window.__streamFireflyCaptureProbe) return;
   let running = false, sessionId = "", selected = null, busy = false, bytes = 0, failed = "", finishing = null;
-  const buffers = new WeakMap(), sources = new Map(), sourceIds = new WeakMap(), queue = [], sequences = new Map();
+  const buffers = new WeakMap(), sources = new Map(), sourceIds = new WeakMap(), sourceUrls = new Map(), objectUrlOwners = new Map(), queue = [], sequences = new Map();
   let nextTrack = 0, nextSource = 0, generation = 0;
   const post = value => window.postMessage({ source: "streamfirefly-capture", ...value }, "*");
+  function sourceIdFor(source) {
+    let id = sourceIds.get(source);
+    if (id) return id;
+    id = String(++nextSource);
+    sourceIds.set(source, id);
+    sources.set(id, new WeakRef(source));
+    sourceUrls.set(id, new Set());
+    return id;
+  }
+  function pruneSources() {
+    for (const [id, reference] of sources) {
+      if (reference.deref()) continue;
+      sources.delete(id);
+      for (const url of sourceUrls.get(id) || []) objectUrlOwners.delete(url);
+      sourceUrls.delete(id);
+    }
+    while (sources.size > 64) {
+      const id = sources.keys().next().value;
+      sources.delete(id);
+      for (const url of sourceUrls.get(id) || []) objectUrlOwners.delete(url);
+      sourceUrls.delete(id);
+    }
+  }
   function fail(reason) { if (!running && !busy) return; running = false; busy = false; finishing = null; failed = reason; queue.length = 0; bytes = 0; post({ type: "failed", id: sessionId, error: reason }); }
   function split() {
     if (!running || !selected) return;
@@ -15,12 +38,33 @@
   const sourcePrototype = window.MediaSource?.prototype;
   const bufferPrototype = window.SourceBuffer?.prototype;
   if (!sourcePrototype || !bufferPrototype) { window.__streamFireflyCaptureProbe = { unavailable: true }; return; }
+  const originalCreateObjectUrl = window.URL?.createObjectURL;
+  if (originalCreateObjectUrl) {
+    window.URL.createObjectURL = function(value) {
+      const url = Reflect.apply(originalCreateObjectUrl, this, [value]);
+      if (value && sourcePrototype.isPrototypeOf(value) && typeof url === "string" && url.startsWith("blob:")) {
+        const id = sourceIdFor(value);
+        sourceUrls.get(id).add(url);
+        objectUrlOwners.set(url, id);
+        pruneSources();
+      }
+      return url;
+    };
+  }
+  const originalRevokeObjectUrl = window.URL?.revokeObjectURL;
+  if (originalRevokeObjectUrl) {
+    window.URL.revokeObjectURL = function(url) {
+      const id = objectUrlOwners.get(String(url));
+      if (id) sourceUrls.get(id)?.delete(String(url));
+      objectUrlOwners.delete(String(url));
+      return Reflect.apply(originalRevokeObjectUrl, this, [url]);
+    };
+  }
   const originalAdd = sourcePrototype.addSourceBuffer;
   sourcePrototype.addSourceBuffer = function(mime) {
     const buffer = Reflect.apply(originalAdd, this, [mime]);
-    if (!sourceIds.has(this)) { const sourceId = String(++nextSource); sourceIds.set(this, sourceId); sources.set(sourceId, new WeakRef(this)); }
-    for (const [sourceId, source] of sources) if (!source.deref()) sources.delete(sourceId);
-    while (sources.size > 64) sources.delete(sources.keys().next().value);
+    sourceIdFor(this);
+    pruneSources();
     buffers.set(buffer, { source: this, mime, track: -1, sessionId: "" });
     return buffer;
   };
@@ -65,5 +109,5 @@
     if (message.type === "stop") { running = false; finishing = true; pump(); }
     if (message.type === "abort") { fail(message.error || "capture_disconnected"); busy = false; finishing = null; }
   });
-  window.__streamFireflyCaptureProbe = { installed: true, sources: () => [...sources].flatMap(([id, reference]) => { const source = reference.deref(); return source ? [{ id, state: source.readyState, tracks: [...source.sourceBuffers].map(buffer => String(buffers.get(buffer)?.mime || "unknown").slice(0, 200)) }] : []; }) };
+  window.__streamFireflyCaptureProbe = { installed: true, sources: () => { pruneSources(); return [...sources].flatMap(([id, reference]) => { const source = reference.deref(); return source ? [{ id, state: source.readyState, tracks: [...source.sourceBuffers].map(buffer => String(buffers.get(buffer)?.mime || "unknown").slice(0, 200)), objectUrls: [...(sourceUrls.get(id) || [])] }] : []; }); } };
 })();

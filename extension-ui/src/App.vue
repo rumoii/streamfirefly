@@ -11,7 +11,7 @@ import SettingsView from "./components/SettingsView.vue";
 import DispatchView from "./features/configuration/DispatchView.vue";
 import CaptureView from "./features/configuration/CaptureView.vue";
 import ResourceTools from "./features/configuration/ResourceTools.vue";
-import { openDispatch } from "./features/configuration/client";
+import { openCapture, openDispatch } from "./features/configuration/client";
 import DownloadDialog from "./components/DownloadDialog.vue";
 import TaskOverview from "./components/TaskOverview.vue";
 
@@ -32,6 +32,7 @@ async function resetSettings() { const next = { saveDir: "", downloadThreads: 6,
 function openParser(candidate: MediaCandidate) { void guard(() => store.openWorkspace(["hls", "dash"].includes(candidate.type) ? "parser" : "resources", candidate.id)); }
 
 function sendExternal(candidates: MediaCandidate[]) { const context = store.context; if (context) void guard(() => openDispatch(context.sourceTabId, context.sourceContextId, candidates.map(candidate => candidate.id))); }
+function captureBlob(candidate: MediaCandidate) { const context = store.context; if (context) void guard(() => openCapture(context.sourceTabId, context.sourceContextId, candidate.url)); }
 function openDownload(candidate: MediaCandidate) { if (candidate.type === "dash") openParser(candidate); else downloadCandidate.value = candidate; }
 
 onMounted(() => store.initialize(surface));
@@ -53,7 +54,7 @@ onBeforeUnmount(() => clearTimeout(toastTimer));
       </div>
       <template v-else>
         <div class="sidebar-source-summary"><strong>{{ store.candidates.filter(item => item.type !== 'segment').length }}</strong><span>个媒体资源</span><i></i><strong>{{ store.activeTasks.length }}</strong><span>个活动任务</span></div>
-        <ResourcesView :connected="store.connection === 'ready'" @batch-download="batchCandidates = $event" :candidates="store.candidates" :loading="store.loading" :view-state="store.resourceViewState" compact @download="openDownload" @parse="openParser" @remove="guard(() => store.removeCandidates($event), '已从列表移除资源')" @update-view-state="patch => guard(() => store.patchResourceView(patch))" @metadata="(candidate, metadata) => guard(() => store.updateCandidateMetadata(candidate, metadata))" :external-enabled="Boolean(store.context?.supported)" @external-download="sendExternal"><template #header-tools><ResourceTools :context="store.context" /></template></ResourcesView>
+        <ResourcesView :connected="store.connection === 'ready'" @batch-download="batchCandidates = $event" :candidates="store.candidates" :loading="store.loading" :view-state="store.resourceViewState" compact @download="openDownload" @capture-blob="captureBlob" @parse="openParser" @remove="guard(() => store.removeCandidates($event), '已从列表移除资源')" @update-view-state="patch => guard(() => store.patchResourceView(patch))" @metadata="(candidate, metadata) => guard(() => store.updateCandidateMetadata(candidate, metadata))" :external-enabled="Boolean(store.context?.supported)" @external-download="sendExternal"><template #header-tools><ResourceTools :context="store.context" /></template></ResourcesView>
         <TaskOverview :source-tasks="store.sourceTasks" :active-tasks="store.activeTasks" />
       </template>
     </main>

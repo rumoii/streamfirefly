@@ -5,7 +5,7 @@ import type { UiContext } from "../../types";
 const send = vi.fn();
 vi.mock("../../api", () => ({ sendMessage: (message: unknown) => send(message), surfaceFromUrl: () => "options" }));
 const context = { sourceTabId: 1, sourceContextId: "page", pageUrl: "https://main.test", supported: true } as UiContext;
-const source = { id: "1", frameId: 2, documentToken: "doc", url: "https://frame.test", tracks: ["video/mp4"], state: "open" };
+const source = { id: "1", frameId: 2, documentToken: "doc", url: "https://frame.test", tracks: ["video/mp4"], state: "open", objectUrls: ["blob:https://main.test/video"] };
 const deepState = { enabled: false, siteRemembered: true, requiresReload: false, frames: [{ frameId: 2, url: source.url, state: "disabled" }], keys: [] };
 describe("capture and deep-search session state", () => {
   afterEach(() => { send.mockReset(); });
@@ -36,6 +36,24 @@ describe("capture and deep-search session state", () => {
     await wrapper.setProps({ context: { ...context, sourceContextId: "new-page" } });
     resolveScan({ ok: true, value: { sources: [source], frames: [] } }); await flushPromises();
     expect(wrapper.findAll("option")).toHaveLength(1); expect(wrapper.find("select").element.value).toBe(""); wrapper.unmount();
+  });
+  it("auto-selects only the source mapped to a requested Blob URL", async () => {
+    send.mockImplementation(async message => {
+      if (message.type === "capture.list") return { ok: true, value: [] };
+      if (message.type === "capture.sources") return { ok: true, value: { sources: [source, { ...source, id: "2", objectUrls: ["blob:https://main.test/other"] }], frames: [] } };
+      if (message.type === "capture.open") return { ok: true, value: { id: "session" } };
+      throw Error(message.type);
+    });
+    const wrapper = mount(CapturePanel, { props: { context, targetObjectUrl: source.objectUrls[0] } });
+    await flushPromises();
+    expect(wrapper.findAll("option")).toHaveLength(2);
+    expect(wrapper.find("select").element.value).toBe("2:doc:1");
+    expect(wrapper.text()).toContain("已定位此 Blob 对应的媒体源");
+    await wrapper.find('input[type="checkbox"]').setValue(true);
+    await wrapper.findAll("button").find(button => button.text() === "开始捕捉")!.trigger("click");
+    await flushPromises();
+    expect(send.mock.calls.find(([message]) => message.type === "capture.open")?.[0].payload.objectUrl).toBe(source.objectUrls[0]);
+    wrapper.unmount();
   });
   it("shows remembered sites and distinguishes injection failure from no keys", async () => {
     send.mockImplementation(async message => ({ ok: true, value: message.type === "deep.status" ? deepState : { ...deepState, enabled: true, requiresReload: true, frames: [{ frameId: 2, url: source.url, state: "failed", error: "permission denied" }] } }));

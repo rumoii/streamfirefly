@@ -5,7 +5,7 @@ let settings = { ...DEFAULT_SETTINGS };
 let settingsReady = loadSettings();
 
 async function loadSettings() {
-  try { settings = { ...DEFAULT_SETTINGS, ...await api.storage.local.get(Object.keys(DEFAULT_SETTINGS)) }; } catch (_) {}
+  try { const stored = await api.storage.local.get(Object.keys(DEFAULT_SETTINGS)); settings = { ...DEFAULT_SETTINGS, ...stored, candidateSort: normalizeSortMode(stored.candidateSort) }; } catch (_) {}
   return settings;
 }
 

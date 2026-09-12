@@ -9,3 +9,7 @@ export async function openDispatch(tabId: number, sourceContextId: string, candi
   const result = await sendMessage({ type: "integration.open", payload: { tabId, sourceContextId, candidateIds } });
   if (!result?.ok) throw new Error(result?.error || "无法打开外部调用确认页");
 }
+export async function openCapture(tabId: number, sourceContextId: string, objectUrl: string) {
+  const result = await sendMessage({ type: "capture.control.open", payload: { tabId, sourceContextId, objectUrl } });
+  if (!result?.ok) throw new Error(result?.error || "无法打开捕捉控制页");
+}

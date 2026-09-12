@@ -31,4 +31,12 @@ describe("batch submission", () => {
     expect(wrapper.text()).toContain("未提交");
     wrapper.unmount();
   });
+
+  it("marks Blob media for separate cache capture without preparing it", async () => {
+    const wrapper = mount(BatchDownloadDialog, { props: { ...props, candidates: [{ id: "blob", title: "blob", url: "blob:https://media.example/source", type: "video" }] } });
+    expect(wrapper.text()).toContain("Blob 请单独缓存捕捉");
+    expect(wrapper.find(".button.primary").attributes("disabled")).toBeDefined();
+    expect(mocks.prepare).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
 });

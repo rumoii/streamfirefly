@@ -32,7 +32,7 @@ export interface ResourceViewState {
   maxMb: string;
   minDuration: string;
   maxDuration: string;
-  sortMode: "detected" | "size" | "duration" | "type";
+  sortMode: "detected" | "size" | "duration";
   collapsed: boolean;
   expandedId: string;
   revision: number;

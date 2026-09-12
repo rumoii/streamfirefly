@@ -25,7 +25,7 @@ watch(() => props.candidates, candidates => {
   directory.value = props.saveDir;
   sourceContextAtOpen = props.sourceContextId;
   sourceTabAtOpen = props.sourceTabId;
-  items.value = (candidates || []).map(candidate => ({ candidate: { ...candidate, requestHeaders: { ...candidate.requestHeaders } }, requestId: crypto.randomUUID(), state: candidate.type === "dash" || candidate.live ? "manual" : "pending", message: candidate.type === "dash" ? "DASH请单独解析" : candidate.live ? "直播请单独启动录制" : "等待确认" }));
+  items.value = (candidates || []).map(candidate => ({ candidate: { ...candidate, requestHeaders: { ...candidate.requestHeaders } }, requestId: crypto.randomUUID(), state: candidate.url.startsWith("blob:") || candidate.type === "dash" || candidate.live ? "manual" : "pending", message: candidate.url.startsWith("blob:") ? "Blob 请单独缓存捕捉" : candidate.type === "dash" ? "DASH请单独解析" : candidate.live ? "直播请单独启动录制" : "等待确认" }));
 }, { immediate: true });
 
 function requestClose() { if (busy.value) confirmStop.value = true; else emit("close"); }

@@ -1,4 +1,4 @@
-import { createDownload } from "./download-client";
+import { createDownload, prepareCandidate } from "./download-client";
 
 const mocks = vi.hoisted(() => ({ send: vi.fn() }));
 vi.mock("./api", () => ({ sendMessage: (message: unknown) => mocks.send(message) }));
@@ -24,5 +24,10 @@ describe("download submission identity", () => {
     mocks.send.mockResolvedValue({ ok: false, error: "native_host_disconnected" });
     await expect(createDownload({}, "unknown-result")).rejects.toThrow("提交结果尚未确认");
     expect(mocks.send).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects Blob media before any download or Native request", async () => {
+    await expect(prepareCandidate({ id: "blob", url: "blob:https://media.example/source", type: "video" }, 1)).rejects.toThrow("blob_resource_requires_capture");
+    expect(mocks.send).not.toHaveBeenCalled();
   });
 });

@@ -66,6 +66,27 @@ describe("resource preview lifecycle", () => {
     wrapper.unmount();
   });
 
+  it("routes Blob video resources only to exact cache capture without preparing a preview", async () => {
+    const blob = { ...candidate, id: "blob-video", url: "blob:https://media.example/source", type: "video", mime: "video/unknown", poster: "https://media.example/poster.jpg" };
+    const wrapper = mount(ResourcesView, { props: { candidates: [blob], loading: false, viewState: defaultState(blob.id), externalEnabled: true, connected: true } });
+    await flushPromises();
+
+    expect(wrapper.find("video").exists()).toBe(false);
+    expect(wrapper.find(".preview-status").exists()).toBe(false);
+    expect(wrapper.find(".download-more").exists()).toBe(false);
+    expect(sent.some(message => message.type === "preview.headers.apply")).toBe(false);
+    const capture = wrapper.findAll("button").find(button => button.text() === "缓存捕捉")!;
+    await capture.trigger("click");
+    expect(wrapper.emitted("captureBlob")?.at(-1)).toEqual([blob]);
+
+    await wrapper.find(".resource-select input").setValue(true);
+    const batch = wrapper.findAll(".batch-bar button");
+    expect(batch.find(button => button.text() === "发送到外部工具…")!.attributes("disabled")).toBeDefined();
+    expect(batch.find(button => button.text() === "批量下载")!.attributes("disabled")).toBeDefined();
+    expect(wrapper.text()).toContain("Blob 需单独缓存捕捉");
+    wrapper.unmount();
+  });
+
   it("ignores an HLS module that finishes loading after preview disposal", async () => {
     hlsMock.waitForLoad = true;
     hlsMock.failNextLoad = true;

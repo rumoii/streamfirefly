@@ -3,6 +3,7 @@ import type { DownloadTask, MediaCandidate } from "./types";
 import { prepareDefaultDownload } from "./download-plan";
 
 export async function prepareCandidate(candidate: MediaCandidate, tabId: number | null) {
+  if (candidate.url.startsWith("blob:")) throw new Error("blob_resource_requires_capture");
   return prepareDefaultDownload(candidate, async url => {
     const result = await sendMessage({ type: "media.fetchText", tabId, id: candidate.id, url });
     if (!result?.ok) throw new Error(result?.error || "media_fetch_failed");

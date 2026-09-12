@@ -10,6 +10,8 @@ export async function sessionRequest<Type extends keyof CaptureRequests>(type: T
 const messages: Record<string, string> = {
   capture_source_required: "请先扫描并选择一个媒体源。",
   capture_source_unavailable: "所选媒体源已消失，已保留落盘片段；请重新扫描来源。",
+  capture_blob_source_unavailable: "未找到此 Blob 对应的媒体源。请刷新来源页、开始播放视频，再重新打开缓存捕捉。",
+  capture_object_url_invalid: "Blob 媒体地址无效，请从资源列表重新打开缓存捕捉。",
   capture_document_changed: "来源页面或框架已变化，请重新扫描后开启。",
   capture_document_unavailable: "无法访问此框架，请检查权限或刷新来源页面。",
   capture_probe_unavailable: "此框架的媒体探针未就绪，请刷新来源页面；受限页面不支持捕捉。",

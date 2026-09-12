@@ -11,6 +11,7 @@ export function createDispatchIntents(api, resources) {
     for (const id of [...new Set(payload.candidateIds)]) {
       const candidate = await resources.candidateFor(tabId, id);
       if (!candidate) throw new Error("资源已移除");
+      if (candidate.url.startsWith("blob:")) throw new Error("blob_resource_requires_capture");
       candidates.push({ id: candidate.id, url: candidate.url, title: candidate.pageTitle || "媒体", inline: Boolean(candidate.inlineManifest) });
     }
     const id = crypto.randomUUID();

@@ -9,7 +9,7 @@ import ConnectionBanner from "./components/ConnectionBanner.vue";
 import DownloadsView from "./components/DownloadsView.vue";
 import SettingsView from "./components/SettingsView.vue";
 import ResourceTools from "./features/configuration/ResourceTools.vue";
-import { openDispatch } from "./features/configuration/client";
+import { openCapture, openDispatch } from "./features/configuration/client";
 import DownloadDialog from "./components/DownloadDialog.vue";
 import DashParserView from "./components/DashParserView.vue";
 import HlsParserView from "./components/HlsParserView.vue";
@@ -31,6 +31,7 @@ async function guard(action: () => Promise<any>, success?: string) { try { await
 async function resetSettings() { const next = { saveDir: "", downloadThreads: 6, detectImages: false, advancedDeepSearch: false, candidateSort: store.settings.candidateSort }; await guard(() => store.saveSettings(next), "已恢复默认设置"); }
 function openParser(candidate: MediaCandidate) { if (["hls", "dash"].includes(candidate.type)) parserCandidate.value = candidate; }
 function sendExternal(candidates: MediaCandidate[]) { const context = store.context; if (context) void guard(() => openDispatch(context.sourceTabId, context.sourceContextId, candidates.map(candidate => candidate.id))); }
+function captureBlob(candidate: MediaCandidate) { const context = store.context; if (context) void guard(() => openCapture(context.sourceTabId, context.sourceContextId, candidate.url)); }
 function openDownload(candidate: MediaCandidate) { if (candidate.type === "dash") openParser(candidate); else downloadCandidate.value = candidate; }
 function handleDelete(task: DownloadTask, deleteFile: boolean) { void guard(() => store.deleteTask(task, deleteFile), deleteFile ? "已删除任务和本地文件" : "已删除任务记录"); }
 
@@ -69,7 +70,7 @@ onBeforeUnmount(() => { clearTimeout(toastTimer); window.removeEventListener("st
       <ConnectionBanner :state="store.connection" :error="store.connectionError" @retry="store.refresh" />
       <div v-if="store.error" class="status-banner error">{{ store.error }}</div>
       <Transition name="page" mode="out-in">
-        <ResourcesView v-if="tab === 'resources'" key="resources" :connected="store.connection === 'ready'" @batch-download="batchCandidates = $event" :candidates="store.candidates" :loading="store.loading" :view-state="store.resourceViewState" @download="openDownload" @parse="openParser" @remove="guard(() => store.removeCandidates($event), '已从列表移除资源')" @update-view-state="patch => guard(() => store.patchResourceView(patch))" @metadata="(candidate, metadata) => guard(() => store.updateCandidateMetadata(candidate, metadata))" :external-enabled="Boolean(store.context?.supported)" @external-download="sendExternal"><template #header-tools><ResourceTools :context="store.context" /></template></ResourcesView>
+        <ResourcesView v-if="tab === 'resources'" key="resources" :connected="store.connection === 'ready'" @batch-download="batchCandidates = $event" :candidates="store.candidates" :loading="store.loading" :view-state="store.resourceViewState" @download="openDownload" @capture-blob="captureBlob" @parse="openParser" @remove="guard(() => store.removeCandidates($event), '已从列表移除资源')" @update-view-state="patch => guard(() => store.patchResourceView(patch))" @metadata="(candidate, metadata) => guard(() => store.updateCandidateMetadata(candidate, metadata))" :external-enabled="Boolean(store.context?.supported)" @external-download="sendExternal"><template #header-tools><ResourceTools :context="store.context" /></template></ResourcesView>
         <component :is="parserCandidate?.type === 'dash' ? DashParserView : HlsParserView" v-else-if="tab === 'parser' && parserCandidate && store.context" :key="parserCandidate.id" :candidate="parserCandidate" :context="store.context" :connected="store.connection === 'ready'" :capabilities="store.capabilities" :save-dir="store.settings.saveDir" :download-threads="store.settings.downloadThreads" @back="parserCandidate = null" @created="message => { showToast(message); navigate('downloads'); }" />
         <DownloadsView v-else-if="tab === 'downloads'" key="downloads" :connected="store.connection === 'ready'" :tasks="store.tasks" :source-tasks="store.sourceTasks" @control="(task, action, context) => guard(() => store.controlTask(task, action, context))" @delete="handleDelete" />
         <SettingsView v-else key="settings" :settings="store.settings" @save="settings => guard(() => store.saveSettings(settings), '设置已保存')" @reset="resetSettings" />

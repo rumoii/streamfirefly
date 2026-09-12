@@ -8,14 +8,14 @@ Status: proposed
 
 ## Proposal
 
-- Chrome 和 Edge 使用 `sidePanel.setPanelBehavior({ openPanelOnActionClick: true })`，Firefox 的工具栏动作调用 `sidebarAction.open()`。清单分别声明 `side_panel` 与 `sidebar_action`，平台分支只存在于入口适配层。
+- Chrome 和 Edge 最低版本为 141，使用 `sidePanel.setPanelBehavior({ openPanelOnActionClick: true })`；Firefox 的工具栏动作调用 `sidebarAction.open()`。清单分别声明 `side_panel` 与 `sidebar_action`。
 - 侧栏依据当前窗口活动标签读取统一 `UiContext`，并响应标签激活、标题、地址、图标、导航和关闭事件。`sourceContextId` 属于标签媒体状态，顶层导航时与候选资源一起轮换。
-- `UiContext` 同时携带由 background 按 `sourceContextId` 持有的 `ResourceViewState`。名称/URL 正则、类型、大小范围、排序、资源折叠和详情资源 ID 由 background 作为唯一权威，侧栏与工作区通过 `ui.resource-state.patch` 和 `ui.resource-state.changed` 实时双向收敛；批量选择和具体滚动像素仍属于各自 surface。顶层导航创建新上下文时重置该状态，排序默认值继续来自用户设置。
+- `UiContext` 同时携带由 background 按 `sourceContextId` 持有的 `ResourceViewState`。名称/URL 正则、文件类型、大小范围、发现顺序/大小/时长排序、资源折叠和详情资源 ID 由 background 作为唯一权威，侧栏与工作区通过 `ui.resource-state.patch` 和 `ui.resource-state.changed` 实时双向收敛；批量选择和具体滚动像素仍属于各自 surface。不存在独立的类型分组排序；无效排序值统一恢复发现顺序。
 - 浏览器内部页、扩展页及其他非 HTTP(S) 页面返回不支持上下文，不加载候选状态、不注入工作区，也不创建替代标签页。
-- “展开工作区”通过 `scripting.executeScript` 将 Vue IIFE 只注入来源标签的顶层页面，并挂载到开放的 Shadow DOM。工作区覆盖网页内容视口，浏览器原生侧栏继续显示。
+- “展开工作区”通过 `scripting.executeScript` 将 Vue IIFE 只注入来源标签的顶层页面，并挂载到开放的 Shadow DOM。Chromium 在工作区报告 ready 后按窗口关闭全局侧栏；点击收起或按 Escape 时先恢复侧栏，再卸载工作区。任一步失败都回滚或保留当前可操作界面，不能同时丢失侧栏和工作区。Firefox 因普通网页内容脚本操作不能取得 `sidebarAction.open()` 所需的用户操作权限，按产品选择在展开工作区时继续显示侧栏，收起只卸载工作区。
 - 每次展开前向同一窗口的其他标签发送幂等卸载消息。切换标签不卸载原标签工作区；在新标签展开、顶层导航、标签关闭、Escape 或点击“收起”时，先停止新工作，再注销监听器、停止预览和计时器，最后卸载 Vue 与宿主节点。
 - 工作区不修改来源网页的 `document.title`；展示来源时只清理历史版本可能留下的重复“流萤”前缀。Shadow host、`#app` 与工作区建立完整视口高度链，工作区是唯一页面级纵向滚动容器；挂载时保存并锁定底层 `html/body` 滚动，所有幂等卸载路径恢复原样。
-- 媒体详情预览使用 `idle -> preparing -> ready -> playing -> failed` 生命周期。展开详情后优先显示已有 poster；没有 poster 的 HLS 自动加载首帧、时长与分辨率后暂停并停止继续取流，用户点击播放时复用同一 Hls.js 实例。普通候选元数据刷新不释放播放器，只有切换资源、收起详情、折叠列表或卸载 surface 才按序停止取流、销毁 Hls.js、清理媒体元素和请求头规则。
+- HTTP(S) 媒体详情预览使用 `idle -> preparing -> ready -> playing -> failed` 生命周期。展开详情后优先显示已有 poster；没有 poster 的 HLS 自动加载首帧、时长与分辨率后暂停并停止继续取流，用户点击播放时复用同一 Hls.js 实例。Blob 临时媒体不创建播放器、不启动预览超时，也不进入普通下载、批量下载或外部工具链路，只显示已有封面和缓存捕捉入口。
 - 预览请求头以 `previewSessionId` 持有独立 DNR 会话规则，同一标签页的一个 surface 退出只清理自己的规则，标签导航或工作区卸载才清理该标签全部规则。规则必须绑定现有候选及其媒体 origin，不允许用候选 ID 给其他 origin 注入请求头；网络和媒体致命错误各只自动恢复一次。
 - 侧栏、工作区和浏览器选项页复用 Pinia store、消息接口及资源、HLS、任务和设置组件。侧栏只展示快速操作和任务概览；删除、输出文件管理、完整 HLS 选择与设置进入工作区。
 - 移除 `AppSession`、`app.session.*`、`appTabId` 与应用页快照。旧 `storage.session` 会话键是临时数据，不迁移；Native Messaging v3、任务持久化版本、已有任务和下载文件不变。
@@ -25,11 +25,11 @@ Status: proposed
 - 保留一网页一应用标签：能够容纳完整界面，但持续改变标签数量并需要双标签生命周期绑定。
 - 只使用原生侧栏：入口连续，但窄宽度无法可靠承载完整解析和任务管理。
 - 使用网页可访问 iframe：复用页面简单，但引入额外可访问资源和跨上下文样式、焦点及通信边界。
-- 程序化调整或关闭 Chrome 侧栏：会把最低版本提高到依赖较新 `sidePanel.close()` 的浏览器版本，本阶段没有必要。
+- Chromium 141 以下保留侧栏：会继续维护并验证已经不符合产品行为的双界面路径，因此不采用。
 
 ## Risks
 
-- Chrome Side Panel API 与 Firefox Sidebar API 不兼容，清单和动作适配必须分别验证。
+- Chrome Side Panel API 与 Firefox Sidebar API 不兼容，Chromium 的侧栏交换和 Firefox 的侧栏保留行为必须分别验证。
 - 内容脚本工作区受页面权限和浏览器受限页规则约束；注入失败只在侧栏显示原因，不回退创建标签页。
 - 标签切换保留工作区意味着页面继续持有其 Vue 状态；同窗口第二次展开和所有终止路径必须保持幂等清理。
 - Shadow DOM 隔离网站 CSS，但媒体请求、焦点和键盘事件仍需通过浏览器测试确认不破坏原网页。
@@ -37,9 +37,9 @@ Status: proposed
 
 ## Verification
 
-- 源码与单元层：默认设置键数组读取与合并、严格 Firefox 参数、`UiContext` 来源约束、资源视图状态双向共享与导航重置、预览元数据回写、候选刷新不销毁 HLS、有限错误恢复、多个预览会话独立清理、受限页拒绝、同窗口唯一工作区、重复展开和重复卸载。
+- 源码与单元层：默认设置键数组读取与合并、无效排序归一化、严格 Firefox 参数、`UiContext` 来源约束、Blob 下载拒绝、资源视图状态双向共享与导航重置、预览元数据回写、候选刷新不销毁 HLS、有限错误恢复、多个预览会话独立清理、受限页拒绝、同窗口唯一工作区、ready 后关闭侧栏、恢复侧栏后卸载、重复展开和重复卸载。
 - UI 层：窄侧栏资源筛选与批量操作、HLS 快速/详细分流、展开即显示 poster 或准备首帧、时长/分辨率显示、任务概览、设置入口、错误和空状态。
-- 浏览器层：Chrome、Edge 与 Firefox 独立临时配置验证资源发现、Shadow DOM 注入、可滚动工作区、底层滚动锁定与恢复、标题不污染、侧栏/工作区筛选同步、预览持续播放、重复展开、重复卸载、SPA 导航清理和不增加标签；工具栏实际打开原生侧栏、站点鉴权媒体与浏览器界面布局仍需人工验收。
+- 浏览器层：Chrome、Edge 与 Firefox 独立临时配置验证资源发现、MediaSource Blob 映射、Shadow DOM 注入、可滚动工作区、底层滚动锁定与恢复、标题不污染、侧栏/工作区筛选同步、预览持续播放、重复展开、重复卸载、SPA 导航清理和不增加工作区标签；Chromium 展开/收起时的原生侧栏交换、Firefox 保留侧栏、站点鉴权媒体与浏览器界面布局仍需人工验收。
 - 交付层：类型检查、Vue 单测、扩展逻辑测试、Firefox lint、构建以及 Chromium ZIP 与 Firefox XPI 白名单内容。
 
 ## Rollback

@@ -35,4 +35,8 @@ describe("settings loading", () => {
     expect(result).toEqual(DEFAULT_SETTINGS);
     expect(result).not.toBe(DEFAULT_SETTINGS);
   });
+
+  it("normalizes an unsupported sort value to discovery order", async () => {
+    await expect(readSettings({ get: async () => ({ candidateSort: "type" }) } as any)).resolves.toMatchObject({ candidateSort: "detected" });
+  });
 });

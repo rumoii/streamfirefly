@@ -5,7 +5,7 @@ export interface AppSettings {
   downloadThreads: number;
   detectImages: boolean;
   advancedDeepSearch: boolean;
-  candidateSort: string;
+  candidateSort: "detected" | "size" | "duration";
 }
 
 export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
@@ -19,7 +19,8 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
 export async function readSettings(storage = extensionApi()?.storage?.local): Promise<AppSettings> {
   if (!storage) return { ...DEFAULT_SETTINGS };
   const stored = await storage.get(Object.keys(DEFAULT_SETTINGS));
-  return { ...DEFAULT_SETTINGS, ...stored };
+  const candidateSort = ["detected", "size", "duration"].includes(stored.candidateSort) ? stored.candidateSort as AppSettings["candidateSort"] : DEFAULT_SETTINGS.candidateSort;
+  return { ...DEFAULT_SETTINGS, ...stored, candidateSort };
 }
 
 export function createSettingsState() {
@@ -30,7 +31,7 @@ export function createSettingsState() {
       const result: any = await sendMessage({ type: "path.validate", payload: { path: next.saveDir.trim() } });
       if (!result?.ok) throw new Error(result?.error || "path_not_writable");
     }
-    const normalized: AppSettings = { ...next, saveDir: next.saveDir.trim(), downloadThreads: Math.max(1, Math.min(16, Number(next.downloadThreads) || 6)) };
+    const normalized: AppSettings = { ...next, saveDir: next.saveDir.trim(), downloadThreads: Math.max(1, Math.min(16, Number(next.downloadThreads) || 6)), candidateSort: ["detected", "size", "duration"].includes(next.candidateSort) ? next.candidateSort : "detected" };
     await extensionApi().storage.local.set({ ...normalized });
     settings.value = normalized;
   }

@@ -2,7 +2,7 @@ import { computed, onBeforeUnmount, ref, watch, type Ref } from "vue";
 import type { UiContext } from "../../types";
 import type { CaptureSnapshot, CaptureSources } from "../../../../shared/capture";
 import { sessionError, sessionRequest } from "../session-client";
-export function createCaptureState(context: Ref<UiContext | null>, trusted: boolean) {
+export function createCaptureState(context: Ref<UiContext | null>, trusted: boolean, targetObjectUrl?: Ref<string | undefined>) {
   const sessions = ref<CaptureSnapshot[]>([]), catalog = ref<CaptureSources>({ sources: [], frames: [] });
   const error = ref(""), message = ref(""), busy = ref(false), selected = ref(""), acknowledged = ref(false), directory = ref("");
   let revision = 0, disposed = false, refreshing = false;
@@ -20,7 +20,20 @@ export function createCaptureState(context: Ref<UiContext | null>, trusted: bool
   async function scan() {
     if (!context.value?.supported) return;
     const current = ++revision; busy.value = true; error.value = "";
-    try { const result = await sessionRequest("capture.sources", { tabId: context.value.sourceTabId }); if (current !== revision || disposed) return; catalog.value = result; selected.value = result.sources.length === 1 ? sourceKey(result.sources[0]) : ""; message.value = result.sources.length ? `发现 ${result.sources.length} 个媒体源，请确认框架和媒体类型。` : "未发现可捕捉媒体源；请先播放视频，或刷新来源页面后重试。"; }
+    try {
+      const result = await sessionRequest("capture.sources", { tabId: context.value.sourceTabId });
+      if (current !== revision || disposed) return;
+      const objectUrl = targetObjectUrl?.value || "";
+      const sources = objectUrl ? result.sources.filter(source => source.objectUrls.includes(objectUrl)) : result.sources;
+      catalog.value = { ...result, sources };
+      selected.value = sources.length === 1 ? sourceKey(sources[0]) : "";
+      if (objectUrl) {
+        message.value = sources.length === 1 ? "已定位此 Blob 对应的媒体源。请确认授权并从头重新播放视频。" : "";
+        error.value = sources.length === 1 ? "" : sessionError("capture_blob_source_unavailable");
+      } else {
+        message.value = sources.length ? `发现 ${sources.length} 个媒体源，请确认框架和媒体类型。` : "未发现可捕捉媒体源；请先播放视频，或刷新来源页面后重试。";
+      }
+    }
     catch (reason) { if (current === revision && !disposed) error.value = sessionError(reason); }
     finally { if (current === revision && !disposed) busy.value = false; }
   }
@@ -28,7 +41,7 @@ export function createCaptureState(context: Ref<UiContext | null>, trusted: bool
     const source = catalog.value.sources.find(item => sourceKey(item) === selected.value);
     if (!source || !context.value || !acknowledged.value || busy.value) return;
     const current = revision; busy.value = true; error.value = "";
-    try { await sessionRequest("capture.open", { tabId: context.value.sourceTabId, sourceContextId: context.value.sourceContextId, source, directory: directory.value }); if (current === revision && !disposed) message.value = "捕捉已启动，等待所选媒体源追加数据；开始前的缓存不会回溯。"; await refresh(); }
+    try { await sessionRequest("capture.open", { tabId: context.value.sourceTabId, sourceContextId: context.value.sourceContextId, source, directory: directory.value, objectUrl: targetObjectUrl?.value || undefined }); if (current === revision && !disposed) message.value = "捕捉已启动，等待所选媒体源追加数据；开始前的缓存不会回溯。"; await refresh(); }
     catch (reason) { if (current === revision && !disposed) error.value = sessionError(reason); }
     finally { if (current === revision && !disposed) busy.value = false; }
   }
@@ -46,7 +59,10 @@ export function createCaptureState(context: Ref<UiContext | null>, trusted: bool
     catch (reason) { if (!disposed) error.value = sessionError(reason); }
     finally { if (!disposed) busy.value = false; }
   }
-  watch(() => context.value?.sourceContextId, () => { revision++; catalog.value = { sources: [], frames: [] }; selected.value = ""; acknowledged.value = false; busy.value = false; error.value = ""; message.value = ""; }, { immediate: true });
+  watch([() => context.value?.sourceContextId, () => targetObjectUrl?.value || ""], () => {
+    revision++; catalog.value = { sources: [], frames: [] }; selected.value = ""; acknowledged.value = false; busy.value = false; error.value = ""; message.value = "";
+    if (context.value?.supported && targetObjectUrl?.value) void scan();
+  }, { immediate: true });
   onBeforeUnmount(() => { disposed = true; revision++; clearTimeout(timer); });
   void refresh();
   return { sessions, catalog, error, message, busy, selected, acknowledged, directory, active, sourceKey, scan, start, stop, recover, refresh };
