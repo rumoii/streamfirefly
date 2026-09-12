@@ -9,6 +9,7 @@ export default defineConfig({
   build: {
     outDir: "../extension/dist",
     emptyOutDir: true,
+    modulePreload: false,
     chunkSizeWarningLimit: 550,
     rollupOptions: {
       input: resolve(__dirname, "extension-ui/app.html"),

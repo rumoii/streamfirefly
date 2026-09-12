@@ -1,9 +1,15 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import type { ResourceViewState } from "../types";
 
-const hlsMock = vi.hoisted(() => ({ instances: [] as any[] }));
+const hlsMock = vi.hoisted(() => ({ instances: [] as any[], loadCount: 0, waitForLoad: false, resolveLoad: null as null | (() => void), failNextLoad: false }));
 
-vi.mock("hls.js", () => {
+vi.mock("hls.js", async () => {
+  hlsMock.loadCount += 1;
+  if (hlsMock.waitForLoad) await new Promise<void>(resolve => { hlsMock.resolveLoad = resolve; });
+  if (hlsMock.failNextLoad) {
+    hlsMock.failNextLoad = false;
+    throw new Error("HLS module unavailable");
+  }
   class MockHls {
     static Events = { ERROR: "error", LEVEL_LOADED: "levelLoaded", MANIFEST_PARSED: "manifestParsed" };
     static ErrorTypes = { NETWORK_ERROR: "networkError", MEDIA_ERROR: "mediaError" };
@@ -50,6 +56,66 @@ describe("resource preview lifecycle", () => {
   });
 
   afterEach(() => vi.restoreAllMocks());
+
+  it("does not load HLS for the compact resource list", async () => {
+    const wrapper = mount(ResourcesView, { props: { candidates: [candidate], loading: false, viewState: defaultState(), compact: true } });
+    await flushPromises();
+
+    expect(hlsMock.loadCount).toBe(0);
+    expect(hlsMock.instances).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  it("ignores an HLS module that finishes loading after preview disposal", async () => {
+    hlsMock.waitForLoad = true;
+    hlsMock.failNextLoad = true;
+    const wrapper = mount(ResourcesView, { props: { candidates: [candidate], loading: false, viewState: defaultState() } });
+    await flushPromises();
+    expect(hlsMock.loadCount).toBe(1);
+
+    await wrapper.setProps({ viewState: { ...defaultState(""), revision: 1 } });
+    await flushPromises();
+    wrapper.unmount();
+    hlsMock.resolveLoad?.();
+    await flushPromises();
+
+    expect(hlsMock.instances).toHaveLength(0);
+    expect(sent.some(message => message.type === "preview.headers.clear")).toBe(true);
+    hlsMock.waitForLoad = false;
+  });
+
+  it("reports an HLS module load failure and retries the next preview", async () => {
+    const initialLoadCount = hlsMock.loadCount;
+    hlsMock.failNextLoad = true;
+    const wrapper = mount(ResourcesView, { props: { candidates: [candidate], loading: false, viewState: defaultState() } });
+    await flushPromises();
+
+    expect(hlsMock.loadCount).toBe(initialLoadCount + 1);
+    expect(hlsMock.instances).toHaveLength(0);
+    expect(wrapper.text()).toContain("无法准备此 HLS 资源的预览");
+
+    await wrapper.setProps({ viewState: { ...defaultState(""), revision: 1 } });
+    await flushPromises();
+    await wrapper.setProps({ viewState: { ...defaultState(), revision: 2 } });
+    await flushPromises();
+
+    expect(hlsMock.loadCount).toBe(initialLoadCount + 2);
+    expect(hlsMock.instances).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it("reuses one loaded HLS module across preview instances", async () => {
+    const initialLoadCount = hlsMock.loadCount;
+    const first = mount(ResourcesView, { props: { candidates: [candidate], loading: false, viewState: defaultState() } });
+    await flushPromises();
+    const second = mount(ResourcesView, { props: { candidates: [candidate], loading: false, viewState: defaultState() } });
+    await flushPromises();
+
+    expect(hlsMock.loadCount).toBe(initialLoadCount);
+    expect(hlsMock.instances).toHaveLength(2);
+    first.unmount();
+    second.unmount();
+  });
 
   it("keeps advanced filters effective while collapsed and clears them explicitly", async () => {
     const wrapper = mount(ResourcesView, { props: { candidates: [candidate], loading: false, viewState: { ...defaultState(""), minDuration: "60" } } });

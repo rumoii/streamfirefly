@@ -27,6 +27,7 @@ const origin = `http://127.0.0.1:${server.address().port}`;
 let browser;
 const errors = [];
 const failedRequests = [];
+const assetRequests = [];
 const source = { head: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(), status: execFileSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' }).trim() };
 try {
   browser = await chromium.launchPersistentContext(profile, { executablePath: process.env.EDGE_BINARY || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', headless: true, viewport: { width: 430, height: 900 } });
@@ -34,6 +35,7 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   page.on('requestfailed', request => failedRequests.push(request.url()));
+  page.on('request', request => { if (request.url().startsWith(origin)) assetRequests.push(new URL(request.url()).pathname); });
   await page.route('**/*', route => route.request().url().startsWith(origin) ? route.continue() : route.abort());
   await page.addInitScript(({ origin }) => {
     let view = { pattern: '', type: 'all', minMb: '', maxMb: '', minDuration: '', maxDuration: '', sortMode: 'detected', collapsed: false, expandedId: '', revision: 0 };
@@ -100,9 +102,10 @@ try {
   await page.getByRole('button', { name: '重新连接', exact: true }).click();
   await page.getByText('本地助手已断开', { exact: true }).waitFor({ state: 'hidden' });
   assert.equal(await page.locator('.overview-list article').count(), 2);
+  assert.equal(assetRequests.some(url => url.endsWith('/assets/hls.js')), false, 'normal sidebar load must not request assets/hls.js');
   assert.deepEqual(errors, []);
   assert.deepEqual(failedRequests, []);
-  fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ passed: true, source, origin, capturedAt: new Date().toISOString(), browser: browser.browser()?.version(), profile: 'fresh isolated profile', evidence: 'built sidebar with mocked extension and native APIs, localhost only', viewport: { width: 430, height: 900 }, errors, failedRequests }, null, 2));
+  fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ passed: true, source, origin, capturedAt: new Date().toISOString(), browser: browser.browser()?.version(), profile: 'fresh isolated profile', evidence: 'built sidebar with mocked extension and native APIs, localhost only', viewport: { width: 430, height: 900 }, errors, failedRequests, assetRequests }, null, 2));
   console.log('Playwright built-UI fixture passed: duration filters, batch submit, keyboard focus, disconnect feedback; native APIs mocked');
 } finally {
   await browser?.close();

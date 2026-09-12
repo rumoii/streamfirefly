@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { copyResources } from "../features/configuration/copy";
 import { vModalFocus } from "../modal-focus";
-import Hls from "hls.js";
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import type { MediaCandidate, ResourceViewState } from "../types";
 import { filterCandidates, sortCandidates } from "../media";
@@ -9,6 +8,21 @@ import { formatBytes, formatDuration, sourceLabel, typeLabel } from "../format";
 import { sendMessage } from "../api";
 
 type PreviewState = "idle" | "preparing" | "ready" | "playing" | "failed";
+type HlsConstructor = typeof import("hls.js").default;
+
+let hlsModulePromise: Promise<HlsConstructor> | null = null;
+
+function loadHls(): Promise<HlsConstructor> {
+  if (!hlsModulePromise) {
+    hlsModulePromise = import("hls.js")
+      .then(module => module.default)
+      .catch(error => {
+        hlsModulePromise = null;
+        throw error;
+      });
+  }
+  return hlsModulePromise;
+}
 
 const props = defineProps<{ candidates: MediaCandidate[]; loading: boolean; viewState: ResourceViewState; compact?: boolean; connected?: boolean; externalEnabled?: boolean }>();
 const emit = defineEmits<{
@@ -30,7 +44,7 @@ const mediaElement = ref<HTMLVideoElement | HTMLAudioElement | null>(null);
 const resourceScroll = ref<HTMLElement | null>(null);
 const previewSessionId = `preview-${crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
 let savedScrollTop = 0;
-let hls: Hls | null = null;
+let hls: InstanceType<HlsConstructor> | null = null;
 let activePreviewId = "";
 let preparationToken = 0;
 let autoPreparing = false;
@@ -165,7 +179,7 @@ async function finishPreparation(item: MediaCandidate, token: number) {
   previewState.value = "ready";
 }
 
-function handleHlsError(item: MediaCandidate, data: any) {
+function handleHlsError(item: MediaCandidate, data: any, Hls: HlsConstructor) {
   if (!data?.fatal || activePreviewId !== item.id) return;
   if (data.type === Hls.ErrorTypes.NETWORK_ERROR && networkRecoveries < 1) {
     networkRecoveries += 1;
@@ -204,11 +218,30 @@ async function preparePreview(item: MediaCandidate) {
   const media = mediaElement.value;
   if (!media || token !== preparationToken) return;
   await applyPreviewHeaders(item);
+  if (token !== preparationToken || activePreviewId !== item.id || mediaElement.value !== media) return;
   media.preload = "auto";
   media.muted = true;
-  if (item.type === "hls" && Hls.isSupported()) {
+  if (item.type === "hls") {
+    let Hls: HlsConstructor;
+    try {
+      Hls = await loadHls();
+    } catch (_) {
+      if (token !== preparationToken || activePreviewId !== item.id || mediaElement.value !== media) return;
+      clearTimeout(preparationTimer);
+      preparationTimer = 0;
+      previewState.value = "failed";
+      previewError.value = "无法准备此 HLS 资源的预览，请检查来源页面是否仍可播放。";
+      await clearPreviewHeaders();
+      return;
+    }
+    if (token !== preparationToken || activePreviewId !== item.id || mediaElement.value !== media) return;
+    if (!Hls.isSupported()) {
+      media.src = item.url;
+      media.load();
+      return;
+    }
     hls = new Hls({ enableWorker: true, lowLatencyMode: false, autoStartLoad: true, startPosition: 0, maxBufferLength: 4, maxMaxBufferLength: 8, backBufferLength: 0, maxBufferSize: 10 * 1024 * 1024 });
-    hls.on(Hls.Events.ERROR, (_, data) => handleHlsError(item, data));
+    hls.on(Hls.Events.ERROR, (_, data) => handleHlsError(item, data, Hls));
     hls.on(Hls.Events.LEVEL_LOADED, (_, data: any) => reportMetadata(item, { duration: data?.details?.totalduration, live: Boolean(data?.details?.live) }));
     hls.on(Hls.Events.MANIFEST_PARSED, (_, data: any) => {
       const level = [...(data?.levels || [])].sort((a: any, b: any) => (b.width || 0) * (b.height || 0) - (a.width || 0) * (a.height || 0))[0];
@@ -216,10 +249,10 @@ async function preparePreview(item: MediaCandidate) {
     });
     hls.attachMedia(media);
     hls.loadSource(item.url);
-  } else {
-    media.src = item.url;
-    media.load();
+    return;
   }
+  media.src = item.url;
+  media.load();
 }
 
 async function startPreview() {

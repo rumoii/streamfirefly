@@ -8,6 +8,8 @@ const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'u
 const background = readBackgroundSource();
 const required = JSON.parse(fs.readFileSync(path.join(root, '..', 'tools', 'extension-package-files.json'), 'utf8'));
 const missing = required.filter(file => !fs.existsSync(path.join(root, file)));
+const appHtmlPath = path.join(root, 'dist', 'app.html');
+const appScriptPath = path.join(root, 'dist', 'assets', 'app.js');
 if (manifest.manifest_version !== 3) throw new Error('manifest_version must be 3');
 if (!manifest.background?.service_worker) throw new Error('background service worker missing');
 if (!manifest.permissions?.includes('nativeMessaging')) throw new Error('nativeMessaging permission missing');
@@ -22,4 +24,14 @@ if (/AppSession|app\.session\.|appTabId/.test(background)) throw new Error('Obso
 if (!background.includes('openPanelOnActionClick: true')) throw new Error('Chrome action is not bound to native side panel behavior');
 if (!background.includes('files: ["dist/workspace.js"]')) throw new Error('On-demand workspace injection is missing');
 if (missing.length) throw new Error(`missing files: ${missing.join(', ')}`);
+const appHtml = fs.readFileSync(appHtmlPath, 'utf8');
+const appScript = fs.readFileSync(appScriptPath, 'utf8');
+const hlsPreloaded = (appHtml.match(/<link\b[^>]*>/gi) || []).some(tag => /\brel=["']modulepreload["']/i.test(tag) && /\bhref=["'][^"']*hls\.js["']/i.test(tag));
+if (hlsPreloaded) throw new Error('extension/dist/app.html must not preload assets/hls.js; keep build.modulePreload disabled');
+const dynamicHlsImport = /\bimport\s*\(\s*["']\.\/hls\.js["']\s*\)/;
+const appWithoutDynamicHlsImport = appScript.replace(dynamicHlsImport, '');
+if (/\bfrom\s*["']\.\/hls\.js["']/.test(appWithoutDynamicHlsImport) || /\bimport\s*["']\.\/hls\.js["']/.test(appWithoutDynamicHlsImport)) {
+  throw new Error('extension/dist/assets/app.js must not statically import ./hls.js; load HLS only when preview starts');
+}
+if (!dynamicHlsImport.test(appScript)) throw new Error('extension/dist/assets/app.js must dynamically import ./hls.js when HLS preview starts');
 console.log(`StreamFirefly extension ${manifest.version} valid (${required.length} required files)`);
