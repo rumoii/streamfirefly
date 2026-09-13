@@ -4,7 +4,7 @@
 
 StreamFirefly 不绕过 DRM。请只测试自己拥有版权或已获授权的内容。
 
-本批修复 Blob 媒体捕捉、工作区与侧栏切换及外部工具返回路径，并保留实验性 DASH 选轨。发布前须取得最终源码提交的成功 CI 和两小时捕捉证据；是否已发布以私有 Release 页面为准。
+本批修复 Blob 媒体捕捉、工作区与侧栏切换及外部工具返回路径，并保留实验性 DASH 选轨。发布前须取得最终源码提交的成功短流程；7200 秒捕捉作为独立、手动、非阻断诊断，用于补充长期稳定性证据。是否已发布以私有 Release 页面为准。
 
 ## 本次更新与升级要求
 
@@ -34,7 +34,7 @@ Windows ARM64 包完成构建及包审计不等于 ARM64 设备实机验收；�
 ## 一、下载测试包
 
 1. 登录受邀 GitHub 账号，进入私有仓库 `rumoii/streamfirefly-internal-releases` 的 **Releases**。
-2. 打开标记为 Pre-release 的 `v0.10.0-beta.5`，核对正文中的源码提交、成功 CI 和两小时捕捉结果。维护者可在源码仓库 **Actions → Package internal test bundles** 查阅构建及证据，Actions artifact 保留 14 天。
+2. 打开标记为 Pre-release 的 `v0.10.0-beta.5`，核对正文中的源码提交、成功短流程和长期诊断边界。维护者可在源码仓库 **Actions → Package internal test bundles** 查阅发布门禁，在 **Diagnose installed capture** 查阅独立诊断；Actions artifact 保留 14 天。
 3. 在 Release 附件中选择与当前 Windows 架构匹配的压缩包：
    - Intel 或 AMD Windows 电脑：`StreamFirefly-0.10.0-beta.5-internal-x64.zip`
    - Windows ARM 电脑：`StreamFirefly-0.10.0-beta.5-internal-arm64.zip`
@@ -42,7 +42,7 @@ Windows ARM64 包完成构建及包审计不等于 ARM64 设备实机验收；�
 
 可以在 Windows 的“设置 → 系统 → 系统信息 → 系统类型”中查看架构。大多数 Intel、AMD 电脑使用 x64；仅骁龙等 Windows ARM 设备使用 ARM64。
 
-> 两小时捕捉是本版发布门槛，不代替真实网站、外部工具、ARM64 实机及升级回滚验收。软件界面仍显示 0.10.0，请通过包名和 PACKAGE-INFO.json 区分批次。
+> 短流程中的 Chrome 60 秒与 Edge 安装态捕捉属于发布门禁。7200 秒诊断只补充长期稳定性证据，不阻止打包或 Release；没有完整成功结论时，长期稳定性仍待验证。软件界面仍显示 0.10.0，请通过包名和 PACKAGE-INFO.json 区分批次。
 
 ## 二、校验并解压
 

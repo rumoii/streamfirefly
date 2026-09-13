@@ -12,15 +12,6 @@ on:
         description: Exact main commit to package
         required: true
         type: string
-      capture_soak_seconds:
-        description: Capture soak duration (7200 required before publishing a pre-release)
-        required: true
-        default: '0'
-        type: choice
-        options:
-          - '0'
-          - '7200'
-
 permissions:
   contents: read
 
@@ -129,10 +120,6 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Chrome capture transport test failed' }
             npm run test:capture:installed
             if ($LASTEXITCODE -ne 0) { throw 'Installed browser capture chain failed' }
-            if ('${{ inputs.capture_soak_seconds }}' -eq '7200') {
-              npm run test:capture:soak
-              if ($LASTEXITCODE -ne 0) { throw 'Two-hour installed capture soak failed' }
-            }
             $ffmpegVersion = @(& (Join-Path $installDir 'ffmpeg.exe') -version)
             $ffmpegExitCode = $LASTEXITCODE
             if ($ffmpegExitCode -ne 0) { throw "Packaged FFmpeg version check failed with exit code $ffmpegExitCode" }

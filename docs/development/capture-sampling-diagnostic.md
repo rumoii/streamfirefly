@@ -6,7 +6,7 @@
 
 `node tools/diagnose-capture-sampling.mjs --smoke` 仅检查本地编排、阶段切换和清理，不能证明长时间稳定性。实验只启动自己的测试进程，不修改 Native 注册或浏览器配置。
 
-GitHub Actions 的 **Diagnose capture sampling** 工作流使用 `windows-2025`、Node 24 和显式指定的 main SHA，不运行 npm 安装、Rust 构建、FFmpeg、打包或 Native 安装。工作流只手动触发，禁止并行运行同类诊断；一次失败后应先分析证据，不自动重跑。
+GitHub Actions 的 **Diagnose installed capture** 工作流使用 `windows-2025` 和 Node 24。操作者必须提供一次成功短流程的 run ID、完整 main SHA、bundle 版本和 60 或 7200 秒时长；工作流校验来源后，以固定 SHA 的 `actions/download-artifact` 跨 run 下载两个架构的产物，复核外层哈希、包内校验、版本、架构和源码身份，再隔离安装 x64 包运行 Chrome 捕捉。它不重新构建或产生 Release，只手动触发，禁止并行运行同类诊断。
 
 ## 模块与证据
 
@@ -16,7 +16,7 @@ GitHub Actions 的 **Diagnose capture sampling** 工作流使用 `windows-2025`�
 - Node 单调时钟记录 spawn、exit、close、回调与阶段接收时间；PowerShell Stopwatch 记录子进程内部耗时。两种时钟不直接相减；事件循环延迟用于识别父进程调度影响。
 - 独立诊断和默认采样的单次命令仍为 10 秒上限；超时后最多再等待 2 秒关闭输出管道。被强制关闭的管道明确判失败，不将缓冲区中的结果当作成功采样。安装态 Chrome/Edge 捕捉另有下述一次性有界重试。
 
-每轮记录写入 `test-results/sampling-diagnostic/attempts.jsonl`；最终报告为 `result.json` 或 `result-failed.json`。主流程和清理错误分别保留，只有两者均成功才写成功报告。工作流始终尝试上传 `Sampling-diagnostic-<run_id>`，保留 14 天。缺少报告不代表通过。
+裸采样实验的每轮记录仍写入 `test-results/sampling-diagnostic/attempts.jsonl`，最终报告为 `result.json` 或 `result-failed.json`。安装态诊断写入 `test-results/capture/`；主流程和清理错误分别保留，只有捕捉、进程收尾、注册表移除及安装目录清理均成功，诊断工作流才为绿色。工作流始终尝试上传 `Installed-capture-diagnostic-<run_id>`，保留 14 天。缺少报告不代表通过。
 
 ## 判断边界
 
@@ -24,7 +24,7 @@ GitHub Actions 的 **Diagnose capture sampling** 工作流使用 `windows-2025`�
 
 对照命令与采样命令是相邻而非同时执行：对照正常不能排除采样期间的瞬时启动延迟。独立实验未复现只表示该次环境和负载未触发问题，不证明真实捕捉稳定，也不证明历史缺陷已修复。
 
-发布仍要求最终 SHA 的完整短 CI 和同 SHA 的 7200 秒捕捉通过；总工作集 2 GiB、预热后增长 512 MiB 的阈值保持不变。诊断工作流不产生安装包或 Release。
+发布要求最终 SHA 的完整短流程通过，其中 Chrome 60 秒、Edge 短链路、Native、双架构包审计和清理均为硬门禁。独立诊断支持 60 秒验证编排，也支持 7200 秒观察长期稳定性；诊断失败保持可见，但不反向改变成功短流程或阻止 Release。总工作集 2 GiB、预热后增长 512 MiB 的阈值保持不变，没有完整成功的 7200 秒结果时不得宣称长期稳定性已验证。
 
 ## 2026-09-09 独立实验结果
 
@@ -88,3 +88,11 @@ GitHub Actions 的 **Diagnose capture sampling** 工作流使用 `windows-2025`�
 安装态 Chrome/Edge 捕捉和 7200 秒长测现在仍先执行 10 秒采样；只有该次结果明确为 `timeout` 时，才启动一个新的 PowerShell 进程并以 30 秒上限重试一次。`completion-after-deadline`、管道关闭超时、非零退出、输出或 JSON 无效、进程身份变化等错误均立即失败。两次尝试属于同一个在途采样，停止流程会等待其结束；成功报告保留首次超时及重试成功的阶段和时序，重试再次失败时也保留两次证据。
 
 独立诊断、非安装态传输测试以及清理阶段的进程快照仍保持 10 秒、无重试。内存阈值、进程所属关系、PID 创建时间校验、清理期限、工作流总期限和产品协议均未改变。此容错只解决一次瞬时命令超时，仍需以同一最终 SHA 的完整短流程及 7200 秒流程作为验收证据。
+
+## 2026-09-13 长测与发布门禁解耦
+
+`Package internal test bundles` 不再接受长测时长输入，也不调用 7200 秒捕捉。成功短流程上传 x64、ARM64 和外层校验清单，仍要求源码行为、Native、三浏览器、双架构包审计、Chrome 60 秒、Edge 短链路及清理全部通过。该流程失败继续阻止发布。
+
+`Diagnose installed capture` 只接受一次已成功短流程的产物；来源工作流、main 分支、完整源码 SHA、bundle 版本、两个架构及 `sourceDirty: false` 任一不匹配即失败。它隔离安装 x64 包后运行 60 或 7200 秒 Chrome 捕捉，始终尝试上传捕捉证据并执行进程、注册表和安装目录清理。捕捉或清理失败均保持红色，供长期稳定性诊断，不改变短流程结论。
+
+提交 `b91c52ea52d2fd2092ea28ee26c79628df63c78d` 的短流程 [34735831687](https://github.com/rumoii/streamfirefly/actions/runs/34735831687) 成功。随后按旧规则运行的 [34736735002](https://github.com/rumoii/streamfirefly/actions/runs/34736735002) 在进入完整 7200 秒观察前，两次所属进程采样均超时，并记录清理错误；它是采样基础设施失败，不是对两小时媒体稳定性的有效反证，也不再作为发布阻断项。本版没有取得完整 7200 秒成功结论，长期稳定性仍待验证。

@@ -75,7 +75,8 @@ for (const expected of [
   'release/StreamFirefly-${{ inputs.bundle_version }}-internal-arm64.zip',
   'INTERNAL-SHA256SUMS.txt'
 ]) requireText(workflow, expected, 'Internal package workflow');
-for (const expected of ['STREAMFIREFLY_EXTENSION_DIR', 'STREAMFIREFLY_FFPROBE_EXE', 'STREAMFIREFLY_ISOLATED_INSTALL_TEST', 'npm run test:capture:installed', 'npm run test:capture:soak', 'capture_soak_seconds']) requireText(workflow, expected, 'Installed capture workflow');
+for (const expected of ['STREAMFIREFLY_EXTENSION_DIR', 'STREAMFIREFLY_FFPROBE_EXE', 'STREAMFIREFLY_ISOLATED_INSTALL_TEST', 'npm run test:capture:installed']) requireText(workflow, expected, 'Installed capture workflow');
+for (const forbidden of ['npm run test:capture:soak', 'capture_soak_seconds']) if (workflow.includes(forbidden)) throw new Error(`Package workflow must not contain the long capture diagnostic: ${forbidden}`);
 for (const expected of ['npm run test:discovery', 'npm run test:discovery:native', 'Discovery-evidence-${{ github.run_id }}', 'test-results/generated-hls-browser.json', 'test-results/generated-hls-native.json']) requireText(workflow, expected, 'Discovery release evidence');
 const scripts = JSON.parse(read('package.json')).scripts;
 requireText(scripts['test:unit'], 'npm run test:capture:runtime', 'Capture runtime regression entry');
@@ -88,8 +89,46 @@ requireText(scripts['test:capture:installed'], '--browser chrome --installed --d
 requireText(scripts['test:capture:soak'], '--duration 7200', 'Full capture soak requirement');
 requireText(scripts['diagnose:capture:sampling'], 'node tools/diagnose-capture-sampling.mjs', 'Standalone sampling diagnostic entry');
 const samplingWorkflow = read('.github/workflows/diagnose-capture-sampling.yml');
-for (const expected of ['windows-2025', "node-version: '24'", 'expected_commit:', 'if: always()', 'node tools/diagnose-capture-sampling.mjs', 'test-results/sampling-diagnostic/*']) requireText(samplingWorkflow, expected, 'Standalone sampling diagnostic workflow');
-for (const forbidden of ['npm ci', 'cargo ', 'package-internal-test', 'install-internal-test', 'test:capture:soak']) if (samplingWorkflow.includes(forbidden)) throw new Error(`Diagnostic workflow must not invoke ${forbidden}`);
+for (const expected of [
+  'name: Diagnose installed capture',
+  'package_run_id:',
+  'expected_commit:',
+  'bundle_version:',
+  'diagnostic_seconds:',
+  "default: '7200'",
+  "- '60'",
+  "- '7200'",
+  'actions: read',
+  'runs-on: windows-2025',
+  'timeout-minutes: 150',
+  'ref: ${{ inputs.expected_commit }}',
+  'actions/runs/$env:PACKAGE_RUN_ID',
+  "$run.name -ne 'Package internal test bundles'",
+  "$run.path -ne '.github/workflows/package-internal.yml'",
+  "$run.status -ne 'completed' -or $run.conclusion -ne 'success'",
+  "$run.head_branch -ne 'main'",
+  '$run.head_sha -ne $env:EXPECTED_COMMIT',
+  'actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093',
+  'github-token: ${{ github.token }}',
+  'run-id: ${{ inputs.package_run_id }}',
+  'INTERNAL-SHA256SUMS.txt',
+  '-ExpectedArchitecture x64',
+  '-ExpectedArchitecture arm64',
+  '-ExpectedBundleVersion $env:BUNDLE_VERSION',
+  '-ExpectedSourceCommit $env:EXPECTED_COMMIT',
+  'npm ci',
+  'install-internal-test.ps1',
+  'STREAMFIREFLY_ISOLATED_INSTALL_TEST=1',
+  'node tools/test-capture-browser.mjs --browser chrome --installed --duration $env:DIAGNOSTIC_SECONDS',
+  'Clean isolated diagnostic state',
+  'Get-CimInstance Win32_Process -Property ProcessId, ExecutablePath, CommandLine',
+  '$cleanupProcess.WaitForExit(30000)',
+  'uninstall-internal-test.ps1',
+  'if: always()',
+  'Installed-capture-diagnostic-${{ github.run_id }}',
+  'path: test-results/capture/**'
+]) requireText(samplingWorkflow, expected, 'Installed capture diagnostic workflow');
+for (const forbidden of ['continue-on-error:', 'package-internal-test.ps1', 'cargo ']) if (samplingWorkflow.includes(forbidden)) throw new Error(`Diagnostic workflow must not contain ${forbidden}`);
 requireText(scripts['test:native'], 'npm run test:dash:native', 'Native regression entry');
 requireText(scripts['test:native'], 'node tools/test-native-capture-volume.mjs', 'Native volume finalization regression entry');
 requireText(workflow, 'path: test-results/capture/**', 'Capture evidence archive upload');

@@ -1,46 +1,232 @@
-name: Diagnose capture sampling
+name: Diagnose installed capture
 
 on:
   workflow_dispatch:
     inputs:
-      expected_commit:
-        description: Exact main commit to diagnose
+      package_run_id:
+        description: Successful Package internal test bundles run ID
         required: true
         type: string
+      expected_commit:
+        description: Full source SHA used by the package run
+        required: true
+        type: string
+      bundle_version:
+        description: Internal bundle version
+        required: true
+        default: 0.10.0-beta.5
+        type: string
+      diagnostic_seconds:
+        description: Installed Chrome capture diagnostic duration
+        required: true
+        default: '7200'
+        type: choice
+        options:
+          - '60'
+          - '7200'
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
-  group: diagnose-capture-sampling
+  group: diagnose-installed-capture
   cancel-in-progress: false
 
 jobs:
   diagnose:
     runs-on: windows-2025
-    timeout-minutes: 25
+    timeout-minutes: 150
+    env:
+      PACKAGE_RUN_ID: ${{ inputs.package_run_id }}
+      EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+      BUNDLE_VERSION: ${{ inputs.bundle_version }}
+      DIAGNOSTIC_SECONDS: ${{ inputs.diagnostic_seconds }}
     steps:
-      - name: Check out the requested source
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - name: Verify source identity
+      - name: Check out the diagnosed source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.expected_commit }}
+
+      - name: Verify inputs and package run
         shell: pwsh
         env:
-          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if ($env:GITHUB_REF -ne 'refs/heads/main') { throw 'Diagnostics must run from main' }
-          if ((git rev-parse HEAD).Trim() -ne $env:EXPECTED_COMMIT) { throw 'Unexpected source SHA' }
+          if ($env:GITHUB_REF -ne 'refs/heads/main') { throw "Diagnostics must be dispatched from main, got $env:GITHUB_REF" }
+          if ($env:PACKAGE_RUN_ID -notmatch '^\d+$') { throw "Invalid package run ID: $env:PACKAGE_RUN_ID" }
+          if ($env:EXPECTED_COMMIT -notmatch '^[a-f0-9]{40}$') { throw 'Expected commit must be a full lowercase Git SHA' }
+          if ($env:BUNDLE_VERSION -notmatch '^\d+\.\d+\.\d+(-beta\.\d+)?$') { throw "Invalid bundle version: $env:BUNDLE_VERSION" }
+          if ($env:DIAGNOSTIC_SECONDS -notin @('60', '7200')) { throw "Unsupported diagnostic duration: $env:DIAGNOSTIC_SECONDS" }
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:EXPECTED_COMMIT) { throw "Checked out $actual, expected $env:EXPECTED_COMMIT" }
           if (@(git status --porcelain).Count) { throw 'Checkout is dirty' }
+          $headers = @{
+            Accept = 'application/vnd.github+json'
+            Authorization = "Bearer $env:GH_TOKEN"
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          $run = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/runs/$env:PACKAGE_RUN_ID"
+          if ($run.name -ne 'Package internal test bundles' -or $run.path -ne '.github/workflows/package-internal.yml') { throw "Run $env:PACKAGE_RUN_ID is not Package internal test bundles" }
+          if ($run.event -ne 'workflow_dispatch') { throw "Package run event is $($run.event), expected workflow_dispatch" }
+          if ($run.status -ne 'completed' -or $run.conclusion -ne 'success') { throw "Package run is $($run.status)/$($run.conclusion), expected completed/success" }
+          if ($run.head_branch -ne 'main') { throw "Package run branch is $($run.head_branch), expected main" }
+          if ($run.head_sha -ne $env:EXPECTED_COMMIT) { throw "Package run SHA is $($run.head_sha), expected $env:EXPECTED_COMMIT" }
+
+      - name: Record diagnostic context
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path 'test-results\capture' | Out-Null
+          [ordered]@{
+            packageRunId = $env:PACKAGE_RUN_ID
+            sourceCommit = $env:EXPECTED_COMMIT
+            bundleVersion = $env:BUNDLE_VERSION
+            diagnosticSeconds = [int]$env:DIAGNOSTIC_SECONDS
+          } | ConvertTo-Json | Set-Content -LiteralPath 'test-results\capture\diagnostic-context.json' -Encoding UTF8
+
+      - name: Download audited packages from the short run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: StreamFirefly-${{ inputs.bundle_version }}-internal
+          path: ${{ runner.temp }}\streamfirefly-diagnostic-package
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.package_run_id }}
+
+      - name: Audit downloaded package identity
+        shell: pwsh
+        run: |
+          $packageDir = Join-Path $env:RUNNER_TEMP 'streamfirefly-diagnostic-package'
+          $expectedFiles = @(
+            "StreamFirefly-$env:BUNDLE_VERSION-internal-x64.zip",
+            "StreamFirefly-$env:BUNDLE_VERSION-internal-arm64.zip"
+          )
+          $manifestPath = Join-Path $packageDir 'INTERNAL-SHA256SUMS.txt'
+          if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw 'INTERNAL-SHA256SUMS.txt is missing from the package artifact' }
+          $manifest = @{}
+          foreach ($line in Get-Content -LiteralPath $manifestPath) {
+            if ($line -notmatch '^([a-f0-9]{64})  ([^\\/]+\.zip)$') { throw "Invalid outer checksum line: $line" }
+            if ($manifest.ContainsKey($Matches[2])) { throw "Duplicate outer checksum entry: $($Matches[2])" }
+            $manifest[$Matches[2]] = $Matches[1]
+          }
+          if ($manifest.Count -ne $expectedFiles.Count) { throw "Outer checksum manifest contains $($manifest.Count) entries, expected $($expectedFiles.Count)" }
+          foreach ($name in $expectedFiles) {
+            $archive = Join-Path $packageDir $name
+            if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) { throw "Downloaded package is missing: $name" }
+            $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+            if ($manifest[$name] -ne $actualHash) { throw "Outer checksum mismatch: $name" }
+          }
+          & .\tools\audit-internal-test.ps1 -Archive (Join-Path $packageDir $expectedFiles[0]) -ExpectedArchitecture x64 -ExpectedBundleVersion $env:BUNDLE_VERSION -ExpectedSourceCommit $env:EXPECTED_COMMIT
+          & .\tools\audit-internal-test.ps1 -Archive (Join-Path $packageDir $expectedFiles[1]) -ExpectedArchitecture arm64 -ExpectedBundleVersion $env:BUNDLE_VERSION -ExpectedSourceCommit $env:EXPECTED_COMMIT
+
       - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '24'
-      - name: Run one isolated sampling experiment
-        run: node tools/diagnose-capture-sampling.mjs
-      - name: Upload sampling diagnostic evidence
+          cache: npm
+
+      - name: Prepare isolated diagnostic install
+        shell: pwsh
+        run: |
+          $packageDir = Join-Path $env:RUNNER_TEMP 'streamfirefly-diagnostic-package'
+          $extractDir = Join-Path $env:RUNNER_TEMP 'streamfirefly-diagnostic-extract'
+          $installDir = Join-Path $env:RUNNER_TEMP 'streamfirefly-diagnostic-installed'
+          npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\tools\download-ffmpeg.ps1 -Architecture x64 -Destination '.\tools\ffmpeg-cache'
+          $archive = Join-Path $packageDir "StreamFirefly-$env:BUNDLE_VERSION-internal-x64.zip"
+          Expand-Archive -LiteralPath $archive -DestinationPath $extractDir
+          $bundle = Join-Path $extractDir "StreamFirefly-$env:BUNDLE_VERSION-internal-x64"
+          $installScript = Join-Path $bundle 'tools\install-internal-test.ps1'
+          & $installScript -ChromeExtensionId ('a' * 32) -EdgeExtensionId ('b' * 32) -InstallDir $installDir
+          foreach ($path in @(
+            'HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.streamfirefly.native',
+            'HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\com.streamfirefly.native',
+            'HKCU:\Software\Mozilla\NativeMessagingHosts\com.streamfirefly.native'
+          )) {
+            if (-not (Test-Path -LiteralPath $path)) { throw "Native Messaging registration is missing: $path" }
+          }
+          "STREAMFIREFLY_NATIVE_EXE=$(Join-Path $installDir 'streamfirefly-native.exe')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "STREAMFIREFLY_FFMPEG_EXE=$(Join-Path $installDir 'ffmpeg.exe')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $ffprobe = (Get-ChildItem -LiteralPath '.\tools\ffmpeg-cache\x64-extracted' -Recurse -Filter ffprobe.exe | Select-Object -First 1).FullName
+          if (-not $ffprobe) { throw 'Capture output inspection requires FFprobe' }
+          "STREAMFIREFLY_FFPROBE_EXE=$ffprobe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "STREAMFIREFLY_EXTENSION_DIR=$(Join-Path $bundle 'extension')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          'STREAMFIREFLY_ISOLATED_INSTALL_TEST=1' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Run installed Chrome capture diagnostic
+        shell: pwsh
+        run: |
+          node tools/test-capture-browser.mjs --browser chrome --installed --duration $env:DIAGNOSTIC_SECONDS
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Clean isolated diagnostic state
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $cleanupErrors = [System.Collections.Generic.List[string]]::new()
+          $extractDir = Join-Path $env:RUNNER_TEMP 'streamfirefly-diagnostic-extract'
+          $installDir = Join-Path $env:RUNNER_TEMP 'streamfirefly-diagnostic-installed'
+          $env:SFF_DIAGNOSTIC_INSTALL_DIR = $installDir
+          try {
+            $processCleanupScript = @'
+          $ErrorActionPreference = 'Stop'
+          $owned = @(Get-CimInstance Win32_Process -Property ProcessId, ExecutablePath, CommandLine | Where-Object {
+            ($_.ExecutablePath -and $_.ExecutablePath.StartsWith($env:SFF_DIAGNOSTIC_INSTALL_DIR, [System.StringComparison]::OrdinalIgnoreCase)) -or
+            ($_.CommandLine -and $_.CommandLine.Contains('streamfirefly-capture-browser-'))
+          })
+          foreach ($ownedProcess in $owned) { Stop-Process -Id $ownedProcess.ProcessId -Force -ErrorAction Stop }
+          '@
+            $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($processCleanupScript))
+            $cleanupProcess = Start-Process powershell.exe -ArgumentList '-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded -PassThru -WindowStyle Hidden
+            if (-not $cleanupProcess.WaitForExit(30000)) {
+              Stop-Process -Id $cleanupProcess.Id -Force -ErrorAction SilentlyContinue
+              throw 'Process cleanup did not finish within 30 seconds'
+            }
+            if ($cleanupProcess.ExitCode -ne 0) { throw "Process cleanup exited with code $($cleanupProcess.ExitCode)" }
+          } catch { $cleanupErrors.Add("Unable to stop diagnostic processes: $($_.Exception.Message)") }
+          $uninstallScript = Join-Path $extractDir "StreamFirefly-$env:BUNDLE_VERSION-internal-x64\tools\uninstall-internal-test.ps1"
+          try {
+            if (Test-Path -LiteralPath $uninstallScript -PathType Leaf) { & $uninstallScript -InstallDir $installDir }
+          } catch { $cleanupErrors.Add("Package uninstall failed: $($_.Exception.Message)") }
+          foreach ($path in @(
+            'HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.streamfirefly.native',
+            'HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\com.streamfirefly.native',
+            'HKCU:\Software\Mozilla\NativeMessagingHosts\com.streamfirefly.native'
+          )) {
+            try { if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force } }
+            catch { $cleanupErrors.Add("Unable to remove registration ${path}: $($_.Exception.Message)") }
+          }
+          try {
+            $tempRoot = [System.IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
+            foreach ($directory in Get-ChildItem -LiteralPath $env:RUNNER_TEMP -Directory -Filter 'streamfirefly-capture-browser-*' -ErrorAction SilentlyContinue) {
+              $resolved = [System.IO.Path]::GetFullPath($directory.FullName)
+              if (-not $resolved.StartsWith($tempRoot + 'streamfirefly-capture-browser-', [System.StringComparison]::OrdinalIgnoreCase)) { throw "Refusing to remove unexpected path: $resolved" }
+              Remove-Item -LiteralPath $resolved -Recurse -Force
+            }
+            if (Test-Path -LiteralPath $installDir) {
+              $resolvedInstall = [System.IO.Path]::GetFullPath($installDir)
+              if (-not $resolvedInstall.StartsWith($tempRoot, [System.StringComparison]::OrdinalIgnoreCase)) { throw "Refusing to remove install path outside runner temp: $resolvedInstall" }
+              Remove-Item -LiteralPath $resolvedInstall -Recurse -Force
+            }
+          } catch { $cleanupErrors.Add("Unable to remove diagnostic directories: $($_.Exception.Message)") }
+          foreach ($path in @(
+            'HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.streamfirefly.native',
+            'HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\com.streamfirefly.native',
+            'HKCU:\Software\Mozilla\NativeMessagingHosts\com.streamfirefly.native'
+          )) {
+            if (Test-Path -LiteralPath $path) { $cleanupErrors.Add("Native Messaging registration remains: $path") }
+          }
+          if (Test-Path -LiteralPath $installDir) { $cleanupErrors.Add("Diagnostic install directory remains: $installDir") }
+          if ($cleanupErrors.Count) { throw ($cleanupErrors -join [Environment]::NewLine) }
+
+      - name: Upload installed capture diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: Sampling-diagnostic-${{ github.run_id }}
-          path: test-results/sampling-diagnostic/*
-          if-no-files-found: error
+          name: Installed-capture-diagnostic-${{ github.run_id }}
+          path: test-results/capture/**
+          if-no-files-found: warn
           retention-days: 14
