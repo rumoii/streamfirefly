@@ -1,12 +1,12 @@
 # Decision: 将长时捕捉改为非阻断诊断
 
-Status: proposed
+Status: implemented
 
 ## Problem
 
 内测打包流程同时承担源码与产物门禁、短安装态验收和 7200 秒长期诊断。长时运行会重复安装前的全部构建与短测，且 Windows 进程采样基础设施的瞬时失败可能在媒体长测开始前阻止产物上传。这样无法区分“构建或短链路不合格”和“长期稳定性尚未取得结论”，也使已经通过审计的同一批产物无法被独立复测。
 
-## Proposal
+## Decision
 
 `Package internal test bundles` 继续作为唯一发布门禁，要求最终 main SHA 的干净源码、类型与单元检查、三浏览器检查、真实 Native、双架构构建与包审计、Chrome 60 秒、Edge 短链路以及卸载清理全部成功。该流程不接受长测时长，也不运行 7200 秒捕捉。
 
@@ -20,7 +20,7 @@ Status: proposed
 - 删除长时测试：流程最简单，但失去发现缓慢内存增长、长时收尾和 Runner 调度异常的诊断能力。
 - 在打包流程中忽略长测错误：会产生表面绿色而内部失败的运行，削弱失败可见性，因此不采用。
 
-## Risks
+## Consequences
 
 - Release 可以在没有完整 7200 秒成功结论时发布，不能把短流程结果扩张为长期稳定性证明。
 - 独立诊断依赖来源 artifact 的保留期限；过期后必须重新运行短流程，不能改用来源不明的本地包。
@@ -28,7 +28,12 @@ Status: proposed
 
 ## Verification
 
-提案阶段先验证两个工作流的 YAML、仓库门禁测试、完整单元测试和决策记录结构。实现提交推送后，以该 SHA 运行一次短打包流程并审计下载产物，再以新诊断工作流对该 run 执行 60 秒模式。两条远端流程及诊断证据成功前，本记录保持 `proposed`。
+提案阶段验证了工作流 YAML、仓库门禁测试、完整单元测试和决策记录结构。提交推送后以最终源码提交 `6562ea87585c8e102f10f31423a60c253496640f` 取得以下远端与产物证据：
+
+- 短打包流程 [34758074211](https://github.com/rumoii/streamfirefly/actions/runs/34758074211) 成功，覆盖源码行为检查、三浏览器测试、双架构构建与包审计、x64 安装态 Chrome 60 秒与 Edge 捕捉、Native 卸载清理。
+- 产物 `StreamFirefly-0.10.0-beta.5-internal-x64.zip` 外层 SHA-256 为 `8ed068521ff75056595fe9909b5757385af05d46e8deef824e7decd873965fd6`，ARM64 外层 SHA-256 为 `f97d0a3327631a24af5588aa2fd5d79046a7e0feaff6c7308793a89aef3f0def`，均与包内 `INTERNAL-SHA256SUMS.txt` 一致；两个 `PACKAGE-INFO.json` 记录同一源码提交、对应架构和 `sourceDirty: false`。
+- 独立诊断流程 [34760799359](https://github.com/rumoii/streamfirefly/actions/runs/34760799359) 以 60 秒模式成功，跨 run 下载、包身份审计、隔离安装、捕捉、证据上传与清理全部通过。
+- Pre-release `v0.10.0-beta.5` 已在 `rumoii/streamfirefly-internal-releases` 发布，附件为上述两个 ZIP 与该校验清单。
 
 ## Rollback
 
