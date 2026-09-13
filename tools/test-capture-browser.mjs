@@ -16,6 +16,7 @@ const executeFile = promisify(execFile);
 const argumentsList = process.argv.slice(2);
 const option = name => argumentsList[argumentsList.indexOf(name) + 1];
 const installed = argumentsList.includes('--installed');
+const processSampleOptions = installed ? { retryTimeoutMs: 30000 } : undefined;
 const browser = argumentsList.includes('--browser') ? option('--browser') : 'chrome';
 const duration = argumentsList.includes('--duration') ? Number(option('--duration')) : 0;
 assert.ok(['chrome', 'edge'].includes(browser));
@@ -73,9 +74,9 @@ try {
         if (request.headers.origin !== `chrome-extension://${extensionId}`) { response.writeHead(403).end(); return; }
         await processReady;
         soakStarted ??= Date.now();
-        const measured = await ownedProcesses.sample();
+        const measured = await ownedProcesses.sample(processSampleOptions);
         memory.push(measured);
-        log(`soak elapsed=${Math.round((Date.now() - soakStarted) / 1000)}s samples=${memory.length} memoryMiB=${(measured.bytes / 1024 ** 2).toFixed(2)} samplingMs=${measured.elapsedMs}`);
+        log(`soak elapsed=${Math.round((Date.now() - soakStarted) / 1000)}s samples=${memory.length} memoryMiB=${(measured.bytes / 1024 ** 2).toFixed(2)} samplingMs=${measured.elapsedMs} samplingAttempts=${measured.attempts.length}`);
         checkMemoryBudget(memory);
         response.end('ok'); return;
       }
@@ -137,7 +138,7 @@ try {
   outcome.catch(() => {});
   if (child.pid) {
     ownedProcesses = new OwnedCaptureProcesses(child.pid, { rootExited: () => child.exitCode !== null || child.signalCode !== null });
-    processReady = ownedProcesses.sample();
+    processReady = ownedProcesses.sample(processSampleOptions);
     await processReady;
   }
   result = await outcome;

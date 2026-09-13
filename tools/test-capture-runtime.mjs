@@ -58,6 +58,86 @@ for (const [reason, override] of [
   });
 }
 
+test('sampling keeps the default ten-second single attempt', async () => {
+  const timeouts = [];
+  const owner = new OwnedCaptureProcesses(root.pid, { run: async (_script, timeout) => {
+    timeouts.push(timeout);
+    return { ...success([root]), timeoutMs: timeout };
+  } });
+  const sample = await owner.sample();
+  assert.deepEqual(timeouts, [10000]);
+  assert.deepEqual(sample.attempts, [{ ok: true, timeoutMs: 10000, elapsedMs: 7, trace: undefined }]);
+});
+
+test('sampling retries one explicit timeout with the configured longer deadline', async () => {
+  const timeouts = [];
+  const trace = { stages: [{ stage: 'script-entered', childMs: 88, receivedMs: 8941 }] };
+  const owner = new OwnedCaptureProcesses(root.pid, { run: async (_script, timeout) => {
+    timeouts.push(timeout);
+    if (timeouts.length === 1) return { ...success([root]), status: null, signal: 'SIGTERM', killed: true, stdout: '', timeoutMs: timeout, trace };
+    return { ...success([root, descendant]), timeoutMs: timeout };
+  } });
+  const sample = await owner.sample({ retryTimeoutMs: 30000 });
+  assert.deepEqual(timeouts, [10000, 30000]);
+  assert.equal(sample.bytes, 300);
+  assert.equal(sample.attempts.length, 2);
+  assert.deepEqual(sample.attempts[0], { ok: false, timeoutMs: 10000, reason: 'timeout', status: null, signal: 'SIGTERM', error: null, stdout: '', stderr: '', killed: true, pipesForcedClosed: false, elapsedMs: 7, trace });
+  assert.deepEqual(sample.attempts[1], { ok: true, timeoutMs: 30000, elapsedMs: 7, trace: undefined });
+});
+
+test('sampling does not retry non-timeout failures', async () => {
+  let calls = 0;
+  const owner = new OwnedCaptureProcesses(root.pid, { run: async (_script, timeout) => {
+    calls++;
+    return { ...success([root]), status: 1, stderr: 'CIM unavailable', timeoutMs: timeout };
+  } });
+  await assert.rejects(owner.sample({ retryTimeoutMs: 30000 }), error => {
+    assert.equal(calls, 1);
+    assert.equal(error.diagnostics.reason, 'nonzero-exit');
+    assert.equal(error.diagnostics.attempts.length, 1);
+    assert.equal(error.diagnostics.attempts[0].reason, 'nonzero-exit');
+    return true;
+  });
+});
+
+test('sampling retains both timeout attempts when the retry fails', async () => {
+  const timeouts = [];
+  const owner = new OwnedCaptureProcesses(root.pid, { run: async (_script, timeout) => {
+    timeouts.push(timeout);
+    return { ...success([root]), status: null, signal: 'SIGTERM', killed: true, stdout: '', timeoutMs: timeout };
+  } });
+  await assert.rejects(owner.sample({ retryTimeoutMs: 30000 }), error => {
+    assert.deepEqual(timeouts, [10000, 30000]);
+    assert.equal(error.diagnostics.reason, 'timeout');
+    assert.equal(error.diagnostics.rootPid, root.pid);
+    assert.deepEqual(error.diagnostics.attempts.map(attempt => [attempt.timeoutMs, attempt.reason]), [[10000, 'timeout'], [30000, 'timeout']]);
+    return true;
+  });
+});
+
+test('a retry remains the same in-flight sample for concurrency and cleanup', async () => {
+  let releaseRetry, markRetryStarted, calls = 0;
+  const retryStarted = new Promise(resolve => { markRetryStarted = resolve; });
+  const owner = new OwnedCaptureProcesses(root.pid, { run: (_script, timeout) => {
+    calls++;
+    if (calls === 1) return Promise.resolve({ ...success([root]), status: null, killed: true, stdout: '', timeoutMs: timeout });
+    if (calls === 2) {
+      markRetryStarted();
+      return new Promise(resolve => { releaseRetry = resolve; });
+    }
+    return Promise.resolve({ ...success([{ pid: 999, parentPid: 0, created, bytes: 1 }]), timeoutMs: timeout });
+  } });
+  const sampling = owner.sample({ retryTimeoutMs: 30000 });
+  await retryStarted;
+  await assert.rejects(owner.sample(), /already running/);
+  const stopping = owner.stop();
+  assert.equal(calls, 2);
+  releaseRetry({ ...success([root]), timeoutMs: 30000 });
+  await sampling;
+  await stopping;
+  assert.equal(calls, 3);
+});
+
 test('stage trace preserves partial markers, event ordering and delayed parent scheduling', () => {
   let now = 0;
   const observation = createCommandTrace(() => now);

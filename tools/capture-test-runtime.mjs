@@ -137,18 +137,40 @@ export class OwnedCaptureProcesses {
     return owned;
   }
 
-  async sample() {
+  async sample({ retryTimeoutMs } = {}) {
     if (this.stopping || this.pending) throw new Error('Capture memory sampler is stopping or already running');
+    if (retryTimeoutMs !== undefined && (!Number.isFinite(retryTimeoutMs) || retryTimeoutMs <= 0)) throw new Error('Capture memory retry timeout must be positive');
     this.pending = (async () => {
-      try {
-        const snapshot = await processSnapshot(this.run);
-        const processes = this.observe(snapshot.processes, true);
-        const bytes = processes.reduce((total, item) => total + item.bytes, 0);
-        if (!Number.isFinite(bytes) || bytes <= 0) throw new Error('Owned process memory measurement failed: invalid-total');
-        return { at: Date.now(), bytes, elapsedMs: snapshot.elapsedMs, trace: snapshot.trace, rootPid: this.rootPid, processes };
-      } catch (error) {
-        error.diagnostics = { ...error.diagnostics, rootPid: this.rootPid, knownProcesses: [...this.known.values()] };
-        throw error;
+      const attempts = [];
+      const timeouts = retryTimeoutMs === undefined ? [10000] : [10000, retryTimeoutMs];
+      for (const timeoutMs of timeouts) {
+        try {
+          const snapshot = await processSnapshot(script => this.run(script, timeoutMs));
+          const processes = this.observe(snapshot.processes, true);
+          const bytes = processes.reduce((total, item) => total + item.bytes, 0);
+          if (!Number.isFinite(bytes) || bytes <= 0) throw new Error('Owned process memory measurement failed: invalid-total');
+          attempts.push({ ok: true, timeoutMs, elapsedMs: snapshot.elapsedMs, trace: snapshot.trace });
+          return { at: Date.now(), bytes, elapsedMs: snapshot.elapsedMs, trace: snapshot.trace, attempts, rootPid: this.rootPid, processes };
+        } catch (error) {
+          const diagnostics = error.diagnostics ?? {};
+          attempts.push({
+            ok: false,
+            timeoutMs,
+            reason: diagnostics.reason,
+            status: diagnostics.status ?? null,
+            signal: diagnostics.signal ?? null,
+            error: diagnostics.error,
+            stdout: diagnostics.stdout,
+            stderr: diagnostics.stderr,
+            killed: Boolean(diagnostics.killed || diagnostics.error?.killed),
+            pipesForcedClosed: Boolean(diagnostics.pipesForcedClosed),
+            elapsedMs: diagnostics.elapsedMs,
+            trace: diagnostics.trace,
+          });
+          if (attempts.length === 1 && timeouts.length === 2 && diagnostics.reason === 'timeout') continue;
+          error.diagnostics = { ...diagnostics, attempts, rootPid: this.rootPid, knownProcesses: [...this.known.values()] };
+          throw error;
+        }
       }
     })();
     try { return await this.pending; } finally { this.pending = null; }

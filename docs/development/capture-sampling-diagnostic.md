@@ -14,7 +14,7 @@ GitHub Actions 的 **Diagnose capture sampling** 工作流使用 `windows-2025`�
 - `diagnose-capture-sampling.mjs` 编排实验与对照；`capture-sampling-fixture.mjs` 仅持有专用测试进程树。
 - 标准输出仍为采样 JSON；标准错误的 `SFF_STAGE` 行实时记录脚本进入、CIM 查询、字段转换、JSON 序列化和输出完成。保留原始错误输出。
 - Node 单调时钟记录 spawn、exit、close、回调与阶段接收时间；PowerShell Stopwatch 记录子进程内部耗时。两种时钟不直接相减；事件循环延迟用于识别父进程调度影响。
-- 单次命令仍为 10 秒上限；超时后最多再等待 2 秒关闭输出管道。被强制关闭的管道明确判失败，不将缓冲区中的结果当作成功采样。
+- 独立诊断和默认采样的单次命令仍为 10 秒上限；超时后最多再等待 2 秒关闭输出管道。被强制关闭的管道明确判失败，不将缓冲区中的结果当作成功采样。安装态 Chrome/Edge 捕捉另有下述一次性有界重试。
 
 每轮记录写入 `test-results/sampling-diagnostic/attempts.jsonl`；最终报告为 `result.json` 或 `result-failed.json`。主流程和清理错误分别保留，只有两者均成功才写成功报告。工作流始终尝试上传 `Sampling-diagnostic-<run_id>`，保留 14 天。缺少报告不代表通过。
 
@@ -80,3 +80,11 @@ GitHub Actions 的 **Diagnose capture sampling** 工作流使用 `windows-2025`�
 第一次在 10 秒内只记录 `script-entered`，未完成 CIM 查询。第二次的子进程时钟在 1686.377 ms 完成 CIM 查询、1818.757 ms 完成字段转换，但序列化和输出未在 10 秒内结束；父进程最大事件循环延迟为 502.477 ms。两次证据把失败边界定位在全量 `Win32_Process` 查询与后续投影、序列化路径，而不是 Blob 映射、媒体传输或 Native 收尾；现有证据不能进一步证明 Runner 内部的具体阻塞机制。
 
 进程快照改为通过 WQL 只请求 `ProcessId`、`ParentProcessId`、`CreationDate` 和 `WorkingSetSize` 四个实际消费字段，并把行数组作为单一输入交给 JSON 序列化。10 秒命令上限、阶段诊断、失败判定、进程身份校验和清理顺序保持不变；不增加重试或超时兜底。
+
+## 2026-09-13 安装态捕捉有界重试
+
+提交 `fad5c8537d3a34d1bf217164b90d9f17452d1ac2` 的短流程 [34730251845](https://github.com/rumoii/streamfirefly/actions/runs/34730251845) 成功；同提交的 7200 秒流程 [34731003331](https://github.com/rumoii/streamfirefly/actions/runs/34731003331) 在进入长测前的安装态 Chrome 第一次采样中失败。失败命令在 10 秒内只收到 `script-entered`，未收到 `query-completed`；媒体和内存结果为空，清理成功。同一源码一次成功、一次在 Runner 瞬时采样中超时，支持增加严格受限的容错，但不证明 Windows 内部阻塞机制。
+
+安装态 Chrome/Edge 捕捉和 7200 秒长测现在仍先执行 10 秒采样；只有该次结果明确为 `timeout` 时，才启动一个新的 PowerShell 进程并以 30 秒上限重试一次。`completion-after-deadline`、管道关闭超时、非零退出、输出或 JSON 无效、进程身份变化等错误均立即失败。两次尝试属于同一个在途采样，停止流程会等待其结束；成功报告保留首次超时及重试成功的阶段和时序，重试再次失败时也保留两次证据。
+
+独立诊断、非安装态传输测试以及清理阶段的进程快照仍保持 10 秒、无重试。内存阈值、进程所属关系、PID 创建时间校验、清理期限、工作流总期限和产品协议均未改变。此容错只解决一次瞬时命令超时，仍需以同一最终 SHA 的完整短流程及 7200 秒流程作为验收证据。
