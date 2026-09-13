@@ -72,3 +72,11 @@ GitHub Actions 的 **Diagnose capture sampling** 工作流使用 `windows-2025`�
 `node tools/test-native-capture-volume.mjs` 使用真实 Native stdin/WebSocket 链路，逐块等待 6500 个分片的持久化 ACK，发送 finish 后关闭连接并校验 FFprobe 时长；额外使用坏媒体验证非零合并退出及错误尾部。整体测试上限 10 分钟，最终状态仍等待 60 秒。首次本地验证成功，6500 分片合并耗时 502 ms；这不是两小时浏览器运行的替代证据。Native 每次合并仍允许 120 秒；两处期限的差异被保留以继续取证，不以延长等待掩盖未知原因。
 
 本轮只安排修复后的一次完整短 CI，不自动重跑长测或发布。历史失败缺少最后会话状态及 FFmpeg 证据，尚不能确认是停止通知、Native 合并还是状态保存问题。
+
+## 2026-09-13 Beta 5 短流程采样失败
+
+提交 `fef533f40d06839ae50a653097708eb5c63a6fb0` 的两次短流程 [34702090656](https://github.com/rumoii/streamfirefly/actions/runs/34702090656) 与 [34729138094](https://github.com/rumoii/streamfirefly/actions/runs/34729138094) 均通过源码行为验证和双架构包审计，在 x64 安装态 Chrome 捕捉启动后的第一次所属进程采样失败。两次失败都发生在媒体会话开始前，内存样本和媒体结果为空；6500 分片真实 Native 捕捉、合并及失败保留测试已通过，清理没有遗留进程。
+
+第一次在 10 秒内只记录 `script-entered`，未完成 CIM 查询。第二次的子进程时钟在 1686.377 ms 完成 CIM 查询、1818.757 ms 完成字段转换，但序列化和输出未在 10 秒内结束；父进程最大事件循环延迟为 502.477 ms。两次证据把失败边界定位在全量 `Win32_Process` 查询与后续投影、序列化路径，而不是 Blob 映射、媒体传输或 Native 收尾；现有证据不能进一步证明 Runner 内部的具体阻塞机制。
+
+进程快照改为通过 WQL 只请求 `ProcessId`、`ParentProcessId`、`CreationDate` 和 `WorkingSetSize` 四个实际消费字段，并把行数组作为单一输入交给 JSON 序列化。10 秒命令上限、阶段诊断、失败判定、进程身份校验和清理顺序保持不变；不增加重试或超时兜底。

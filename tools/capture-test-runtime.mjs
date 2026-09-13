@@ -82,9 +82,9 @@ function diagnosticError(message, diagnostics) {
 }
 
 export async function processSnapshot(run = runPowerShell) {
-  const result = await run(`$sffProcesses=@(Get-CimInstance Win32_Process); Write-SffStage 'query-completed';
+  const result = await run(`$sffProcesses=@(Get-CimInstance -Query 'SELECT ProcessId, ParentProcessId, CreationDate, WorkingSetSize FROM Win32_Process'); Write-SffStage 'query-completed';
     $sffRows=@($sffProcesses | ForEach-Object { [pscustomobject]@{ pid=[int]$_.ProcessId; parentPid=[int]$_.ParentProcessId; created=$_.CreationDate.ToUniversalTime().ToString("o"); bytes=[double]$_.WorkingSetSize } }); Write-SffStage 'conversion-completed';
-    $sffJson=$sffRows | ConvertTo-Json -Compress; Write-SffStage 'serialization-completed';
+    $sffJson=ConvertTo-Json -InputObject $sffRows -Compress; Write-SffStage 'serialization-completed';
     [Console]::Out.WriteLine($sffJson); [Console]::Out.Flush(); Write-SffStage 'output-completed'`);
   let reason = commandFailure(result), processes;
   if (!reason) {

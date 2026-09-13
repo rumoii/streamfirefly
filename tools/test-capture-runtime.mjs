@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { OwnedCaptureProcesses, checkMemoryBudget, commandFailure, createCommandTrace, finishCaptureTest, removeCaptureDirectory, resetCaptureReports } from './capture-test-runtime.mjs';
+import { OwnedCaptureProcesses, checkMemoryBudget, commandFailure, createCommandTrace, finishCaptureTest, processSnapshot, removeCaptureDirectory, resetCaptureReports } from './capture-test-runtime.mjs';
 
 const created = '2026-09-09T00:00:00.0000000Z';
 const root = { pid: 101, parentPid: 99, created, bytes: 100 };
@@ -17,6 +17,15 @@ test('command deadlines reject late success and missing timing without hiding ex
     assert.equal(commandFailure({ ...success([root]), ...override }), 'invalid-command-timing');
   }
   assert.equal(commandFailure({ ...success([root]), elapsedMs: 20000, killed: true }), 'timeout');
+});
+
+test('process snapshots request only required fields and serialize the row array directly', async () => {
+  let script = '';
+  const snapshot = await processSnapshot(async value => { script = value; return success([root]); });
+  assert.deepEqual(snapshot.processes, [root]);
+  assert.match(script, /Get-CimInstance -Query 'SELECT ProcessId, ParentProcessId, CreationDate, WorkingSetSize FROM Win32_Process'/);
+  assert.match(script, /ConvertTo-Json -InputObject \$sffRows -Compress/);
+  assert.doesNotMatch(script, /Get-CimInstance Win32_Process/);
 });
 
 for (const [reason, override] of [
