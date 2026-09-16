@@ -1,5 +1,7 @@
 # 流萤 UI/UX 审查报告
 
+> 注：本记录写于 2026-09-16 提交历史署名规范化改写之前，文中提交哈希已无法在当前仓库中直接解析；相关判定以对应的 GitHub Actions 运行记录为准。改写范围见 [提交历史署名改写](../development/commit-history-rewrite.md)。
+
 - 基线仓库：`D:/rumo_liuying/streamfirefly`
 - 基线提交：`28004968299e2657a68aa6819967dcab1aab0258`
 - 审查模式：只读源码审查 + README/架构报告交叉验证
