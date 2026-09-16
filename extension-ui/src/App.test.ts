@@ -64,6 +64,7 @@ describe("sidebar surface", () => {
     await flushPromises();
 
     expect(wrapper.find(".compact").exists()).toBe(true);
+    expect(wrapper.get(".brand-logo").attributes("src")).toMatch(/^data:image\/png;base64,/);
     expect(wrapper.text()).toContain("快速下载");
     expect(wrapper.text()).toContain("详细解析");
     expect(wrapper.text()).toContain("任务概览");

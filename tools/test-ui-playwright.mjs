@@ -16,6 +16,16 @@ fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ passed: fals
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'streamfirefly-ui-profile-'));
 const server = http.createServer((request, response) => {
   const url = new URL(request.url, 'http://localhost');
+  if (url.pathname === '/workspace.html') {
+    response.setHeader('Content-Type', 'text/html; charset=utf-8');
+    response.end('<!doctype html><html><head><meta charset="UTF-8"><title>Workspace fixture</title></head><body><main>Host page</main><script src="/workspace.js"></script></body></html>');
+    return;
+  }
+  if (url.pathname === '/workspace.js') {
+    response.setHeader('Content-Type', 'application/javascript');
+    response.end(fs.readFileSync(path.join(root, 'extension/dist/workspace.js')));
+    return;
+  }
   const relative = url.pathname === '/' ? '/app.html' : url.pathname;
   const file = path.resolve(root, 'extension/dist', `.${relative}`);
   if (!file.startsWith(path.join(root, 'extension/dist') + path.sep) || !fs.existsSync(file)) { response.writeHead(404); response.end(); return; }
@@ -103,10 +113,49 @@ try {
   await page.getByText('本地助手已断开', { exact: true }).waitFor({ state: 'hidden' });
   assert.equal(await page.locator('.overview-list article').count(), 2);
   assert.equal(assetRequests.some(url => url.endsWith('/assets/hls.js')), false, 'normal sidebar load must not request assets/hls.js');
+
+  const workspacePage = await browser.newPage();
+  const workspaceErrors = [];
+  const workspaceFailedRequests = [];
+  workspacePage.on('pageerror', error => workspaceErrors.push(error.message));
+  workspacePage.on('console', message => { if (message.type() === 'error') workspaceErrors.push(message.text()); });
+  workspacePage.on('requestfailed', request => workspaceFailedRequests.push(request.url()));
+  await workspacePage.route('**/*', route => route.request().url().startsWith(origin) ? route.continue() : route.abort());
+  await workspacePage.addInitScript(() => {
+    const listeners = new Set();
+    const view = { pattern: '', type: 'all', minMb: '', maxMb: '', minDuration: '', maxDuration: '', sortMode: 'detected', collapsed: false, expandedId: '', revision: 0 };
+    const context = { sourceContextId: 'workspace-page', sourceTabId: 2, pageUrl: location.href, pageTitle: '注入工作区夹具', favIconUrl: '', supported: true, paused: false, resourceViewState: view, candidates: [] };
+    const tasks = [{ id: 'image-task', title: '测试图片', state: 'succeeded', progress: 100, source_context_id: 'workspace-page', mime: 'image/jpeg', output: 'C:\\Downloads\\photo.jpg', outputs: [{ kind: 'media', path: 'C:\\Downloads\\photo.jpg', state: 'succeeded' }] }];
+    window.chrome = {
+      storage: { local: { get: async () => ({}), set: async () => {} } },
+      runtime: {
+        onMessage: { addListener: listener => listeners.add(listener), removeListener: listener => listeners.delete(listener) },
+        sendMessage: async message => {
+          if (message.type === 'native.connect') return { ok: true, capabilities: ['hls-selection-v1', 'hls-segment-engine-v1', 'task-queue-v1', 'task-idempotency-v1'] };
+          if (message.type === 'ui.context.get') return { ok: true, context };
+          if (message.type === 'task.list') return { ok: true, tasks };
+          if (message.type === 'workspace.ready' || message.type === 'workspace.close') return { ok: true };
+          return { ok: true };
+        }
+      }
+    };
+  });
+  await workspacePage.goto(`${origin}/workspace.html`);
+  const workspace = workspacePage.locator('#streamfirefly-workspace-host').locator('..');
+  await workspace.getByRole('heading', { name: '流萤', exact: true }).waitFor();
+  const logo = workspace.locator('.brand-logo');
+  assert.match(await logo.getAttribute('src'), /^data:image\/png;base64,/);
+  assert.equal(await logo.evaluate(image => image.complete && image.naturalWidth > 0), true);
+  await workspace.getByRole('button', { name: /下载/ }).click();
+  await workspace.getByText('测试图片', { exact: true }).click();
+  await workspace.getByText('图片', { exact: true }).waitFor();
+  await workspacePage.screenshot({ path: path.join(output, 'injected-workspace-image-task.png') });
+  assert.deepEqual(workspaceErrors, []);
+  assert.deepEqual(workspaceFailedRequests, []);
   assert.deepEqual(errors, []);
   assert.deepEqual(failedRequests, []);
-  fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ passed: true, source, origin, capturedAt: new Date().toISOString(), browser: browser.browser()?.version(), profile: 'fresh isolated profile', evidence: 'built sidebar with mocked extension and native APIs, localhost only', viewport: { width: 430, height: 900 }, errors, failedRequests, assetRequests }, null, 2));
-  console.log('Playwright built-UI fixture passed: duration filters, batch submit, keyboard focus, disconnect feedback; native APIs mocked');
+  fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ passed: true, source, origin, capturedAt: new Date().toISOString(), browser: browser.browser()?.version(), profile: 'fresh isolated profile', evidence: 'built sidebar and injected workspace with mocked extension and native APIs, localhost only', viewport: { width: 430, height: 900 }, errors, failedRequests, assetRequests, workspaceErrors, workspaceFailedRequests }, null, 2));
+  console.log('Playwright built-UI fixture passed: sidebar interactions plus injected workspace icon and image output label; native APIs mocked');
 } finally {
   await browser?.close();
   await new Promise(resolve => server.close(resolve));

@@ -1,6 +1,6 @@
 import { normalizeSortMode } from './platform.js';
 export function createSettings(api) {
-const DEFAULT_SETTINGS = Object.freeze({ detectImages: false, advancedDeepSearch: false, candidateSort: "detected" });
+const DEFAULT_SETTINGS = Object.freeze({ detectImages: false, advancedDeepSearch: false, candidateSort: "detected", proxyMode: "system", proxyUrl: "" });
 let settings = { ...DEFAULT_SETTINGS };
 let settingsReady = loadSettings();
 
@@ -13,6 +13,8 @@ api.storage?.onChanged?.addListener((changes, area) => {
   if (area !== "local") return;
   for (const key of ["detectImages", "advancedDeepSearch"]) if (changes[key]) settings[key] = Boolean(changes[key].newValue);
   if (changes.candidateSort) settings.candidateSort = normalizeSortMode(changes.candidateSort.newValue);
+  if (changes.proxyMode) settings.proxyMode = ["system", "direct", "custom"].includes(changes.proxyMode.newValue) ? changes.proxyMode.newValue : "system";
+  if (changes.proxyUrl) settings.proxyUrl = typeof changes.proxyUrl.newValue === "string" ? changes.proxyUrl.newValue : "";
 });
 
 

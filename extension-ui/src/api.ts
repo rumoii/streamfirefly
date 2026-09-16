@@ -8,11 +8,6 @@ export async function sendMessage<T = any>(message: any): Promise<T> {
   return api.runtime.sendMessage(message);
 }
 
-export function runtimeUrl(path: string, fallback = path): string {
-  if (api?.runtime?.getURL) return api.runtime.getURL(path);
-  return fallback;
-}
-
 export type UiSurface = "sidebar" | "options" | "workspace";
 
 export function surfaceFromUrl(): UiSurface {

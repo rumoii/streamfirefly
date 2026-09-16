@@ -1,4 +1,5 @@
 use crate::hls::KeyOverride;
+use crate::network::NetworkConfig;
 use crate::settings::default_download_threads;
 use serde::Deserialize;
 use serde::Serialize;
@@ -121,4 +122,6 @@ pub(crate) struct Task {
     pub(crate) inline_manifest: Option<InlineManifest>,
     #[serde(skip)]
     pub(crate) hls_plan: Option<HlsPlan>,
+    #[serde(skip)]
+    pub(crate) network: NetworkConfig,
 }

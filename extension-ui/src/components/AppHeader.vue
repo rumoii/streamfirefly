@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import type { UiContext } from "../types";
-import { runtimeUrl } from "../api";
 import logoUrl from "../../../extension/icon48.png?inline";
 
 defineProps<{ context: UiContext | null; loading: boolean; compact?: boolean }>();
@@ -11,7 +10,7 @@ defineEmits<{ refresh: []; toggleSniffing: [] }>();
   <header class="app-header">
     <div class="app-header-inner">
       <div class="brand-block">
-        <img class="brand-logo" :src="runtimeUrl('icon48.png', logoUrl)" alt="流萤">
+        <img class="brand-logo" :src="logoUrl" alt="流萤">
         <div><h1>流萤</h1><p>网页媒体发现与下载</p></div>
       </div>
       <div v-if="context" class="source-chip" :class="{ offline: !context.supported }">

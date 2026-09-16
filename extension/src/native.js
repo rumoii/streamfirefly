@@ -36,7 +36,7 @@ async function nativeInfo() {
   if (native.infoPromise) return native.infoPromise;
   const request = nativeRequestPromise("host.info").then(result => {
     native.capabilities = new Set(result?.ok && Array.isArray(result.capabilities) ? result.capabilities : []);
-    const compatible = result?.ok && result.protocolVersion === 3 && ["hls-segment-engine-v1", "task-queue-v1", "task-idempotency-v1", "integration-program-v1", "capture-stream-v1"].every(capability => native.capabilities.has(capability));
+    const compatible = result?.ok && result.protocolVersion === 3 && ["hls-segment-engine-v1", "task-queue-v1", "task-idempotency-v1", "integration-program-v1", "capture-stream-v1", "network-policy-v1"].every(capability => native.capabilities.has(capability));
     return { ok: Boolean(compatible), error: compatible ? undefined : result?.ok ? "native_host_incompatible" : result?.error || "native_host_disconnected", capabilities: compatible ? [...native.capabilities] : [] };
   });
   native.infoPromise = request;

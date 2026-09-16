@@ -28,7 +28,7 @@ watch(() => store.context?.sourceContextId, (next, previous) => { if (previous &
 function showToast(message: string) { toast.value = message; clearTimeout(toastTimer); toastTimer = window.setTimeout(() => toast.value = "", 3500); }
 function navigate(value: string) { parserCandidate.value = null; route.value = value; }
 async function guard(action: () => Promise<any>, success?: string) { try { await action(); if (success) showToast(success); } catch (reason: any) { showToast(humanError(reason?.message)); } }
-async function resetSettings() { const next = { saveDir: "", downloadThreads: 6, detectImages: false, advancedDeepSearch: false, candidateSort: store.settings.candidateSort }; await guard(() => store.saveSettings(next), "已恢复默认设置"); }
+async function resetSettings() { const next = { saveDir: "", downloadThreads: 6, detectImages: false, advancedDeepSearch: false, candidateSort: store.settings.candidateSort, proxyMode: "system" as const, proxyUrl: "" }; await guard(() => store.saveSettings(next), "已恢复默认设置"); }
 function openParser(candidate: MediaCandidate) { if (["hls", "dash"].includes(candidate.type)) parserCandidate.value = candidate; }
 function sendExternal(candidates: MediaCandidate[]) { const context = store.context; if (context) void guard(() => openDispatch(context.sourceTabId, context.sourceContextId, candidates.map(candidate => candidate.id))); }
 function captureBlob(candidate: MediaCandidate) { const context = store.context; if (context) void guard(() => openCapture(context.sourceTabId, context.sourceContextId, candidate.url)); }

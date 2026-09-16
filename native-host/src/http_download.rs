@@ -33,6 +33,11 @@ pub(crate) fn add_header_args(args: &mut Vec<String>, task: &Task) {
     }
 }
 
+pub(crate) fn add_request_args(args: &mut Vec<String>, task: &Task, url: &str) {
+    crate::network::add_proxy_args(args, &task.network, url);
+    add_header_args(args, task);
+}
+
 pub(crate) fn probe_size(store: &TaskRuntime, task: &Task) -> ProbeInfo {
     let mut command = Command::new("curl");
     let mut args: Vec<String> = [
@@ -49,7 +54,7 @@ pub(crate) fn probe_size(store: &TaskRuntime, task: &Task) -> ProbeInfo {
     .into_iter()
     .map(str::to_string)
     .collect();
-    add_header_args(&mut args, task);
+    add_request_args(&mut args, task, &task.url);
     args.push(task.url.clone());
     command
         .args(args)
@@ -143,7 +148,7 @@ pub(crate) fn start_single_http_download(
         "--output".into(),
         output.clone(),
     ];
-    add_header_args(&mut args, &task);
+    add_request_args(&mut args, &task, &task.url);
     args.push(task.url.clone());
     let child = match Command::new("curl")
         .args(args)
@@ -302,7 +307,7 @@ pub(crate) fn start_parallel_http_download(
             "--output".into(),
             part.to_string_lossy().into(),
         ];
-        add_header_args(&mut args, &task);
+        add_request_args(&mut args, &task, &task.url);
         args.push(task.url.clone());
         match Command::new("curl")
             .args(args)

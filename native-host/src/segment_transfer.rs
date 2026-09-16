@@ -1,4 +1,4 @@
-use crate::http_download::add_header_args;
+use crate::http_download::add_request_args;
 use crate::model::Task;
 use crate::processes::{cancel_requested, register_process, unregister_process};
 use crate::runtime::TaskRuntime;
@@ -69,7 +69,7 @@ pub(crate) fn curl_once(
             format!("{}-{}", range.start, range.start + range.length - 1),
         ]);
     }
-    add_header_args(&mut args, task);
+    add_request_args(&mut args, task, url);
     args.push(url.into());
     let mut child = Command::new("curl")
         .args(args)

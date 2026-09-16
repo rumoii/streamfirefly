@@ -61,7 +61,19 @@ pub(crate) fn run() -> io::Result<()> {
                 }
             }
             "host.info" => {
-                json!({"version":1,"id":id,"ok":true,"protocolVersion":3,"supportedProtocolVersions":[3],"hostVersion":env!("CARGO_PKG_VERSION"),"capabilities":["dash-selection-v1","inline-hls-v1","task-control-v1","task-pause-resume-v1","hls-selection-v1","hls-subtitle-sidecar-v1","task-output-group-v1","hls-segment-engine-v1","hls-checkpoint-v1","hls-aes128-v1","hls-key-override-v1","hls-reauthorize-v1","hls-live-engine-v1","task-queue-v1","task-idempotency-v1", "integration-program-v1", "capture-stream-v1"]})
+                json!({"version":1,"id":id,"ok":true,"protocolVersion":3,"supportedProtocolVersions":[3],"hostVersion":env!("CARGO_PKG_VERSION"),"capabilities":["dash-selection-v1","inline-hls-v1","task-control-v1","task-pause-resume-v1","hls-selection-v1","hls-subtitle-sidecar-v1","task-output-group-v1","hls-segment-engine-v1","hls-checkpoint-v1","hls-aes128-v1","hls-key-override-v1","hls-reauthorize-v1","hls-live-engine-v1","task-queue-v1","task-idempotency-v1", "integration-program-v1", "capture-stream-v1", "network-policy-v1"]})
+            }
+            "network.configure" => {
+                match crate::network::NetworkConfig::from_payload(&message["payload"]) {
+                    Ok(config) => {
+                        *store.network.lock().unwrap() = config.clone();
+                        for task in store.repository.tasks.lock().unwrap().iter_mut() {
+                            task.network = config.clone();
+                        }
+                        json!({"version":1,"id":id,"ok":true})
+                    }
+                    Err(error) => json!({"version":1,"id":id,"ok":false,"error":error}),
+                }
             }
             "task.find" => {
                 if let Some(error) = &store.repository.load_error {
@@ -133,7 +145,7 @@ pub(crate) fn run() -> io::Result<()> {
             _ => json!({"version":1,"id":id,"ok":false,"error":"unsupported_message"}),
         };
         emit(&writer, response);
-        if matches!(message_type, "host.info" | "task.list") {
+        if message_type == "task.list" {
             start_recovery_once(&store, &writer);
         }
     }

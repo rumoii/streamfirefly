@@ -248,6 +248,7 @@ fn unique_output_adds_sequence_for_existing_and_reserved_names() {
             base_url: "https://example.test/".into(),
         }),
         hls_plan: None,
+        network: crate::network::NetworkConfig::default(),
     }];
     assert!(serde_json::to_value(&tasks[0])
         .unwrap()

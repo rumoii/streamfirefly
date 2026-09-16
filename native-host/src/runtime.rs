@@ -1,3 +1,4 @@
+use crate::network::NetworkConfig;
 use crate::queue::QueueState;
 use crate::repository::load_repository;
 use crate::repository::TaskRepository;
@@ -19,6 +20,7 @@ pub(crate) struct TaskRuntime {
     pub(crate) recovery_started: Arc<AtomicBool>,
     pub(crate) scheduler: Arc<Mutex<QueueState>>,
     pub(crate) creation: Arc<Mutex<()>>,
+    pub(crate) network: Arc<Mutex<NetworkConfig>>,
 }
 
 pub(crate) fn load_store(path: &Path) -> TaskRuntime {
@@ -32,5 +34,6 @@ pub(crate) fn load_store(path: &Path) -> TaskRuntime {
         recovery_started: Arc::new(AtomicBool::new(false)),
         scheduler: Arc::new(Mutex::new(QueueState::default())),
         creation: Arc::new(Mutex::new(())),
+        network: Arc::new(Mutex::new(NetworkConfig::default())),
     }
 }

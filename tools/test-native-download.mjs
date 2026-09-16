@@ -57,6 +57,21 @@ const server = http.createServer((request, response) => {
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const port = server.address().port;
+let proxyRequests = 0;
+const proxy = http.createServer((request, response) => {
+  let target;
+  try { target = new URL(request.url); }
+  catch { response.writeHead(400); response.end(); return; }
+  proxyRequests += 1;
+  const forwarded = http.request(target, { method: request.method, headers: request.headers }, upstream => {
+    response.writeHead(upstream.statusCode || 502, upstream.headers);
+    upstream.pipe(response);
+  });
+  forwarded.on('error', error => { if (!response.headersSent) response.writeHead(502); response.end(error.message); });
+  request.pipe(forwarded);
+});
+await new Promise(resolve => proxy.listen(0, '127.0.0.1', resolve));
+const proxyPort = proxy.address().port;
 const child = spawn(exe, [], { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true, env: { ...process.env, LOCALAPPDATA: temp } });
 let sequence = 0;
 let buffer = Buffer.alloc(0);
@@ -102,6 +117,17 @@ async function assertTaskAbsent(taskId) {
 const customDir = path.join(temp, 'custom-downloads');
 const validated = await send('path.validate', { path: customDir });
 if (!validated.ok || validated.path !== customDir) throw new Error(`Path validation failed: ${JSON.stringify(validated)}`);
+const configuredProxy = await send('network.configure', { mode: 'custom', proxyUrl: `http://127.0.0.1:${proxyPort}` });
+if (!configuredProxy.ok) throw new Error(`Custom proxy configuration failed: ${JSON.stringify(configuredProxy)}`);
+const proxied = await send('task.create', { url: `http://127.0.0.1:${port}/unknown.mp4`, title: 'proxy-route', fileName: '代理链路', mime: 'video/mp4', saveDir: customDir, downloadThreads: 1 });
+const proxiedTask = await waitTask(proxied.task.id);
+if (proxiedTask?.state !== 'succeeded' || proxyRequests < 2 || !fs.readFileSync(proxiedTask.output).equals(unknownPayload)) throw new Error(`Custom proxy route was not used: ${JSON.stringify({ proxiedTask, proxyRequests })}`);
+const configuredDirect = await send('network.configure', { mode: 'direct' });
+if (!configuredDirect.ok) throw new Error(`Direct network configuration failed: ${JSON.stringify(configuredDirect)}`);
+const proxyRequestsBeforeDirect = proxyRequests;
+const direct = await send('task.create', { url: `http://127.0.0.1:${port}/unknown.mp4`, title: 'direct-route', fileName: '直连链路', mime: 'video/mp4', saveDir: customDir, downloadThreads: 1 });
+const directTask = await waitTask(direct.task.id);
+if (directTask?.state !== 'succeeded' || proxyRequests !== proxyRequestsBeforeDirect || !fs.readFileSync(directTask.output).equals(unknownPayload)) throw new Error(`Direct route unexpectedly used the proxy: ${JSON.stringify({ directTask, proxyRequests, proxyRequestsBeforeDirect })}`);
 const cancelledDuringProbe = await send('task.create', { url: `http://127.0.0.1:${port}/slow-head.mp4`, title: 'slow-head', fileName: '探测阶段取消', mime: 'video/mp4', saveDir: customDir });
 await slowHeadStarted;
 const cancelledDuringProbeDelete = await send('task.delete', { id: cancelledDuringProbe.task.id, deleteFile: true });
@@ -160,6 +186,7 @@ if (!slowRemoveDelete.ok || fs.existsSync(slowRemove.task.output)) throw new Err
 await assertTaskAbsent(slowRemove.task.id);
 child.stdin.end();
 server.close();
+proxy.close();
 if (task?.state !== 'succeeded') throw new Error(`Download did not succeed: ${JSON.stringify(task)}`);
 if (!fs.existsSync(task.output) || !fs.readFileSync(task.output).equals(payload)) throw new Error('Downloaded output mismatch');
 if (!path.dirname(task.output).endsWith('custom-downloads')) throw new Error(`Unexpected output path: ${task.output}`);

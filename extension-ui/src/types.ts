@@ -75,6 +75,7 @@ export interface DownloadTask {
   segments_completed?: number;
   segments_total?: number;
   output?: string | null;
+  mime?: string | null;
   outputs?: TaskOutput[];
   message?: string | null;
   error?: string | null;

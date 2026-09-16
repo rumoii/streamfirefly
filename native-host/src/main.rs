@@ -14,6 +14,7 @@ mod http_download;
 mod integrations;
 mod media_process;
 mod model;
+mod network;
 mod paths;
 mod persistence;
 mod processes;

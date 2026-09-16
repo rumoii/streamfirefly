@@ -4,7 +4,7 @@ import SettingsView from "./SettingsView.vue";
 import { defaultDiscovery } from "../../../shared/discovery";
 const { send, surface } = vi.hoisted(() => ({ send: vi.fn(), surface: vi.fn(() => "options") }));
 vi.mock("../api", () => ({ sendMessage: send, surfaceFromUrl: surface }));
-const settings = { saveDir: "", downloadThreads: 6, detectImages: false, advancedDeepSearch: false, candidateSort: "detected" as const };
+const settings = { saveDir: "", downloadThreads: 6, detectImages: false, advancedDeepSearch: false, candidateSort: "detected" as const, proxyMode: "system" as const, proxyUrl: "" };
 beforeEach(() => { surface.mockReturnValue("options"); send.mockReset(); send.mockImplementation(async () => ({ ok: true, value: { config: defaultDiscovery(), disabled: {}, error: "" } })); });
 describe("unified settings navigation", () => {
   it("keeps general and rule drafts when navigating between categories", async () => {
@@ -21,6 +21,18 @@ describe("unified settings navigation", () => {
     expect((wrapper.get('[aria-label="规则名称"]').element as HTMLInputElement).value).toBe("未保存规则");
     expect(send.mock.calls.filter(([message]) => message.type === "discovery.get")).toHaveLength(1);
     expect(send.mock.calls.some(([message]) => message.type === "discovery.save")).toBe(false); wrapper.unmount();
+  });
+  it("validates a custom proxy before saving", async () => {
+    const wrapper = mount(SettingsView, { props: { settings } });
+    const fields = wrapper.findAll("select");
+    await fields[0].setValue("custom");
+    const proxy = wrapper.get('input[placeholder="例如 http://127.0.0.1:7897"]');
+    await proxy.setValue("socks5://127.0.0.1:7897");
+    expect(wrapper.text()).toContain("HTTP/HTTPS");
+    expect(wrapper.findAll("button").find(button => button.text() === "验证并保存")!.attributes("disabled")).toBeDefined();
+    await proxy.setValue("http://127.0.0.1:7897");
+    expect(wrapper.findAll("button").find(button => button.text() === "验证并保存")!.attributes("disabled")).toBeUndefined();
+    wrapper.unmount();
   });
   it("does not mount privileged panels in the page workspace", async () => {
     surface.mockReturnValue("workspace"); const wrapper = mount(SettingsView, { props: { settings } });

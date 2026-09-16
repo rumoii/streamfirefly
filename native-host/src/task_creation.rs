@@ -218,6 +218,7 @@ pub(crate) fn create_task(store: &TaskRuntime, payload: &Value) -> Result<Task, 
         source_candidate_id: payload["candidateId"].as_str().map(str::to_string),
         inline_manifest,
         hls_plan,
+        network: store.network.lock().unwrap().clone(),
     };
     if let Some(plan) = &task.hls_plan {
         let checkpoint = new_checkpoint(&task.id, plan).map_err(|_| "hls_checkpoint_invalid")?;

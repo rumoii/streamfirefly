@@ -90,6 +90,15 @@ async function taskPayloadForSender(payload = {}, sender = {}) {
   return { ...payload, sourceTabId: sender.tab.id, sourceContextId: state.sourceContextId };
 }
 
+async function ensureNativeConfigured() {
+  await settings.ready;
+  const info = await nativeInfo();
+  if (!info.ok) return info;
+  const current = settings.get();
+  const configured = await nativeRequestPromise("network.configure", { mode: current.proxyMode, proxyUrl: current.proxyUrl });
+  return configured?.ok ? info : configured;
+}
+
 api.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "capture.transport.push" && capture.isLocal) { capture.push(message.payload, sender).then(value => sendResponse({ ok: true, value }), error => sendResponse({ ok: false, error: error.message })); return true; }
   if (message?.type === "capture.interrupted" && sender.tab) { if (!message.payload?.id || !message.payload?.documentToken) return false; capture.interrupted(sender.tab.id, sender.frameId ?? 0, message.payload.documentToken, message.payload.id, message.payload.error).then(() => sendResponse({ ok: true }), () => sendResponse({ ok: false })); return true; }
@@ -236,10 +245,10 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })().then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
     return true;
   }
-  if (message?.type === "native.connect") { nativeInfo().then(sendResponse); return true; }
+  if (message?.type === "native.connect") { ensureNativeConfigured().then(sendResponse); return true; }
   if (["task.create", "task.prepare"].includes(message?.type)) {
     taskPayloadForSender(message.payload || {}, sender).then(async payload => {
-      const info = await nativeInfo();
+      const info = message.type === "task.create" ? await ensureNativeConfigured() : await nativeInfo();
       if (!info.ok) return info;
       if (payload.dashPlan && !info.capabilities.includes("dash-selection-v1")) return { ok: false, error: "dash_native_upgrade_required" };
       if (payload.hlsPlan && ![2, 3].includes(payload.hlsPlan.version)) return { ok: false, error: "hls_plan_version_unsupported" };
@@ -248,7 +257,8 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
     return true;
   }
-  if (["task.list", "task.find", "task.delete", "task.control", "path.validate"].includes(message?.type)) { nativeRequestPromise(message.type, message.payload || {}).then(sendResponse); return true; }
+  if (["task.list", "task.control"].includes(message?.type)) { ensureNativeConfigured().then(info => info.ok ? nativeRequestPromise(message.type, message.payload || {}) : info).then(sendResponse); return true; }
+  if (["task.find", "task.delete", "path.validate"].includes(message?.type)) { nativeRequestPromise(message.type, message.payload || {}).then(sendResponse); return true; }
   if (message?.type === "preview.headers.apply") { updatePreviewHeaders({ ...message.payload, action: "apply" }, sender).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message })); return true; }
   if (message?.type === "preview.headers.clear") { updatePreviewHeaders({ action: "clear", previewSessionId: message.previewSessionId || message.payload?.previewSessionId }, sender).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message })); return true; }
   return false;
