@@ -1,13 +1,17 @@
-# StreamFirefly 0.10.0-beta.5 测试包指南
+# StreamFirefly 0.10.0-beta.6 测试包指南
 
 此版本仅用于受邀测试，通过私有仓库 `rumoii/streamfirefly-internal-releases` 的 Pre-release 交付，不是稳定版或 Chrome Web Store 正式发布版本。测试人员使用受邀 GitHub 账号下载，不需要源码仓库权限。发布以 Release 页面实际可见为准；请勿转发安装包、Release 链接或测试数据。
 
 StreamFirefly 不绕过 DRM。请只测试自己拥有版权或已获授权的内容。
 
-本批修复 Blob 媒体捕捉、工作区与侧栏切换及外部工具返回路径，并保留实验性 DASH 选轨。发布前须取得最终源码提交的成功短流程；7200 秒捕捉作为独立、手动、非阻断诊断，用于补充长期稳定性证据。是否已发布以私有 Release 页面为准。
+本批增加 Windows 下载代理策略，并修复注入工作区图标与下载输出类型标识。发布前须取得最终源码提交的成功短流程；7200 秒捕捉作为独立、手动、非阻断诊断，用于补充长期稳定性证据。是否已发布以私有 Release 页面为准。
 
 ## 本次更新与升级要求
 
+- 下载代理支持“跟随 Windows 系统代理”“直连”和“自定义代理”。系统模式读取 Windows 固定 HTTP/HTTPS 代理；自定义模式仅接受无账号密码的 HTTP/HTTPS 地址。PAC/WPAD 和代理认证暂不支持。
+- 直连与自定义代理会显式设置 curl 路由，避免被进程环境中的代理变量改变；普通 HTTP 下载和 HLS/DASH 分片使用同一任务网络策略。
+- 注入网页的工作区使用内联 PNG 品牌图标，不再依赖网页相对路径；下载输出按 MIME、文件扩展名和流任务类型显示“图片”“音频”“视频”或“媒体”。
+- Native Host 增加 `network-policy-v1` 能力并由扩展在任务创建、列表恢复和控制前同步配置；任务存储格式不变，但本版扩展与 Native Host 必须成套更新。
 - 高级深搜支持字符生成、数组拼接及现有经典 Worker、iframe 路径的完整 HLS/MPD 清单识别；保持有界扫描，不拼接多次调用的片段。
 - DASH 选轨下载为实验性：支持静态、单 Period、非加密点播，选择一条视频与一条音轨，或仅音频/仅视频，输出 MP4/MKV；不支持直播、多 Period、SegmentBase/SIDX 或 DRM。同一助手进程内暂停/重试保留已完成分片，助手重启后必须重新解析。
 - 资源列表优先显示，深搜点击打开详情后启停，缓存捕捉打开独立控制页；外部工具入口归入资源下载方式和勾选结果，大小/时长条件收进“更多筛选”，收起不清除条件。
@@ -34,10 +38,10 @@ Windows ARM64 包完成构建及包审计不等于 ARM64 设备实机验收；�
 ## 一、下载测试包
 
 1. 登录受邀 GitHub 账号，进入私有仓库 `rumoii/streamfirefly-internal-releases` 的 **Releases**。
-2. 打开标记为 Pre-release 的 `v0.10.0-beta.5`，核对正文中的源码提交、成功短流程和长期诊断边界。维护者可在源码仓库 **Actions → Package internal test bundles** 查阅发布门禁，在 **Diagnose installed capture** 查阅独立诊断；Actions artifact 保留 14 天。
+2. 打开标记为 Pre-release 的 `v0.10.0-beta.6`，核对正文中的源码提交、成功短流程和长期诊断边界。维护者可在源码仓库 **Actions → Package internal test bundles** 查阅发布门禁，在 **Diagnose installed capture** 查阅独立诊断；Actions artifact 保留 14 天。
 3. 在 Release 附件中选择与当前 Windows 架构匹配的压缩包：
-   - Intel 或 AMD Windows 电脑：`StreamFirefly-0.10.0-beta.5-internal-x64.zip`
-   - Windows ARM 电脑：`StreamFirefly-0.10.0-beta.5-internal-arm64.zip`
+   - Intel 或 AMD Windows 电脑：`StreamFirefly-0.10.0-beta.6-internal-x64.zip`
+   - Windows ARM 电脑：`StreamFirefly-0.10.0-beta.6-internal-arm64.zip`
 4. 同时下载该 Release 的 `INTERNAL-SHA256SUMS.txt`，用于核对压缩包完整性。
 
 可以在 Windows 的“设置 → 系统 → 系统信息 → 系统类型”中查看架构。大多数 Intel、AMD 电脑使用 x64；仅骁龙等 Windows ARM 设备使用 ARM64。
@@ -49,7 +53,7 @@ Windows ARM64 包完成构建及包审计不等于 ARM64 设备实机验收；�
 在下载目录打开 PowerShell，计算压缩包的 SHA-256：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 -LiteralPath '.\StreamFirefly-0.10.0-beta.5-internal-x64.zip'
+Get-FileHash -Algorithm SHA256 -LiteralPath '.\StreamFirefly-0.10.0-beta.6-internal-x64.zip'
 ```
 
 ARM64 测试人员将文件名替换为 ARM64 包。输出应与 `INTERNAL-SHA256SUMS.txt` 中对应记录一致；不一致时不要继续安装，请重新下载并反馈。
@@ -57,8 +61,8 @@ ARM64 测试人员将文件名替换为 ARM64 包。输出应与 `INTERNAL-SHA25
 为避免 Windows 保留互联网下载标记，先解除 ZIP 锁定，再完整解压：
 
 ```powershell
-Unblock-File -LiteralPath '.\StreamFirefly-0.10.0-beta.5-internal-x64.zip'
-Expand-Archive -LiteralPath '.\StreamFirefly-0.10.0-beta.5-internal-x64.zip' -DestinationPath '.\StreamFirefly-Test'
+Unblock-File -LiteralPath '.\StreamFirefly-0.10.0-beta.6-internal-x64.zip'
+Expand-Archive -LiteralPath '.\StreamFirefly-0.10.0-beta.6-internal-x64.zip' -DestinationPath '.\StreamFirefly-Test'
 ```
 
 不要直接在压缩包内运行脚本，也不要单独移动 `extension`、`native-host` 或 `tools` 文件夹。
@@ -129,6 +133,8 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 - 对进行中的普通文件任务执行暂停和继续，确认暂停期间文件大小不再变化，继续后能够完成；对失败或取消任务验证重试；
 
+- 在设置中分别选择“跟随 Windows 系统代理”“直连”和“自定义代理”，确认保存后新建任务按所选策略下载；自定义地址只接受 HTTP/HTTPS，带账号密码、路径、查询参数或其他协议时应阻止保存；
+- 系统代理模式只验证当前 Windows 固定代理。PAC/WPAD、代理账号密码及真实企业代理环境不在本批自动验收范围内；
 - 使用默认目录下载普通视频、音频或图片，确认最终文件可正常打开；
 - 修改默认保存目录后重新下载，确认文件进入所选目录；
 - 下载前自定义文件名，确认非法字符提示和最终文件名符合预期；
@@ -173,7 +179,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 ### 源码里的规则、外部工具和捕捉入口
 
-这些入口由 0.10.0-beta.5 测试包提供，旧版 0.9.1 内测包不会自动获得。扩展和助手必须成套更新，并通过本地程序调用和缓存捕捉能力握手，不支持新旧组件混用。安装态短链路结果以对应 CI 运行和证据为准；真实下载工具、真实网站捕捉、长时压力及 ARM64 实机仍待验收。捕捉只保存开启后的媒体数据，异常停止会保留片段，不自动删除已有下载。
+这些入口由 0.10.0-beta.6 测试包提供，旧版 0.9.1 内测包不会自动获得。扩展和助手必须成套更新，并通过本地程序调用、网络策略和缓存捕捉能力握手，不支持新旧组件混用。安装态短链路结果以对应 CI 运行和证据为准；真实下载工具、真实网站捕捉、长时压力及 ARM64 实机仍待验收。捕捉只保存开启后的媒体数据，异常停止会保留片段，不自动删除已有下载。
 
 ### 扩展提示 Native Host 不可用
 

@@ -6,7 +6,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = relative => fs.readFileSync(path.join(root, relative), 'utf8').replaceAll('\r\n', '\n');
 const requireText = (text, expected, label) => { if (!text.includes(expected)) throw new Error(`${label} is missing: ${expected}`); };
 
-const bundleVersion = '0.10.0-beta.5';
+const bundleVersion = '0.10.0-beta.6';
 const releaseTitleVersion = bundleVersion.replace(/-beta\.(\d+)$/, ' Beta $1');
 const packageScript = read('tools/package-internal-test.ps1');
 const auditScript = read('tools/audit-internal-test.ps1');
@@ -66,7 +66,7 @@ for (const expected of [
   'fetch-depth: 0',
   '49933ea5288caeca8642d1e84afbd3f7d6820020',
   'ea165f8d65b6e75b540449e92b4886f43607fa02',
-  'e3c75fc8bf36041b88d921799f19d44457d17e00',
+  '8d0071bb973b701cfed73062a1bb6e7f6a2c72f1',
   `default: ${bundleVersion}`,
   'rustup target add x86_64-pc-windows-msvc aarch64-pc-windows-msvc',
   '.\\tools\\package-internal-test.ps1 -BundleVersion $env:BUNDLE_VERSION',
