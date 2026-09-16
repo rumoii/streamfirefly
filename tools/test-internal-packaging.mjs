@@ -66,7 +66,7 @@ for (const expected of [
   'fetch-depth: 0',
   '49933ea5288caeca8642d1e84afbd3f7d6820020',
   'ea165f8d65b6e75b540449e92b4886f43607fa02',
-  '6da471c0440a153b291e45f648b9ebbf9a0afbe0',
+  'e3c75fc8bf36041b88d921799f19d44457d17e00',
   `default: ${bundleVersion}`,
   'rustup target add x86_64-pc-windows-msvc aarch64-pc-windows-msvc',
   '.\\tools\\package-internal-test.ps1 -BundleVersion $env:BUNDLE_VERSION',

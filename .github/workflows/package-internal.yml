@@ -34,7 +34,7 @@ jobs:
           if ($env:GITHUB_REF -ne 'refs/heads/main') { throw "Internal packages must be dispatched from main, got $env:GITHUB_REF" }
           $actual = (git rev-parse HEAD).Trim()
           if ($actual -ne $env:EXPECTED_COMMIT) { throw "Checked out $actual, expected $env:EXPECTED_COMMIT" }
-          git merge-base --is-ancestor 6da471c0440a153b291e45f648b9ebbf9a0afbe0 HEAD
+          git merge-base --is-ancestor e3c75fc8bf36041b88d921799f19d44457d17e00 HEAD
           if ($LASTEXITCODE -ne 0) { throw 'The package source does not contain the media false-positive fix' }
           $status = @(git status --porcelain)
           if ($status.Count) { throw "Checkout is dirty: $($status -join '; ')" }
