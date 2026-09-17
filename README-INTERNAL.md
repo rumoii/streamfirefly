@@ -4,7 +4,7 @@
 
 StreamFirefly 不绕过 DRM。请只测试自己拥有版权或已获授权的内容。
 
-本批增加 Windows 下载代理策略，并修复注入工作区图标与下载输出类型标识。发布前须取得最终源码提交的成功短流程；7200 秒捕捉作为独立、手动、非阻断诊断，用于补充长期稳定性证据。是否已发布以私有 Release 页面为准。
+本批增加 Windows 下载代理策略，并修复注入工作区图标与下载输出类型标识。本包由最终源码提交的干净本机构建生成并完成本地包审计；GitHub Actions 因账号存储配额无法上传 Artifact，相关失败记录不代表源码或包校验失败。7200 秒捕捉作为独立、手动、非阻断诊断，用于补充长期稳定性证据。是否已发布以私有 Release 页面为准。
 
 ## 本次更新与升级要求
 
@@ -38,7 +38,7 @@ Windows ARM64 包完成构建及包审计不等于 ARM64 设备实机验收；�
 ## 一、下载测试包
 
 1. 登录受邀 GitHub 账号，进入私有仓库 `rumoii/streamfirefly-internal-releases` 的 **Releases**。
-2. 打开标记为 Pre-release 的 `v0.10.0-beta.6`，核对正文中的源码提交、成功短流程和长期诊断边界。维护者可在源码仓库 **Actions → Package internal test bundles** 查阅发布门禁，在 **Diagnose installed capture** 查阅独立诊断；Actions artifact 保留 14 天。
+2. 打开标记为 Pre-release 的 `v0.10.0-beta.6`，核对正文中的源码提交、本地构建与包审计结果和长期诊断边界。维护者可在源码仓库 **Actions → Package internal test bundles** 查阅源码与安装态门禁；本次运行因 GitHub Actions 存储配额无法上传 Artifact，不能把该运行当作附件来源。
 3. 在 Release 附件中选择与当前 Windows 架构匹配的压缩包：
    - Intel 或 AMD Windows 电脑：`StreamFirefly-0.10.0-beta.6-internal-x64.zip`
    - Windows ARM 电脑：`StreamFirefly-0.10.0-beta.6-internal-arm64.zip`
@@ -46,7 +46,7 @@ Windows ARM64 包完成构建及包审计不等于 ARM64 设备实机验收；�
 
 可以在 Windows 的“设置 → 系统 → 系统信息 → 系统类型”中查看架构。大多数 Intel、AMD 电脑使用 x64；仅骁龙等 Windows ARM 设备使用 ARM64。
 
-> 短流程中的 Chrome 60 秒与 Edge 安装态捕捉属于发布门禁。7200 秒诊断只补充长期稳定性证据，不阻止打包或 Release；没有完整成功结论时，长期稳定性仍待验证。软件界面仍显示 0.10.0，请通过包名和 PACKAGE-INFO.json 区分批次。
+> 本次附件来自最终源码 SHA 的干净本机构建；本机包审计和安装态 Smoke Test 已完成。Chrome 60 秒与 Edge 安装态捕捉属于发布门禁，7200 秒诊断只补充长期稳定性证据，不阻止打包或 Release；没有完整成功结论时，长期稳定性仍待验证。软件界面仍显示 0.10.0，请通过包名和 PACKAGE-INFO.json 区分批次。
 
 ## 二、校验并解压
 
@@ -179,7 +179,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 ### 源码里的规则、外部工具和捕捉入口
 
-这些入口由 0.10.0-beta.6 测试包提供，旧版 0.9.1 内测包不会自动获得。扩展和助手必须成套更新，并通过本地程序调用、网络策略和缓存捕捉能力握手，不支持新旧组件混用。安装态短链路结果以对应 CI 运行和证据为准；真实下载工具、真实网站捕捉、长时压力及 ARM64 实机仍待验收。捕捉只保存开启后的媒体数据，异常停止会保留片段，不自动删除已有下载。
+这些入口由 0.10.0-beta.6 测试包提供，旧版 0.9.1 内测包不会自动获得。扩展和助手必须成套更新，并通过本地程序调用、网络策略和缓存捕捉能力握手，不支持新旧组件混用。本次包的源码行为、双架构构建、包审计和 x64 安装态短链路已在本地完成；GitHub Actions 运行仅作为源码与门禁记录，因存储配额未生成可下载 Artifact。真实下载工具、真实网站捕捉、长时压力及 ARM64 实机仍待验收。捕捉只保存开启后的媒体数据，异常停止会保留片段，不自动删除已有下载。
 
 ### 扩展提示 Native Host 不可用
 
