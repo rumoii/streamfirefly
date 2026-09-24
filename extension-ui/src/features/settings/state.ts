@@ -5,6 +5,7 @@ export interface AppSettings {
   downloadThreads: number;
   detectImages: boolean;
   advancedDeepSearch: boolean;
+  sniffMode: "on_open" | "always";
   candidateSort: "detected" | "size" | "duration";
   proxyMode: "system" | "direct" | "custom";
   proxyUrl: string;
@@ -15,6 +16,7 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
   downloadThreads: 6,
   detectImages: false,
   advancedDeepSearch: false,
+  sniffMode: "on_open",
   candidateSort: "detected",
   proxyMode: "system",
   proxyUrl: ""
@@ -32,7 +34,7 @@ export async function readSettings(storage = extensionApi()?.storage?.local): Pr
   if (!storage) return { ...DEFAULT_SETTINGS };
   const stored = await storage.get(Object.keys(DEFAULT_SETTINGS));
   const candidateSort = ["detected", "size", "duration"].includes(stored.candidateSort) ? stored.candidateSort as AppSettings["candidateSort"] : DEFAULT_SETTINGS.candidateSort;
-  return { ...DEFAULT_SETTINGS, ...stored, candidateSort };
+  return { ...DEFAULT_SETTINGS, ...stored, sniffMode: stored.sniffMode === "always" ? "always" : "on_open", candidateSort };
 }
 
 export function createSettingsState() {
@@ -43,11 +45,11 @@ export function createSettingsState() {
       const error = validateProxyUrl(next.proxyUrl);
       if (error) throw new Error(error);
     }
-    if (next.saveDir.trim()) {
+    if (next.saveDir.trim() && next.saveDir.trim() !== settings.value.saveDir) {
       const result: any = await sendMessage({ type: "path.validate", payload: { path: next.saveDir.trim() } });
       if (!result?.ok) throw new Error(result?.error || "path_not_writable");
     }
-    const normalized: AppSettings = { ...next, saveDir: next.saveDir.trim(), downloadThreads: Math.max(1, Math.min(16, Number(next.downloadThreads) || 6)), candidateSort: ["detected", "size", "duration"].includes(next.candidateSort) ? next.candidateSort : "detected", proxyMode: ["system", "direct", "custom"].includes(next.proxyMode) ? next.proxyMode : "system", proxyUrl: next.proxyUrl.trim().replace(/\/$/, "") };
+    const normalized: AppSettings = { ...next, saveDir: next.saveDir.trim(), downloadThreads: Math.max(1, Math.min(16, Number(next.downloadThreads) || 6)), sniffMode: next.sniffMode === "always" ? "always" : "on_open", candidateSort: ["detected", "size", "duration"].includes(next.candidateSort) ? next.candidateSort : "detected", proxyMode: ["system", "direct", "custom"].includes(next.proxyMode) ? next.proxyMode : "system", proxyUrl: next.proxyUrl.trim().replace(/\/$/, "") };
     await extensionApi().storage.local.set({ ...normalized });
     settings.value = normalized;
   }

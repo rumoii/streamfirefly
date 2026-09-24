@@ -35,7 +35,7 @@ function copyRuntimeFiles(destination) {
 function reporterSource(origin) {
   return `
 (() => {
-  const { loadTabState, queueTab, patchResourceViewState, openWorkspace, unmountWorkspace, settings } = StreamFireflyBackground.runtime;
+  const { loadTabState, queueTab, patchResourceViewState, openWorkspace, unmountWorkspace, settings, sniffing } = StreamFireflyBackground.runtime;
   const testApi = globalThis.browser ?? globalThis.chrome;
   const origin = ${JSON.stringify(origin)};
   let probeResult;
@@ -68,8 +68,22 @@ function reporterSource(origin) {
     currentStage = 'initialize-settings';
     await postEvent('reporter-started');
     await settings.ready;
-    await testApi.storage.local.set({ advancedDeepSearch: true, detectImages: false });
-    await waitFor(() => settings.get().advancedDeepSearch && !settings.get().detectImages, 'settings were not applied');
+    currentStage = 'verify-on-open-default';
+    const onDemandTab = await testApi.tabs.create({ url: origin + '/fixture' });
+    await waitFor(async () => (await testApi.tabs.get(onDemandTab.id)).status === 'complete', 'on-demand fixture did not load');
+    await waitFor(() => probeResult?.tabId === onDemandTab.id ? probeResult : null, 'on-demand content script did not register');
+    if (probeResult.result?.active !== false || (await candidatesFor(onDemandTab.id)).length) throw new Error('default mode sniffed before opening StreamFirefly');
+    const opened = await openWorkspace(await testApi.tabs.get(onDemandTab.id), 'resources');
+    if (!opened.ok) throw new Error('on-demand workspace did not open: ' + opened.error);
+    await waitFor(async () => (await candidatesFor(onDemandTab.id)).some(item => String(item.url).endsWith('/media/direct.mp4')), 'opening StreamFirefly did not scan the current page', 8000);
+    await unmountWorkspace(onDemandTab.id);
+    await waitFor(() => !sniffing.allowed(onDemandTab.id), 'closing StreamFirefly did not stop sniffing', 8000);
+    await testApi.scripting.executeScript({ target: { tabId: onDemandTab.id }, world: 'MAIN', args: [origin], func: async base => { await fetch(base + '/media/after-close.mp4'); } });
+    const afterClose = await candidatesFor(onDemandTab.id);
+    if (!has(afterClose, '/media/direct.mp4') || has(afterClose, '/media/after-close.mp4')) throw new Error('closing StreamFirefly lost existing resources or kept discovering new ones');
+    await testApi.tabs.remove(onDemandTab.id);
+    await testApi.storage.local.set({ advancedDeepSearch: true, detectImages: false, sniffMode: 'always' });
+    await waitFor(() => settings.get().advancedDeepSearch && !settings.get().detectImages && settings.get().sniffMode === 'always', 'settings were not applied');
     currentStage = 'create-fixture-tab';
     const tab = await testApi.tabs.create({ url: origin + '/fixture' });
     currentStage = 'wait-fixture-tab';

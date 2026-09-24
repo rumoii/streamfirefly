@@ -39,4 +39,9 @@ describe("settings loading", () => {
   it("normalizes an unsupported sort value to discovery order", async () => {
     await expect(readSettings({ get: async () => ({ candidateSort: "type" }) } as any)).resolves.toMatchObject({ candidateSort: "detected" });
   });
+  it("uses on-open sniffing for absent or invalid values", async () => {
+    await expect(readSettings({ get: async () => ({}) } as any)).resolves.toMatchObject({ sniffMode: "on_open" });
+    await expect(readSettings({ get: async () => ({ sniffMode: "unknown" }) } as any)).resolves.toMatchObject({ sniffMode: "on_open" });
+    await expect(readSettings({ get: async () => ({ sniffMode: "always" }) } as any)).resolves.toMatchObject({ sniffMode: "always" });
+  });
 });

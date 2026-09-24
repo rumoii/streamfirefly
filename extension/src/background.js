@@ -11,27 +11,34 @@ import { createNative } from './native.js';
 import { createResources } from './resources.js';
 import { createPreview } from './preview.js';
 import { createWorkspace } from './workspace.js';
+import { createSniffing } from './sniffing.js';
 import { supportedPage } from './platform.js';
 const api = globalThis.browser ?? globalThis.chrome;
 const settings = createSettings(api);
+const sniffing = createSniffing(api, settings);
 const evaluation = createEvaluation(api);
 const discovery = createDiscovery(api, settings, evaluation);
 const extraction = createExtraction(api, evaluation);
-const resources = createResources(api, settings, (message, tabId) => workspace.notifyWorkspaceMessage(message, tabId), discovery.detect, extraction.extract);
+const resources = createResources(api, settings, sniffing, (message, tabId) => workspace.notifyWorkspaceMessage(message, tabId), discovery.detect, extraction.extract);
 const { loadTabState, uiContextForTab, resolveUiTab, notifyUiContext, queueTab, rememberRequestContext, parseContentRange, addCandidate, clearTab, resolveRequestTabId, setSniffingPaused, patchResourceViewState, updateCandidateMetadata, removeCandidates, candidateFor, fetchMediaText } = resources;
+sniffing.readPaused(async tabId => (await loadTabState(tabId)).paused);
 const preview = createPreview(api, resources.candidateFor);
 const { updatePreviewHeaders } = preview;
-const workspace = createWorkspace(api, preview.clearPreviewHeadersForTab);
+const workspace = createWorkspace(api, preview.clearPreviewHeadersForTab, sniffing.releaseWorkspace);
 const { openWorkspace, closeWorkspace, unmountWorkspace } = workspace;
 const native = createNative(api, workspace.notifyWorkspaceMessage);
 const { nativeRequestPromise, nativeInfo } = native;
 const integrations = createIntegrations(api, resources, nativeRequestPromise, evaluation.run);
-resources.subscribeCandidates(integrations.autoSend);
+resources.subscribeCandidates((tabId, candidateId) => sniffing.allowed(tabId) ? integrations.autoSend(tabId, candidateId) : undefined);
 const dispatchIntents = createDispatchIntents(api, resources);
 const deepSearch = createDeepSearch(api, settings);
 const capture = createCaptureCoordinator(api, nativeRequestPromise, evaluation, resources);
 const outputTemplates = createOutputTemplates(api, evaluation.run);
 const requestHeadersById = new Map();
+sniffing.onChange((tabId, active) => {
+  if (!active) for (const [requestId, entry] of requestHeadersById) if (entry.tabId === tabId) requestHeadersById.delete(requestId);
+  notifyUiContext(tabId);
+});
 if (api.sidePanel?.setPanelBehavior) {
   api.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch?.(() => {});
 } else if (api.sidebarAction?.open) {
@@ -40,17 +47,20 @@ if (api.sidePanel?.setPanelBehavior) {
 
 const requestHeaderOptions = ["requestHeaders", api.webRequest.OnBeforeSendHeadersOptions?.EXTRA_HEADERS].filter(Boolean);
 api.webRequest.onBeforeSendHeaders.addListener(details => {
+  if (!sniffing.allowed(details.tabId)) return;
   const allowed = new Set(["referer", "user-agent", "cookie", "authorization", "origin"]);
-  requestHeadersById.set(details.requestId, Object.fromEntries((details.requestHeaders ?? []).filter(header => allowed.has(header.name.toLowerCase())).map(header => [header.name.toLowerCase(), header.value ?? ""])));
+  requestHeadersById.set(details.requestId, { tabId: details.tabId, headers: Object.fromEntries((details.requestHeaders ?? []).filter(header => allowed.has(header.name.toLowerCase())).map(header => [header.name.toLowerCase(), header.value ?? ""])) });
 }, { urls: ["http://*/*", "https://*/*"] }, requestHeaderOptions);
 
 api.webRequest.onHeadersReceived.addListener(details => {
-  const headers = Object.fromEntries((details.responseHeaders ?? []).map(header => [header.name.toLowerCase(), header.value ?? ""]));
-  const mime = headers["content-type"]?.split(";", 1)[0] ?? "";
-  const requestHeaders = requestHeadersById.get(details.requestId) || {};
-  const rangeSize = parseContentRange(headers["content-range"]);
-  const contentLength = details.statusCode === 206 ? null : Number(headers["content-length"] ?? 0) || null;
+  if (!sniffing.hasActive() || details.tabId >= 0 && !sniffing.allowed(details.tabId)) { requestHeadersById.delete(details.requestId); return; }
   void resolveRequestTabId(details).then(tabId => {
+    if (!sniffing.allowed(tabId)) return false;
+    const headers = Object.fromEntries((details.responseHeaders ?? []).map(header => [header.name.toLowerCase(), header.value ?? ""]));
+    const mime = headers["content-type"]?.split(";", 1)[0] ?? "";
+    const requestHeaders = requestHeadersById.get(details.requestId)?.headers || {};
+    const rangeSize = parseContentRange(headers["content-range"]);
+    const contentLength = details.statusCode === 206 ? null : Number(headers["content-length"] ?? 0) || null;
     const context = { requestHeaders, referer: requestHeaders.referer || null, contentDisposition: headers["content-disposition"] || null };
     if (String(details.method || "GET").toUpperCase() !== "GET" || !mime || /json|text|javascript|xml|mpegurl|octet-stream/i.test(mime)) rememberRequestContext(tabId, details.url, context);
     return addCandidate(tabId, { url: details.url, mime, size: rangeSize || contentLength, sizeSource: rangeSize ? "content-range" : contentLength ? "content-length" : null, ...context, source: "network", requestId: details.requestId, resourceType: details.type });
@@ -72,6 +82,8 @@ api.webNavigation?.onHistoryStateUpdated?.addListener(details => {
 });
 
 api.tabs.onRemoved.addListener(tabId => {
+  sniffing.forget(tabId);
+  void sniffing.refresh();
   deepSearch.clear(tabId);
   void capture.interrupted(tabId);
   void unmountWorkspace(tabId).then(() => clearTab(tabId, "", true)).then(() => notifyUiContext(tabId));
@@ -80,7 +92,7 @@ api.tabs.onUpdated?.addListener((tabId, changeInfo, tab) => {
   if (!changeInfo.title && !changeInfo.url && !changeInfo.favIconUrl) return;
   notifyUiContext(tabId, tab?.windowId);
 });
-api.tabs.onActivated?.addListener(activeInfo => { notifyUiContext(activeInfo.tabId, activeInfo.windowId); });
+api.tabs.onActivated?.addListener(activeInfo => { void sniffing.refresh(); notifyUiContext(activeInfo.tabId, activeInfo.windowId); });
 
 async function taskPayloadForSender(payload = {}, sender = {}) {
   if (typeof payload.url === "string" && payload.url.startsWith("blob:")) throw new Error("blob_resource_requires_capture");
@@ -237,11 +249,12 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       await settings.ready;
       if (!api.scripting?.executeScript || !Number.isInteger(sender.tab?.id)) return { ok: false, error: "page_probe_unavailable" };
+      if (!sniffing.allowed(sender.tab.id)) return { ok: true, active: false };
       const target = { tabId: sender.tab.id, ...(sender.documentId ? { documentIds: [sender.documentId] } : { frameIds: [sender.frameId ?? 0] }) };
       const advanced = await deepSearch.install(sender, message.documentToken);
       try { await api.scripting.executeScript({ target, world: "MAIN", files: ["page-probe.js", "capture-probe.js"] }); await deepSearch.activate(sender, message.documentToken); }
       catch (error) { await deepSearch.injected(sender, message.documentToken, error.message); throw error; }
-      return { ok: true, advanced };
+      return { ok: true, active: true, advanced };
     })().then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
     return true;
   }
@@ -264,4 +277,4 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
-export const runtime = { ...resources, openWorkspace, unmountWorkspace, settings };
+export const runtime = { ...resources, openWorkspace, unmountWorkspace, settings, sniffing };

@@ -40,6 +40,30 @@ export const useAppStore = defineStore("app", () => {
   let contextSequence = 0;
   let disposed = false;
   let pendingPatches = 0;
+  let sniffingPort: any = null;
+  let reconnectTimer: number | null = null;
+
+  async function connectSniffingPresence() {
+    if (surface.value === "options" || !extensionApi()?.runtime?.connect) return;
+    if (surface.value === "sidebar" && sidebarWindowId == null) sidebarWindowId = await currentWindowId();
+    const connect = () => {
+      if (disposed) return;
+      const port = extensionApi().runtime.connect({ name: "sniffing-ui" });
+      sniffingPort = port;
+      port.onMessage.addListener((message: { ready?: boolean }) => {
+        if (!message.ready || disposed) return;
+        if (surface.value === "workspace") window.dispatchEvent(new Event("streamfirefly-sniffing-ready"));
+        void refresh();
+      });
+      port.onDisconnect.addListener(() => {
+        if (sniffingPort !== port) return;
+        sniffingPort = null;
+        if (!disposed) reconnectTimer = window.setTimeout(connect, 250);
+      });
+      port.postMessage({ surface: surface.value, windowId: sidebarWindowId });
+    };
+    connect();
+  }
 
   const sourceTasks = computed(() => tasks.value.filter(task => task.source_context_id && task.source_context_id === context.value?.sourceContextId));
 
@@ -73,7 +97,7 @@ export const useAppStore = defineStore("app", () => {
     error.value = "";
     try {
       if (!extensionApi()?.runtime?.sendMessage) {
-        context.value = { sourceContextId: "preview-page", sourceTabId: 1, pageUrl: "https://media.example/demo", pageTitle: "示例媒体页面", favIconUrl: "", supported: true, paused: false, resourceViewState: { ...DEFAULT_RESOURCE_VIEW_STATE }, candidates: previewCandidates() };
+        context.value = { sourceContextId: "preview-page", sourceTabId: 1, pageUrl: "https://media.example/demo", pageTitle: "示例媒体页面", favIconUrl: "", supported: true, paused: false, sniffingActive: true, resourceViewState: { ...DEFAULT_RESOURCE_VIEW_STATE }, candidates: previewCandidates() };
         candidates.value = context.value.candidates;
         resourceViewState.value = { ...context.value.resourceViewState };
         tasks.value = previewTasks();
@@ -82,6 +106,7 @@ export const useAppStore = defineStore("app", () => {
       } else {
         await loadSettings();
         if (disposed) return;
+        await connectSniffingPresence();
         const api = extensionApi();
         if (!listening) { api.runtime.onMessage.addListener(onRuntimeMessage); listening = true; }
         if (surface.value !== "options") {
@@ -187,16 +212,21 @@ export const useAppStore = defineStore("app", () => {
     if (message?.type === "ui.resource-state.changed" && message.sourceContextId === context.value?.sourceContextId && message.state?.revision >= resourceViewState.value.revision) resourceViewState.value = message.state;
   }
 
-  onBeforeUnmount(() => {
+  function dispose() {
+    if (disposed) return;
     disposed = true;
     contextSequence++;
     taskState.dispose();
     document.removeEventListener("visibilitychange", onVisibilityChange);
     if (timer != null) { clearTimeout(timer); timer = null; }
+    if (reconnectTimer != null) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    sniffingPort?.disconnect();
+    sniffingPort = null;
     if (listening) { extensionApi()?.runtime?.onMessage?.removeListener?.(onRuntimeMessage); listening = false; }
-  });
+  }
+  onBeforeUnmount(dispose);
 
-  return { surface, context, candidates, tasks, capabilities, connection, connectionError, loading, error, status, settings, resourceViewState, sourceTasks, activeTasks, initialize, refresh, toggleSniffing, openWorkspace, closeWorkspace, removeCandidates, patchResourceView, updateCandidateMetadata, saveSettings, controlTask, deleteTask };
+  return { surface, context, candidates, tasks, capabilities, connection, connectionError, loading, error, status, settings, resourceViewState, sourceTasks, activeTasks, initialize, dispose, refresh, toggleSniffing, openWorkspace, closeWorkspace, removeCandidates, patchResourceView, updateCandidateMetadata, saveSettings, controlTask, deleteTask };
 });
 
 export function cleanSourceTitle(value: string): string {

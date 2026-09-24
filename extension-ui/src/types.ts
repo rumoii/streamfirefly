@@ -46,6 +46,7 @@ export interface UiContext {
   favIconUrl: string;
   supported: boolean;
   paused: boolean;
+  sniffingActive: boolean;
   candidates: MediaCandidate[];
   resourceViewState: ResourceViewState;
 }

@@ -9,7 +9,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const listeners = {};
 const nativeListeners = {};
 const nativePosted = [];
-const localValues = {};
+const localValues = { sniffMode: 'always' };
 const sessionValues = {};
 const createdTabs = [];
 const tabUpdates = [];
@@ -44,7 +44,7 @@ const api = {
   action: { setBadgeText: async () => {}, onClicked: { addListener: listener => { listeners.actionClicked = listener; } } },
   sidePanel: { setPanelBehavior: async value => { sidePanelBehavior = value; }, close: async value => { sidePanelCalls.push({ type: 'close', value: structuredClone(value) }); if (rejectSidePanelClose) throw new Error('close rejected'); }, open: async value => { sidePanelCalls.push({ type: 'open', value: structuredClone(value) }); if (rejectSidePanelOpen) throw new Error('open rejected'); } },
   scripting: { executeScript: async value => { executedScripts.push(structuredClone(value)); if (value.files?.includes('dist/workspace.js')) queueMicrotask(() => listeners.message({ type: 'workspace.ready' }, { tab: { ...tabsById.get(value.target.tabId) } }, () => {})); return []; } },
-  storage: { local: storageArea(localValues, localGetQueries), session: storageArea(sessionValues), onChanged: { addListener: listener => { listeners.storageChanged = listener; } } },
+  storage: { local: storageArea(localValues, localGetQueries), session: storageArea(sessionValues), onChanged: { addListener: listener => { const previous = listeners.storageChanged; listeners.storageChanged = (...args) => { previous?.(...args); listener(...args); }; } } },
   webRequest: {
     OnBeforeSendHeadersOptions: { EXTRA_HEADERS: 'extraHeaders' },
     onBeforeSendHeaders: { addListener: listener => { listeners.beforeHeaders = listener; } },
@@ -61,6 +61,7 @@ const api = {
     getURL: value => `chrome-extension://streamfirefly-test/${value}`,
     sendMessage: async () => {},
     onMessage: { addListener: listener => { listeners.message = listener; } },
+    onConnect: { addListener: listener => { listeners.connect = listener; } },
     connectNative: () => ({
       onMessage: { addListener: listener => { nativeListeners.message = listener; } },
       onDisconnect: { addListener: listener => { nativeListeners.disconnect = listener; } },

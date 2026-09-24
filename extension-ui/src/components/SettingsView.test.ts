@@ -4,7 +4,7 @@ import SettingsView from "./SettingsView.vue";
 import { defaultDiscovery } from "../../../shared/discovery";
 const { send, surface } = vi.hoisted(() => ({ send: vi.fn(), surface: vi.fn(() => "options") }));
 vi.mock("../api", () => ({ sendMessage: send, surfaceFromUrl: surface }));
-const settings = { saveDir: "", downloadThreads: 6, detectImages: false, advancedDeepSearch: false, candidateSort: "detected" as const, proxyMode: "system" as const, proxyUrl: "" };
+const settings = { saveDir: "", downloadThreads: 6, detectImages: false, advancedDeepSearch: false, sniffMode: "on_open" as const, candidateSort: "detected" as const, proxyMode: "system" as const, proxyUrl: "" };
 beforeEach(() => { surface.mockReturnValue("options"); send.mockReset(); send.mockImplementation(async () => ({ ok: true, value: { config: defaultDiscovery(), disabled: {}, error: "" } })); });
 describe("unified settings navigation", () => {
   it("keeps general and rule drafts when navigating between categories", async () => {
@@ -32,6 +32,15 @@ describe("unified settings navigation", () => {
     expect(wrapper.findAll("button").find(button => button.text() === "验证并保存")!.attributes("disabled")).toBeDefined();
     await proxy.setValue("http://127.0.0.1:7897");
     expect(wrapper.findAll("button").find(button => button.text() === "验证并保存")!.attributes("disabled")).toBeUndefined();
+    wrapper.unmount();
+  });
+  it("saves the selected sniffing mode", async () => {
+    const wrapper = mount(SettingsView, { props: { settings } });
+    const mode = wrapper.findAll("select").find(item => item.find('option[value="on_open"]').exists())!;
+    expect((mode.element as HTMLSelectElement).value).toBe("on_open");
+    await mode.setValue("always");
+    await wrapper.findAll("button").find(button => button.text() === "验证并保存")!.trigger("click");
+    expect(wrapper.emitted("save")?.[0]?.[0]).toMatchObject({ sniffMode: "always" });
     wrapper.unmount();
   });
   it("does not mount privileged panels in the page workspace", async () => {

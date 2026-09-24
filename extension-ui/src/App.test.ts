@@ -12,6 +12,7 @@ let currentContext: UiContext = {
   favIconUrl: "",
   supported: true,
   paused: false,
+  sniffingActive: true,
   resourceViewState: { pattern: "", type: "all", minMb: "", maxMb: "", minDuration: "", maxDuration: "", sortMode: "detected", collapsed: false, expandedId: "", revision: 0 },
   candidates: [{ id: "hls-1", url: "https://media.example/master.m3u8", type: "hls", sizeKind: "manifest", pageTitle: "测试 HLS" }]
 };
@@ -90,7 +91,7 @@ describe("sidebar surface", () => {
   });
 
   it("rejects workspace actions on browser-internal pages", async () => {
-    currentContext = { sourceTabId: 9, sourceContextId: "", pageUrl: "about:addons", pageTitle: "扩展管理", favIconUrl: "", supported: false, paused: false, resourceViewState: { pattern: "", type: "all", minMb: "", maxMb: "", minDuration: "", maxDuration: "", sortMode: "detected", collapsed: false, expandedId: "", revision: 0 }, candidates: [] };
+    currentContext = { sourceTabId: 9, sourceContextId: "", pageUrl: "about:addons", pageTitle: "扩展管理", favIconUrl: "", supported: false, paused: false, sniffingActive: false, resourceViewState: { pattern: "", type: "all", minMb: "", maxMb: "", minDuration: "", maxDuration: "", sortMode: "detected", collapsed: false, expandedId: "", revision: 0 }, candidates: [] };
     const wrapper = mount(App, { global: { plugins: [createPinia()] } });
     await flushPromises();
 
@@ -102,7 +103,7 @@ describe("sidebar surface", () => {
   });
 
   it("renders the resource empty state without inventing a session", async () => {
-    currentContext = { sourceTabId: 7, sourceContextId: "context-empty", pageUrl: "https://media.example/empty", pageTitle: "空页面", favIconUrl: "", supported: true, paused: false, resourceViewState: { pattern: "", type: "all", minMb: "", maxMb: "", minDuration: "", maxDuration: "", sortMode: "detected", collapsed: false, expandedId: "", revision: 0 }, candidates: [] };
+    currentContext = { sourceTabId: 7, sourceContextId: "context-empty", pageUrl: "https://media.example/empty", pageTitle: "空页面", favIconUrl: "", supported: true, paused: false, sniffingActive: true, resourceViewState: { pattern: "", type: "all", minMb: "", maxMb: "", minDuration: "", maxDuration: "", sortMode: "detected", collapsed: false, expandedId: "", revision: 0 }, candidates: [] };
     const wrapper = mount(App, { global: { plugins: [createPinia()] } });
     await flushPromises();
     expect(wrapper.text()).toContain("等待发现媒体资源");

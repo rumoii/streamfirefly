@@ -3,8 +3,13 @@
   const documentToken = crypto.randomUUID();
   const seen = new Set();
   const bound = new WeakSet();
+  let active = false;
+  let installing = true;
+  let revision = 0;
+  let pending = [];
   const pagePoster = () => { const value = document.querySelector('meta[property="og:image"], meta[name="twitter:image"]')?.content; if (!value) return null; try { return new URL(value, location.href).href; } catch (_) { return value; } };
   const report = (element, force = false) => {
+    if (!active) return;
     const url = element.currentSrc || element.src;
     if (!url || (!force && seen.has(url))) return;
     seen.add(url);
@@ -25,6 +30,7 @@
     }}).catch?.(() => {});
   };
   const scan = () => document.querySelectorAll("video, audio, source").forEach(element => {
+    if (!active) return;
     report(element);
     const media = element.tagName === "SOURCE" ? element.parentElement : element;
     if (media && !bound.has(media) && (media.tagName === "VIDEO" || media.tagName === "AUDIO")) {
@@ -33,13 +39,16 @@
     }
   });
   window.addEventListener("message", event => {
-    if (event.source === window && event.data?.source === "streamfirefly" && event.data.type === "key") { api.runtime.sendMessage({ type: "deep.key.add", payload: { hex: event.data.hex, source: event.data.foundBy, documentToken } }).catch?.(() => {}); return; }
-    if (event.source !== window || event.data?.source !== "streamfirefly" || event.data.type !== "media") return;
-    api.runtime.sendMessage({ type: "media.add", candidate: event.data.candidate }).catch?.(() => {});
+    if (event.source !== window || event.data?.source !== "streamfirefly") return;
+    const message = event.data.type === "key" ? { type: "deep.key.add", payload: { hex: event.data.hex, source: event.data.foundBy, documentToken } } : event.data.type === "media" ? { type: "media.add", candidate: event.data.candidate } : null;
+    if (!message) return;
+    if (active) api.runtime.sendMessage(message).catch?.(() => {});
+    else if (installing && pending.length < 1000) pending.push(message);
   });
   api.runtime.onMessage?.addListener((message, _sender, respond) => {
     if (message?.type === "probe.identity") { respond({ documentToken }); return false; }
-    if (message?.type === "media.rescan") { seen.clear(); scan(); return { ok: true }; }
+    if (message?.type === "media.sniffing.control") { void setActive(Boolean(message.active)); respond({ ok: true }); return false; }
+    if (message?.type === "media.rescan") { if (active) { seen.clear(); scan(); } return { ok: true }; }
     if (window !== window.top) return false;
     if (message?.type === "workspace.unmount") {
       window.dispatchEvent(new CustomEvent("streamfirefly-workspace-unmount"));
@@ -51,7 +60,26 @@
     }
     return false;
   });
-  api.runtime.sendMessage({ type: "probe.install", documentToken }).catch?.(() => {});
-  new MutationObserver(scan).observe(document.documentElement, { childList: true, subtree: true });
-  scan();
+  const observer = new MutationObserver(scan);
+  function activate() {
+    active = true;
+    installing = false;
+    const buffered = pending;
+    pending = [];
+    for (const message of buffered) api.runtime.sendMessage(message).catch?.(() => {});
+    seen.clear();
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+    scan();
+  }
+  async function setActive(next) {
+    const current = ++revision;
+    if (!next) { active = false; installing = false; pending = []; observer.disconnect(); return; }
+    installing = true;
+    pending = [];
+    const result = await api.runtime.sendMessage({ type: "probe.install", documentToken }).catch(() => null);
+    if (current !== revision) return;
+    if (!result?.ok || !result.active) { installing = false; pending = []; return; }
+    activate();
+  }
+  api.runtime.sendMessage({ type: "probe.install", documentToken }).then(result => { if (revision !== 0) return; if (result?.ok && result.active) activate(); else { installing = false; pending = []; } }).catch(() => { installing = false; pending = []; });
 })();

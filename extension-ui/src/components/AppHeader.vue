@@ -17,7 +17,7 @@ defineEmits<{ refresh: []; toggleSniffing: [] }>();
         <img v-if="context.favIconUrl" :src="context.favIconUrl" alt="">
         <span v-else class="source-fallback">⌁</span>
         <div><strong>{{ context.pageTitle }}</strong><small>{{ context.pageUrl }}</small></div>
-        <span class="source-state"><i></i>{{ context.supported ? context.paused ? '已暂停' : '正在嗅探' : '不支持嗅探' }}</span>
+        <span class="source-state"><i></i>{{ context.supported ? context.paused ? '已暂停' : context.sniffingActive ? '正在嗅探' : '等待打开流萤' : '不支持嗅探' }}</span>
       </div>
       <div class="header-actions">
         <button v-if="context?.supported" class="button subtle" type="button" :aria-pressed="context.paused" @click="$emit('toggleSniffing')">{{ context.paused ? '继续嗅探' : '暂停嗅探' }}</button>

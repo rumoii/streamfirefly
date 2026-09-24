@@ -35,7 +35,8 @@ const proxyError = computed(() => form.proxyMode === "custom" ? validateProxyUrl
           <label class="field compact"><span>下载代理</span><select v-model="form.proxyMode" class="control"><option value="system">跟随 Windows 系统代理</option><option value="direct">直连</option><option value="custom">自定义代理</option></select><small>系统模式读取 Windows 固定代理；PAC/WPAD 请使用自定义代理。</small></label>
           <label v-if="form.proxyMode === 'custom'" class="field"><span>自定义代理地址</span><input v-model="form.proxyUrl" class="control" placeholder="例如 http://127.0.0.1:7897"><small :class="{ 'error-text': proxyError }">{{ proxyError || '支持 HTTP/HTTPS，不保存代理账号密码。' }}</small></label>
         </div>
-        <div class="settings-preferences"><h4>媒体识别</h4><p>修改后刷新来源网页生效。</p><div class="toggle-list">
+        <div class="settings-preferences"><h4>媒体识别</h4><p>嗅探时机保存后立即生效；其他识别偏好修改后刷新来源网页生效。</p><div class="toggle-list">
+          <label class="field"><span>嗅探时机</span><select v-model="form.sniffMode" class="control"><option value="on_open">打开流萤时嗅探（默认）</option><option value="always">始终嗅探</option></select><small>打开侧栏或工作区时仅嗅探当前标签页；关闭后保留已发现的资源。</small></label>
           <label class="toggle-row"><span><strong>识别图片</strong><small>显示 JPG、PNG、GIF 和 WebP 图片资源。</small></span><input v-model="form.detectImages" type="checkbox"><i></i></label>
           <label class="toggle-row"><span><strong>高级深度搜索</strong><small>额外观察页面解码和 Worker；可能影响少数复杂网站。</small></span><input v-model="form.advancedDeepSearch" type="checkbox"><i></i></label>
         </div></div>

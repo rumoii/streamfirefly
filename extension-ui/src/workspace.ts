@@ -32,15 +32,17 @@ if (!existing) {
   }
   document.documentElement.append(host);
 
+  const reportReady = () => { Promise.resolve(api?.runtime?.sendMessage?.({ type: "workspace.ready" })).catch(() => {}); };
+  window.addEventListener("streamfirefly-sniffing-ready", reportReady, { once: true });
   const app = createApp(WorkspaceApp).use(createPinia());
   app.mount(root);
-  Promise.resolve(api?.runtime?.sendMessage?.({ type: "workspace.ready" })).catch(() => {});
   let disposed = false;
   const dispose = () => {
     if (disposed) return;
     disposed = true;
     window.removeEventListener("keydown", onKeyDown, true);
     window.removeEventListener("streamfirefly-workspace-unmount", dispose);
+    window.removeEventListener("streamfirefly-sniffing-ready", reportReady);
     app.unmount();
     host.remove();
     document.documentElement.style.overflow = previousScrollStyle.htmlOverflow;

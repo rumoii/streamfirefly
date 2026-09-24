@@ -1,6 +1,9 @@
 (() => {
-  if (window.__streamFireflyProbeInstalled) return;
+  if (window.__streamFireflyProbeInstalled) { window.__streamFireflyProbeApi?.setActive?.(true); return; }
   window.__streamFireflyProbeInstalled = true;
+  let active = true;
+  let generation = 0;
+  let scriptObserver;
 
   const BODY_LIMIT = 2 * 1024 * 1024;
   const INLINE_MANIFEST_LIMIT = 512 * 1024;
@@ -30,6 +33,7 @@
   };
 
   const emit = (url, mime = "", source = "page-probe", extra = {}) => {
+    if (!active) return;
     const resolved = absoluteUrl(url, extra.baseUrl || location.href);
     if (!resolved) return;
     window.postMessage({ source: "streamfirefly", type: "media", candidate: {
@@ -95,6 +99,7 @@
   };
 
   const scanText = (text, baseUrl = location.href, source = "page-probe-text") => {
+    if (!active) return;
     if (typeof text !== "string" || !text || encoder.encode(text).byteLength > BODY_LIMIT) return;
     const resolvedBase = absoluteUrl(baseUrl) || location.href;
     if (emitInlineManifest(text, resolvedBase, resolvedBase, source) && /<(?:[\w.-]+:)?MPD(?:\s|>)/.test(text)) return;
@@ -115,6 +120,7 @@
   };
 
   const scanValue = (value, baseUrl = location.href, source = "page-probe-value", state = { nodes: 0, seen: new WeakSet() }, depth = 0) => {
+    if (!active) return;
     if (state.nodes++ > 10000 || depth > 12 || value == null) return;
     if (typeof value === "string") { scanText(value, baseUrl, source); return; }
     if (typeof value !== "object" || state.seen.has(value)) return;
@@ -159,13 +165,14 @@
     } catch (_) { return null; }
   };
 
-  const inspectResponse = async (response, requestUrl, method, source) => {
+  const inspectResponse = async (response, requestUrl, method, source, requestGeneration) => {
+    if (!active || requestGeneration !== generation) return;
     const url = response.url || absoluteUrl(requestUrl) || location.href;
     const mime = response.headers?.get("content-type")?.split(";", 1)[0] || "";
     if (mediaExtension.test(url) || /mpegurl|dash\+xml|^(?:video|audio)\//i.test(mime)) emit(url, mime, source);
     if (/^(?:video|audio|image|font)\//i.test(mime)) return;
     const text = await readResponseTextBounded(response.clone());
-    if (text == null) return;
+    if (text == null || !active || requestGeneration !== generation) return;
     const isInlineHls = /^\s*#EXTM3U(?:\s|$)/i.test(text);
     if (isInlineHls) {
       if (method !== "GET") emitInlineManifest(text, url, url, `${source}-body`);
@@ -179,12 +186,14 @@
   const originalFetch = window.fetch;
   if (typeof originalFetch === "function") {
     window.fetch = function (...args) {
+      if (!active) return originalFetch.apply(this, args);
+      const requestGeneration = generation;
       const input = args[0];
       const init = args[1];
       const method = String(init?.method || input?.method || "GET").toUpperCase();
       const requestUrl = typeof input === "string" || input instanceof URL ? String(input) : input?.url;
       return originalFetch.apply(this, args).then(response => {
-        void inspectResponse(response, requestUrl, method, "fetch");
+        if (active && requestGeneration === generation) void inspectResponse(response, requestUrl, method, "fetch", requestGeneration);
         return response;
       });
     };
@@ -197,7 +206,10 @@
     return originalOpen.call(this, method, url, ...rest);
   };
   XMLHttpRequest.prototype.send = function (...args) {
+    if (!active) return originalSend.apply(this, args);
+    const requestGeneration = generation;
     this.addEventListener("load", () => {
+      if (!active || requestGeneration !== generation) return;
       const request = this.__streamFireflyRequest || { method: "GET", url: "" };
       const url = this.responseURL || absoluteUrl(request.url) || location.href;
       const mime = (this.getResponseHeader("content-type") || "").split(";", 1)[0];
@@ -222,8 +234,10 @@
   const originalCreateObjectURL = URL.createObjectURL;
   URL.createObjectURL = function (object) {
     const url = originalCreateObjectURL.call(this, object);
-    if (object instanceof Blob && object.size <= BODY_LIMIT && !/^(?:video|audio|image)\//i.test(object.type || "")) {
+    if (active && object instanceof Blob && object.size <= BODY_LIMIT && !/^(?:video|audio|image)\//i.test(object.type || "")) {
+      const requestGeneration = generation;
       object.text().then(text => {
+        if (!active || requestGeneration !== generation) return;
         if (!emitInlineManifest(text, location.href, url, "blob-manifest")) scanText(text, location.href, "blob-body");
       }).catch(() => {});
     }
@@ -231,6 +245,7 @@
   };
 
   const scanScript = script => {
+    if (!active) return;
     if (!(script instanceof HTMLScriptElement) || script.src) return;
     const text = script.textContent || "";
     if (scannedScripts.get(script) === text) return;
@@ -246,10 +261,18 @@
   };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => scanScripts(document), { once: true });
   else scanScripts(document);
-  new MutationObserver(records => records.forEach(record => {
+  scriptObserver = new MutationObserver(records => records.forEach(record => {
     if (record.type === "characterData") scanScript(record.target.parentElement);
     record.addedNodes.forEach(node => { if (node.nodeType === Node.ELEMENT_NODE) scanScripts(node); else scanScript(node.parentElement); });
-  })).observe(document.documentElement, { childList: true, characterData: true, subtree: true });
+  }));
+  scriptObserver.observe(document.documentElement, { childList: true, characterData: true, subtree: true });
 
-  window.__streamFireflyProbeApi = Object.freeze({ emit, emitInlineManifest, scanText, scanValue, consumeGeneratedManifestBudget });
+  function setActive(next) {
+    if (active === next) return;
+    active = next;
+    generation++;
+    if (next) { scanScripts(document); scriptObserver.observe(document.documentElement, { childList: true, characterData: true, subtree: true }); }
+    else scriptObserver.disconnect();
+  }
+  window.__streamFireflyProbeApi = Object.freeze({ emit, emitInlineManifest, scanText, scanValue, consumeGeneratedManifestBudget, setActive });
 })();

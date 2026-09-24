@@ -25,8 +25,8 @@ async function runDiscoverySuite(origin, cases, manifest, stimulate, mediaOrigin
     
       const settings = StreamFireflyBackground.runtime.settings;
       await settings.ready;
-      await api.storage.local.set({ advancedDeepSearch: true, detectImages: false });
-      await wait(() => settings.get().advancedDeepSearch && !settings.get().detectImages, 'StreamFirefly settings');
+      await api.storage.local.set({ advancedDeepSearch: true, detectImages: false, sniffMode: 'always' });
+      await wait(() => settings.get().advancedDeepSearch && !settings.get().detectImages && settings.get().sniffMode === 'always', 'StreamFirefly settings');
     
     for (const spec of cases) {
       stage = spec.id;

@@ -1,5 +1,5 @@
 import { supportedPage } from './platform.js';
-export function createWorkspace(api, clearPreviewHeadersForTab) {
+export function createWorkspace(api, clearPreviewHeadersForTab, onUnmount) {
 const workspaceTabsByWindow = new Map();
 const pendingReadyByTab = new Map();
 
@@ -13,8 +13,11 @@ async function unmountWorkspace(tabId) {
   const pending = pendingReadyByTab.get(tabId);
   if (pending) { clearTimeout(pending.timer); pendingReadyByTab.delete(tabId); pending.reject(new Error("workspace_injection_failed")); }
   try { await api.tabs.sendMessage(tabId, { type: "workspace.unmount" }); } catch (_) {}
-  await clearPreviewHeadersForTab(tabId);
-  for (const [windowId, ownedTabId] of workspaceTabsByWindow) if (ownedTabId === tabId) workspaceTabsByWindow.delete(windowId);
+  try { await clearPreviewHeadersForTab(tabId); }
+  finally {
+    for (const [windowId, ownedTabId] of workspaceTabsByWindow) if (ownedTabId === tabId) workspaceTabsByWindow.delete(windowId);
+    onUnmount(tabId);
+  }
 }
 
 async function openWorkspace(tab, view = "resources", candidateId = "") {

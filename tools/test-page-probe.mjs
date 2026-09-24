@@ -19,7 +19,7 @@ class TestXhr {
   send() {}
 }
 class TestScript {}
-class TestMutationObserver { observe() {} }
+class TestMutationObserver { observe() {} disconnect() {} }
 class TestWorker {
   constructor(scriptUrl, options) { this.scriptUrl = scriptUrl; this.options = options; this.listeners = {}; }
   addEventListener(type, listener) { this.listeners[type] = listener; }
@@ -76,6 +76,27 @@ if (!emitted) throw new Error('Valid inline HLS manifest was rejected');
 const inline = messages.find(item => item.source === 'blob-test' && item.inlineManifest);
 if (!inline?.inlineManifest.text.includes('URI="https://cdn.example/path/key.bin"') || !inline.inlineManifest.text.includes('https://cdn.example/path/segment-1.ts')) throw new Error(`Inline HLS URLs were not normalized: ${JSON.stringify(inline)}`);
 if (!messages.some(item => item.url === 'https://cdn.example/path/key.bin' && item.segmentKind === 'key')) throw new Error('Extensionless HLS key was not emitted as a segment candidate');
+
+const beforePause = messages.length;
+context.__streamFireflyProbeApi.setActive(false);
+nextFetchResponse = new Response('#EXTM3U\n#EXTINF:2,\npaused.ts\n', { headers: { 'content-type': 'text/plain' } });
+await context.fetch('https://page.example/api/paused', { method: 'POST' });
+context.__streamFireflyProbeApi.scanValue({ url: 'https://cdn.example/paused.mp4' });
+await new Promise(resolve => setImmediate(resolve));
+assert.equal(messages.length, beforePause, 'inactive page probe still analyzed media');
+context.__streamFireflyProbeApi.setActive(true);
+context.__streamFireflyProbeApi.scanValue({ url: 'https://cdn.example/resumed.mp4' });
+assert.ok(messages.some(item => item.url === 'https://cdn.example/resumed.mp4'));
+let releaseResponse;
+nextFetchResponse = new Promise(resolve => { releaseResponse = resolve; });
+const lateFetch = context.fetch('https://page.example/api/late', { method: 'POST' });
+context.__streamFireflyProbeApi.setActive(false);
+context.__streamFireflyProbeApi.setActive(true);
+const beforeLate = messages.length;
+releaseResponse(new Response('#EXTM3U\n#EXTINF:2,\nlate.ts\n', { headers: { 'content-type': 'text/plain' } }));
+await lateFetch;
+await new Promise(resolve => setImmediate(resolve));
+assert.equal(messages.length, beforeLate, 'a response from a previous sniffing session was reported after reopening');
 
 const beforeAdvanced = messages.length;
 vm.runInContext('globalThis.originalJoin = Array.prototype.join; globalThis.originalFromCharCode = String.fromCharCode;', context);

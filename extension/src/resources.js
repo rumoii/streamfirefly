@@ -1,5 +1,5 @@
 import { INLINE_MANIFEST_MAX_BYTES, newId, supportedPage, cleanPageTitle, pageTitleFor, normalizeSortMode } from './platform.js';
-export function createResources(api, settings, notifyWorkspaceMessage, detect, extract) {
+export function createResources(api, settings, sniffing, notifyWorkspaceMessage, detect, extract) {
 const candidateListeners = new Set();
 const STATE_VERSION = 2;
 
@@ -60,7 +60,7 @@ async function uiContextForTab(tab) {
   const pageUrl = tab?.url || "";
   const supported = sourceTabId >= 0 && supportedPage(pageUrl);
   if (!supported) {
-    return { sourceTabId, sourceContextId: "", pageUrl, pageTitle: pageTitleFor(tab), favIconUrl: tab?.favIconUrl || "", supported: false, paused: false, resourceViewState: defaultResourceViewState(), candidates: [] };
+    return { sourceTabId, sourceContextId: "", pageUrl, pageTitle: pageTitleFor(tab), favIconUrl: tab?.favIconUrl || "", supported: false, paused: false, sniffingActive: false, resourceViewState: defaultResourceViewState(), candidates: [] };
   }
   await settings.ready;
   let state = await loadTabState(sourceTabId);
@@ -71,7 +71,7 @@ async function uiContextForTab(tab) {
     await clearTab(sourceTabId, pageUrl);
     state = await loadTabState(sourceTabId);
   }
-  return { sourceTabId, sourceContextId: state.sourceContextId, pageUrl, pageTitle: pageTitleFor(tab), favIconUrl: tab?.favIconUrl || "", supported: true, paused: Boolean(state.paused), resourceViewState: normalizeResourceViewState(state.resourceViewState), candidates: candidatesForUi(state) };
+  return { sourceTabId, sourceContextId: state.sourceContextId, pageUrl, pageTitle: pageTitleFor(tab), favIconUrl: tab?.favIconUrl || "", supported: true, paused: Boolean(state.paused), sniffingActive: !state.paused && sniffing.allowed(sourceTabId), resourceViewState: normalizeResourceViewState(state.resourceViewState), candidates: candidatesForUi(state) };
 }
 
 function candidatesForUi(state) {
@@ -214,16 +214,19 @@ async function addCandidate(tabId, item) {
   if (!Number.isInteger(tabId) || tabId < 0 || !item?.url) return false;
   if (isHeuristicNamespaceCandidate(item)) return false;
   await settings.ready;
+  if (!sniffing.allowed(tabId)) return false;
+  const revision = sniffing.revision(tabId);
   if (item.inlineManifest) {
     const bytes = new TextEncoder().encode(item.inlineManifest.text || "").byteLength;
     if (!["hls", "dash"].includes(item.inlineManifest.format) || !bytes || bytes > INLINE_MANIFEST_MAX_BYTES) return false;
   }
   return queueTab(tabId, async () => {
     const state = await loadTabState(tabId);
-    if (state.paused) return false;
+    if (state.paused || !sniffing.allowed(tabId) || sniffing.revision(tabId) !== revision) return false;
+    const draft = { ...state, candidates: new Map(state.candidates) };
     const canonicalUrl = canonicalize(item.url);
     const id = item.inlineManifest ? await hashInlineManifest(item.inlineManifest) : canonicalUrl;
-    const existing = state.candidates.get(id);
+    const existing = draft.candidates.get(id);
     const context = item.inlineManifest ? requestContextFor(tabId, item) : null;
     const inlineHeaders = context ? Object.fromEntries(Object.entries(context.requestHeaders || {}).filter(([name]) => !["cookie", "authorization"].includes(name.toLowerCase()))) : null;
     const sourceUrl = state.pageUrl || (await api.tabs.get(tabId)).url || "";
@@ -238,8 +241,8 @@ async function addCandidate(tabId, item) {
       const type = detection.kind;
       if (!type) return false;
       const now = Date.now();
-      state.candidates.set(candidateId, { ...candidate, id: candidateId, type, detection, sizeKind: candidate.sizeKind || (type === "hls" || type === "dash" ? "manifest" : "file"), detectedAt: previous?.detectedAt ?? now, lastSeenAt: now });
-      state.lastTouchedAt = now; trimBucket(state, bucketFor(type)); changed.push(candidateId);
+      draft.candidates.set(candidateId, { ...candidate, id: candidateId, type, detection, sizeKind: candidate.sizeKind || (type === "hls" || type === "dash" ? "manifest" : "file"), detectedAt: previous?.detectedAt ?? now, lastSeenAt: now });
+      draft.lastTouchedAt = now; trimBucket(draft, bucketFor(type)); changed.push(candidateId);
       return true;
     }
     await collect(merged, id, existing, existing?.extraction?.kind);
@@ -247,14 +250,16 @@ async function addCandidate(tabId, item) {
       const result = await extract(normalizedItem);
       if (result.url) {
         const extractedId = canonicalize(result.url);
-        if (!state.candidates.has(extractedId)) {
+        if (!draft.candidates.has(extractedId)) {
           await collect({ url: result.url, canonicalUrl: extractedId, pageUrl: sourceUrl, pageTitle: normalizedItem.pageTitle, source: "rule", extraction: { ruleId: result.ruleId, originalUrl: item.url, observed: false, kind: result.kind } }, extractedId, null, result.kind);
         }
       }
     }
-    if (!changed.length) return false;
-    const inlineItems = [...state.candidates.values()].filter(value => value.inlineManifest).sort((a, b) => (b.lastSeenAt || 0) - (a.lastSeenAt || 0));
-    for (const stale of inlineItems.slice(4)) state.candidates.delete(stale.id);
+    if (!changed.length || state.paused || !sniffing.allowed(tabId) || sniffing.revision(tabId) !== revision) return false;
+    const inlineItems = [...draft.candidates.values()].filter(value => value.inlineManifest).sort((a, b) => (b.lastSeenAt || 0) - (a.lastSeenAt || 0));
+    for (const stale of inlineItems.slice(4)) draft.candidates.delete(stale.id);
+    state.candidates = draft.candidates;
+    state.lastTouchedAt = draft.lastTouchedAt;
     schedulePersist(state);
     updateBadge(state);
     for (const candidateId of changed) for (const listener of candidateListeners) Promise.resolve().then(() => listener(tabId, candidateId)).catch(() => {});
@@ -268,7 +273,7 @@ async function clearTab(tabId, pageUrl = "", remove = false) {
     cancelScheduledPersist(tabId);
     for (const key of recentRequestContexts.keys()) if (key.startsWith(`${tabId}|`)) recentRequestContexts.delete(key);
     if (remove) { candidatesByTab.delete(tabId); try { await api.storage.session.remove(stateKey(tabId)); } catch (_) {} }
-    else { const state = emptyState(tabId, pageUrl); candidatesByTab.set(tabId, state); await persistState(state); }
+    else { const state = emptyState(tabId, pageUrl); candidatesByTab.set(tabId, state); await persistState(state); sniffing.setPaused(tabId, false); }
     api.action.setBadgeText({ tabId, text: "" }).catch?.(() => {});
   });
 }
@@ -292,7 +297,9 @@ async function setSniffingPaused(tabId, paused) {
     state.paused = Boolean(paused);
     state.lastTouchedAt = Date.now();
     await persistState(state);
+    sniffing.setPaused(tabId, state.paused);
     updateBadge(state);
+    notifyUiContext(tabId);
     return { ok: true, paused: state.paused };
   });
 }
