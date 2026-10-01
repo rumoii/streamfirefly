@@ -1,0 +1,81 @@
+import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
+import FloatingShell from "./FloatingShell.vue";
+const { storage } = vi.hoisted(() => ({ storage: { get: vi.fn(), set: vi.fn() } }));
+vi.mock("../api", () => ({ extensionApi: () => ({ storage: { local: storage } }) }));
+const props = () => ({ count: 12, paused: false, sniffing: true, loading: false, beforeLeave: vi.fn(() => true) });
+enableAutoUnmount(afterEach);
+beforeEach(() => { storage.get.mockResolvedValue({}); storage.set.mockResolvedValue(undefined); });
+afterEach(() => { document.documentElement.style.overflow = ""; document.body.style.overflow = ""; vi.restoreAllMocks(); });
+
+describe("floating shell transitions", () => {
+  it("locks scrolling only when maximized, restores geometry and cleans up on disposal", async () => {
+    document.documentElement.style.overflow = "auto";
+    document.body.style.overflow = "scroll";
+    const wrapper = mount(FloatingShell, { props: props(), attachTo: document.body });
+    await flushPromises();
+    expect(document.body.style.overflow).toBe("scroll");
+    wrapper.vm.setMode("workspace"); await flushPromises();
+    const geometry = () => { const style = (wrapper.get("section").element as HTMLElement).style; return [style.left, style.top, style.width, style.height]; };
+    const original = geometry();
+    wrapper.vm.setMode("maximized"); await flushPromises();
+    expect(document.documentElement.style.overflow).toBe("hidden");
+    await wrapper.get('[aria-label="还原工作区"]').trigger("click");
+    expect(geometry()).toEqual(original);
+    expect(document.body.style.overflow).toBe("scroll");
+    wrapper.vm.setMode("maximized"); await flushPromises();
+    wrapper.unmount();
+    expect(document.documentElement.style.overflow).toBe("auto");
+    expect(document.body.style.overflow).toBe("scroll");
+  });
+  it("collapses without closing and restores the previous workspace", async () => {
+    const wrapper = mount(FloatingShell, { props: props(), attachTo: document.body });
+    wrapper.vm.setMode("workspace"); await flushPromises();
+    await wrapper.get('[aria-label="收起流萤"]').trigger("click");
+    expect(wrapper.find('[aria-label="恢复流萤面板"]').exists()).toBe(true);
+    expect(wrapper.emitted("close")).toBeUndefined();
+    await wrapper.get('[aria-label="恢复流萤面板"]').trigger("click");
+    expect(wrapper.get("section").attributes("data-display-mode")).toBe("workspace");
+    await wrapper.get('[aria-label="关闭流萤"]').trigger("click");
+    expect(wrapper.emitted("close")).toHaveLength(1);
+    wrapper.unmount();
+  });
+  it("does not intercept page Escape or bypass unsaved changes and modal dialogs", async () => {
+    const options = props();
+    const wrapper = mount(FloatingShell, { props: options, attachTo: document.body });
+    wrapper.vm.setMode("workspace"); await flushPromises();
+    const pageEvent = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    document.body.dispatchEvent(pageEvent);
+    expect(pageEvent.defaultPrevented).toBe(false);
+    options.beforeLeave.mockReturnValue(false);
+    await wrapper.get("section").trigger("keydown", { key: "Escape" });
+    expect(wrapper.vm.mode).toBe("workspace");
+    await wrapper.get('[aria-label="关闭流萤"]').trigger("click");
+    expect(wrapper.emitted("close")).toBeUndefined();
+    const dialog = document.createElement("div"); dialog.setAttribute("aria-modal", "true"); wrapper.get("section").element.append(dialog);
+    wrapper.vm.setMode("collapsed");
+    expect(wrapper.vm.mode).toBe("workspace");
+    wrapper.unmount();
+  });
+  it("loads saved geometry but tolerates inaccessible storage", async () => {
+    storage.get.mockResolvedValue({ floatingUiLayout: { version: 1, panel: { x: 24, y: 36, width: 380, height: 400 }, launcher: { edge: "left", yRatio: .2 } } });
+    const wrapper = mount(FloatingShell, { props: props() }); await flushPromises();
+    expect(wrapper.get("section").attributes("style")).toContain("left: 24px");
+    wrapper.unmount();
+    storage.get.mockRejectedValue(new Error("storage unavailable"));
+    const fallback = mount(FloatingShell, { props: props() }); await flushPromises();
+    expect(fallback.get("section").attributes("style")).toContain("width: 420px");
+    fallback.unmount();
+  });
+  it("keeps dragging usable when a preference write fails", async () => {
+    storage.set.mockRejectedValueOnce(new Error("write denied"));
+    const wrapper = mount(FloatingShell, { props: props(), attachTo: document.body }); await flushPromises();
+    const left = parseFloat((wrapper.get("section").element as HTMLElement).style.left);
+    wrapper.get("header").element.dispatchEvent(new MouseEvent("pointerdown", { clientX: 700, clientY: 30, button: 0, bubbles: true }));
+    window.dispatchEvent(new MouseEvent("pointermove", { clientX: 600, clientY: 60 }));
+    window.dispatchEvent(new MouseEvent("pointerup", { clientX: 600, clientY: 60 }));
+    await flushPromises();
+    expect(parseFloat((wrapper.get("section").element as HTMLElement).style.left)).toBe(left - 100);
+    expect(storage.set).toHaveBeenCalledWith(expect.objectContaining({ floatingUiLayout: expect.objectContaining({ version: 1 }) }));
+    expect(wrapper.emitted("close")).toBeUndefined();
+  });
+});

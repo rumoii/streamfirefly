@@ -66,6 +66,8 @@ describe("resource preview lifecycle", () => {
     wrapper.unmount();
   });
 
+
+
   it("routes Blob video resources only to exact cache capture without preparing a preview", async () => {
     const blob = { ...candidate, id: "blob-video", url: "blob:https://media.example/source", type: "video", mime: "video/unknown", poster: "https://media.example/poster.jpg" };
     const wrapper = mount(ResourcesView, { props: { candidates: [blob], loading: false, viewState: defaultState(blob.id), externalEnabled: true, connected: true } });
@@ -227,6 +229,25 @@ describe("resource preview lifecycle", () => {
     expect(HTMLMediaElement.prototype.pause).toHaveBeenCalled();
     expect(wrapper.text()).toContain("播放预览");
     expect(wrapper.emitted("metadata")?.at(-1)?.[1]).toMatchObject({ poster: "data:image/jpeg;base64,preview", duration: 16, width: 1280, height: 720 });
+    wrapper.unmount();
+  });
+
+  it("stops preview when suspended or compact while retaining resource selection", async () => {
+    const wrapper = mount(ResourcesView, { props: { candidates: [candidate], loading: false, viewState: defaultState() } });
+    await flushPromises();
+    const first = hlsMock.instances.at(-1);
+    expect(first).toBeDefined();
+    await wrapper.get('.resource-select input').setValue(true);
+    await wrapper.setProps({ suspended: true }); await flushPromises();
+    expect(first.destroyed).toBe(true);
+    expect(wrapper.find('video').exists()).toBe(false);
+    await wrapper.setProps({ suspended: false }); await flushPromises();
+    const second = hlsMock.instances.at(-1);
+    expect(second).not.toBe(first);
+    expect((wrapper.get('.resource-select input').element as HTMLInputElement).checked).toBe(true);
+    await wrapper.setProps({ compact: true }); await flushPromises();
+    expect(second.destroyed).toBe(true);
+    expect((wrapper.get('.resource-select input').element as HTMLInputElement).checked).toBe(true);
     wrapper.unmount();
   });
 });

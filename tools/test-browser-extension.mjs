@@ -35,7 +35,7 @@ function copyRuntimeFiles(destination) {
 function reporterSource(origin) {
   return `
 (() => {
-  const { loadTabState, queueTab, patchResourceViewState, openWorkspace, unmountWorkspace, settings, sniffing } = StreamFireflyBackground.runtime;
+  const { loadTabState, queueTab, patchResourceViewState, openWorkspace, unmountWorkspace, handleToolbarClick, settings, sniffing } = StreamFireflyBackground.runtime;
   const testApi = globalThis.browser ?? globalThis.chrome;
   const origin = ${JSON.stringify(origin)};
   let probeResult;
@@ -73,9 +73,14 @@ function reporterSource(origin) {
     await waitFor(async () => (await testApi.tabs.get(onDemandTab.id)).status === 'complete', 'on-demand fixture did not load');
     await waitFor(() => probeResult?.tabId === onDemandTab.id ? probeResult : null, 'on-demand content script did not register');
     if (probeResult.result?.active !== false || (await candidatesFor(onDemandTab.id)).length) throw new Error('default mode sniffed before opening StreamFirefly');
-    const opened = await openWorkspace(await testApi.tabs.get(onDemandTab.id), 'resources');
+    const opened = await handleToolbarClick(await testApi.tabs.get(onDemandTab.id));
     if (!opened.ok) throw new Error('on-demand workspace did not open: ' + opened.error);
     await waitFor(async () => (await candidatesFor(onDemandTab.id)).some(item => String(item.url).endsWith('/media/direct.mp4')), 'opening StreamFirefly did not scan the current page', 8000);
+    const panelMode = (await testApi.scripting.executeScript({ target: { tabId: onDemandTab.id }, func: () => document.getElementById('streamfirefly-workspace-host').shadowRoot.querySelector('.floating-window').dataset.displayMode }))[0].result;
+    if (panelMode !== 'panel') throw new Error('toolbar handler did not open a quick floating panel');
+    await testApi.scripting.executeScript({ target: { tabId: onDemandTab.id }, func: () => document.getElementById('streamfirefly-workspace-host').shadowRoot.querySelector('[aria-label="收起流萤"]').click() });
+    await waitFor(async () => (await testApi.scripting.executeScript({ target: { tabId: onDemandTab.id }, func: () => Boolean(document.getElementById('streamfirefly-workspace-host').shadowRoot.querySelector('.floating-launcher')) }))[0].result, 'collapse did not retain a launcher');
+    if (!sniffing.allowed(onDemandTab.id)) throw new Error('collapse stopped on-open sniffing');
     await unmountWorkspace(onDemandTab.id);
     await waitFor(() => !sniffing.allowed(onDemandTab.id), 'closing StreamFirefly did not stop sniffing', 8000);
     await testApi.scripting.executeScript({ target: { tabId: onDemandTab.id }, world: 'MAIN', args: [origin], func: async base => { await fetch(base + '/media/after-close.mp4'); } });
@@ -205,23 +210,17 @@ function reporterSource(origin) {
     currentStage = 'verify-workspace-layout';
     const workspaceBehavior = (await testApi.scripting.executeScript({ target: { tabId: tab.id }, func: () => {
       const host = document.getElementById('streamfirefly-workspace-host');
-      const shell = host?.shadowRoot?.querySelector('.workspace-shell');
-      const content = host?.shadowRoot?.querySelector('.app-content');
-      const resources = host?.shadowRoot?.querySelector('.expandable-resources');
-      const spacer = document.createElement('div');
-      spacer.style.height = '1200px';
-      content.append(spacer);
-      shell.scrollTop = 420;
-      const contentStyle = getComputedStyle(content);
-      const contentInnerWidth = content.clientWidth - parseFloat(contentStyle.paddingLeft) - parseFloat(contentStyle.paddingRight);
-      const result = { title: document.title, htmlOverflow: document.documentElement.style.overflow, bodyOverflow: document.body.style.overflow, overflowY: getComputedStyle(shell).overflowY, scrollTop: shell.scrollTop, scrollHeight: shell.scrollHeight, clientHeight: shell.clientHeight, viewportWidth: document.documentElement.clientWidth, contentWidth: content.getBoundingClientRect().width, contentInnerWidth, resourcesWidth: resources.getBoundingClientRect().width };
-      spacer.remove();
-      return result;
+      const shell = host?.shadowRoot?.querySelector('.floating-window');
+      const resources = host?.shadowRoot?.querySelector('.resource-scroll');
+      const spacer = document.createElement('div'); spacer.style.height = '1200px'; resources.append(spacer); resources.scrollTop = 420;
+      const bounds = shell.getBoundingClientRect();
+      const result = { title: document.title, htmlOverflow: document.documentElement.style.overflow, bodyOverflow: document.body.style.overflow, scrollTop: resources.scrollTop, scrollHeight: resources.scrollHeight, clientHeight: resources.clientHeight, viewportWidth: document.documentElement.clientWidth, x: bounds.x, width: bounds.width, mode: shell.dataset.displayMode };
+      spacer.remove(); return result;
     } }))[0].result;
-    if (workspaceBehavior.title !== pageBeforeWorkspace.title) throw new Error('workspace changed the source document title: ' + JSON.stringify({ pageBeforeWorkspace, workspaceBehavior }));
-    if (workspaceBehavior.htmlOverflow !== 'hidden' || workspaceBehavior.bodyOverflow !== 'hidden') throw new Error('workspace did not lock the underlying page scroll: ' + JSON.stringify(workspaceBehavior));
-    if (workspaceBehavior.overflowY !== 'auto' || workspaceBehavior.scrollHeight <= workspaceBehavior.clientHeight || workspaceBehavior.scrollTop <= 0) throw new Error('workspace shell was not vertically scrollable: ' + JSON.stringify(workspaceBehavior));
-    if (workspaceBehavior.contentWidth < workspaceBehavior.viewportWidth - 24 || workspaceBehavior.resourcesWidth < workspaceBehavior.contentInnerWidth - 1) throw new Error('workspace resources did not fill the available viewport width: ' + JSON.stringify(workspaceBehavior));
+    if (workspaceBehavior.title !== pageBeforeWorkspace.title) throw new Error('workspace changed the source title');
+    if (workspaceBehavior.htmlOverflow !== pageBeforeWorkspace.htmlOverflow || workspaceBehavior.bodyOverflow !== pageBeforeWorkspace.bodyOverflow) throw new Error('normal workspace changed page scrolling');
+    if (workspaceBehavior.scrollHeight <= workspaceBehavior.clientHeight || workspaceBehavior.scrollTop <= 0) throw new Error('resource list did not scroll: ' + JSON.stringify(workspaceBehavior));
+    if (workspaceBehavior.mode !== 'workspace' || workspaceBehavior.x < 11 || workspaceBehavior.width > workspaceBehavior.viewportWidth - 22) throw new Error('workspace did not retain page margins: ' + JSON.stringify(workspaceBehavior));
     currentStage = 'reopen-workspace';
     const repeatedWorkspace = await openWorkspace(await testApi.tabs.get(tab.id), 'settings');
     if (!repeatedWorkspace.ok) throw new Error('repeated workspace open failed: ' + repeatedWorkspace.error);

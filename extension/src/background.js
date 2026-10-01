@@ -40,10 +40,34 @@ sniffing.onChange((tabId, active) => {
   notifyUiContext(tabId);
 });
 if (api.sidePanel?.setPanelBehavior) {
-  api.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch?.(() => {});
-} else if (api.sidebarAction?.open) {
-  api.action?.onClicked?.addListener(() => { api.sidebarAction.open().catch?.(() => {}); });
+  api.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch?.(() => {});
 }
+const fallbackTabs = new Set();
+const fallbackWindows = new Set();
+api.sidePanel?.onOpened?.addListener(info => { if (Number.isInteger(info.windowId)) fallbackWindows.add(info.windowId); });
+api.sidePanel?.onClosed?.addListener(info => fallbackWindows.delete(info.windowId));
+api.windows?.onRemoved?.addListener(windowId => fallbackWindows.delete(windowId));
+function openFallback(tab) {
+  const operation = api.sidePanel?.open ? api.sidePanel.open({ windowId: tab.windowId }) : api.sidebarAction?.open?.();
+  return Promise.resolve(operation);
+}
+function handleToolbarClick(tab) {
+  if (!Number.isInteger(tab?.id)) return;
+  // Firefox's sidebar APIs require the original toolbar gesture, before any await.
+  if (!supportedPage(tab.url) || fallbackTabs.has(tab.id)) {
+    return openFallback(tab).then(() => { fallbackTabs.delete(tab.id); fallbackWindows.add(tab.windowId); api.action.setBadgeText({ tabId: tab.id, text: "" }); return { ok: true }; }).catch(() => ({ ok: false, error: "workspace_sidebar_open_failed" }));
+  }
+  Promise.resolve(api.sidebarAction?.close?.()).catch(() => {});
+  return openWorkspace(tab, "resources", "", "panel", Boolean(api.sidePanel && fallbackWindows.has(tab.windowId))).then(result => {
+    if (result.ok) { fallbackWindows.delete(tab.windowId); api.action.setBadgeText({ tabId: tab.id, text: "" }); api.action.setTitle?.({ tabId: tab.id, title: "流萤 StreamFirefly" }); return result; }
+    fallbackTabs.add(tab.id);
+    api.action.setBadgeText({ tabId: tab.id, text: "!" });
+    api.action.setTitle?.({ tabId: tab.id, title: "流萤面板无法加载，再次点击打开侧栏恢复入口" });
+    return result;
+  }).catch(() => ({ ok: false, error: "workspace_injection_failed" }));
+}
+api.action?.onClicked?.addListener(handleToolbarClick);
+api.tabs.onRemoved?.addListener(tabId => fallbackTabs.delete(tabId));
 
 const requestHeaderOptions = ["requestHeaders", api.webRequest.OnBeforeSendHeadersOptions?.EXTRA_HEADERS].filter(Boolean);
 api.webRequest.onBeforeSendHeaders.addListener(details => {
@@ -187,7 +211,8 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   if (message?.type === "workspace.open") {
-    resolveUiTab(sender, false, message.windowId).then(tab => openWorkspace(tab, ["resources", "downloads", "settings", "parser"].includes(message.view) ? message.view : "resources", typeof message.candidateId === "string" ? message.candidateId : "")).then(sendResponse).catch(() => sendResponse({ ok: false, error: "workspace_injection_failed" }));
+    if (message.displayMode != null && !["panel", "workspace"].includes(message.displayMode)) { sendResponse({ ok: false, error: "workspace_display_mode_invalid" }); return false; }
+    resolveUiTab(sender, Number.isInteger(sender?.tab?.id), message.windowId).then(tab => openWorkspace(tab, ["resources", "downloads", "settings", "parser"].includes(message.view) ? message.view : "resources", typeof message.candidateId === "string" ? message.candidateId : "", message.displayMode || "workspace", !Number.isInteger(sender?.tab?.id))).then(sendResponse).catch(() => sendResponse({ ok: false, error: "workspace_injection_failed" }));
     return true;
   }
   if (message?.type === "workspace.close") {
@@ -196,8 +221,8 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   if (message?.type === "workspace.ready") {
-    if (Number.isInteger(sender?.tab?.windowId) && Number.isInteger(sender?.tab?.id)) workspace.markReady(sender.tab.windowId, sender.tab.id);
-    sendResponse({ ok: true });
+    const accepted = (sender.frameId == null || sender.frameId === 0) && Number.isInteger(sender?.tab?.windowId) && Number.isInteger(sender?.tab?.id) && workspace.markReady(sender.tab.windowId, sender.tab.id, message.attemptId);
+    sendResponse({ ok: Boolean(accepted) });
     return false;
   }
   if (message?.type === "media.candidates") {
@@ -277,4 +302,4 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
-export const runtime = { ...resources, openWorkspace, unmountWorkspace, settings, sniffing };
+export const runtime = { ...resources, openWorkspace, unmountWorkspace, handleToolbarClick, settings, sniffing };

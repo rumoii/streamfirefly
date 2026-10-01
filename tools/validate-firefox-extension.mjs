@@ -24,7 +24,7 @@ if (manifest.version !== '0.10.0') throw new Error(`Unexpected Firefox extension
 if (manifest.sidebar_action?.default_panel !== 'dist/app.html?surface=sidebar#/resources') throw new Error('Firefox sidebar entry missing');
 if (manifest.options_ui?.page !== 'dist/app.html?surface=options#/settings') throw new Error('Firefox Vue settings entry missing');
 if (/\btabs\.create\s*\(/.test(readBackgroundSource(['background.js', 'workspace.js']))) throw new Error('Firefox toolbar entry must not create an application tab');
-if (!background.includes('api.sidebarAction.open()')) throw new Error('Firefox action is not connected to sidebarAction');
+if (!background.includes('api.sidebarAction?.open?.()')) throw new Error('Firefox native sidebar recovery entry is missing');
 if (!background.includes('Object.keys(DEFAULT_SETTINGS)')) throw new Error('Firefox settings must be loaded with a plain key array');
 if (missing.length) throw new Error(`Firefox package files missing: ${missing.join(', ')}`);
 console.log(`StreamFirefly Firefox extension ${manifest.version} valid (${required.length} runtime files)`);

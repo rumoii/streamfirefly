@@ -55,7 +55,7 @@
       return { ok: true };
     }
     if (message?.type === "workspace.navigate") {
-      window.dispatchEvent(new CustomEvent("streamfirefly-workspace-navigate", { detail: { view: message.view, candidateId: message.candidateId || "" } }));
+      window.dispatchEvent(new CustomEvent("streamfirefly-workspace-navigate", { detail: { view: message.view, candidateId: message.candidateId || "", displayMode: message.displayMode || "workspace", attemptId: message.attemptId } }));
       return { ok: true };
     }
     return false;

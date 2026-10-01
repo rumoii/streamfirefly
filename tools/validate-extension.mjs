@@ -22,8 +22,8 @@ if (manifest.side_panel?.default_path !== 'dist/app.html?surface=sidebar#/resour
 if (manifest.options_ui?.page !== 'dist/app.html?surface=options#/settings') throw new Error('Vue settings entry missing');
 if (/\btabs\.create\s*\(/.test(readBackgroundSource(['background.js', 'workspace.js']))) throw new Error('Toolbar entry must not create an application tab');
 if (/AppSession|app\.session\.|appTabId/.test(background)) throw new Error('Obsolete application session lifecycle is still present');
-if (!background.includes('openPanelOnActionClick: true')) throw new Error('Chrome action is not bound to native side panel behavior');
-if (!background.includes('api.sidePanel.close({ windowId })') || !background.includes('api.sidePanel.open({ windowId: tab.windowId })')) throw new Error('Chrome workspace must exchange visibility with the native side panel');
+if (!background.includes('openPanelOnActionClick: false') || !background.includes('api.action?.onClicked?.addListener')) throw new Error('Toolbar floating panel entry is missing');
+if (!background.includes('api.sidePanel.open({ windowId: tab.windowId })')) throw new Error('Native sidebar recovery entry is missing');
 if (!background.includes('files: ["dist/workspace.js"]')) throw new Error('On-demand workspace injection is missing');
 if (missing.length) throw new Error(`missing files: ${missing.join(', ')}`);
 const appHtml = fs.readFileSync(appHtmlPath, 'utf8');

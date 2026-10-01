@@ -18,6 +18,8 @@ const panels = { rules: RulesPanel, extraction: ExtractionPanel, tools: ToolsPan
 const currentPanel = computed(() => panels[section.value as keyof typeof panels]);
 const categories = [{ id: "general", name: "常规", icon: "⚙" }, ...(trusted ? [{ id: "rules", name: "识别规则", icon: "≡" }, { id: "extraction", name: "URL 提取", icon: "↗" }, { id: "tools", name: "外部工具", icon: "↔" }, { id: "templates", name: "输出模板", icon: "◇" }] : [{ id: "advanced", name: "高级设置", icon: "↗" }])];
 const proxyError = computed(() => form.proxyMode === "custom" ? validateProxyUrl(form.proxyUrl) : "");
+const hasUnsavedChanges = computed(() => JSON.stringify(form) !== JSON.stringify(props.settings));
+defineExpose({ hasUnsavedChanges });
 </script>
 
 <template>
@@ -36,7 +38,7 @@ const proxyError = computed(() => form.proxyMode === "custom" ? validateProxyUrl
           <label v-if="form.proxyMode === 'custom'" class="field"><span>自定义代理地址</span><input v-model="form.proxyUrl" class="control" placeholder="例如 http://127.0.0.1:7897"><small :class="{ 'error-text': proxyError }">{{ proxyError || '支持 HTTP/HTTPS，不保存代理账号密码。' }}</small></label>
         </div>
         <div class="settings-preferences"><h4>媒体识别</h4><p>嗅探时机保存后立即生效；其他识别偏好修改后刷新来源网页生效。</p><div class="toggle-list">
-          <label class="field"><span>嗅探时机</span><select v-model="form.sniffMode" class="control"><option value="on_open">打开流萤时嗅探（默认）</option><option value="always">始终嗅探</option></select><small>打开侧栏或工作区时仅嗅探当前标签页；关闭后保留已发现的资源。</small></label>
+          <label class="field"><span>嗅探时机</span><select v-model="form.sniffMode" class="control"><option value="on_open">打开流萤时嗅探（默认）</option><option value="always">始终嗅探</option></select><small>打开流萤后嗅探当前标签页，收起为小入口后继续嗅探；关闭后保留已发现的资源。</small></label>
           <label class="toggle-row"><span><strong>识别图片</strong><small>显示 JPG、PNG、GIF 和 WebP 图片资源。</small></span><input v-model="form.detectImages" type="checkbox"><i></i></label>
           <label class="toggle-row"><span><strong>高级深度搜索</strong><small>额外观察页面解码和 Worker；可能影响少数复杂网站。</small></span><input v-model="form.advancedDeepSearch" type="checkbox"><i></i></label>
         </div></div>

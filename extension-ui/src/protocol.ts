@@ -17,6 +17,9 @@ export interface DownloadRequest {
 }
 
 export interface CoreRequests {
+  "workspace.open": { type: "workspace.open"; view: string; candidateId?: string; windowId?: number | null; displayMode?: "panel" | "workspace" };
+  "workspace.ready": { type: "workspace.ready"; attemptId: string };
+  "workspace.close": { type: "workspace.close" };
   "ui.context.get": { type: "ui.context.get"; scope: "sender" | "active"; windowId: number | null };
   "ui.resource-state.patch": { type: "ui.resource-state.patch"; scope: "sender" | "active"; tabId: number; windowId: number | null; sourceContextId: string; patch: Partial<Omit<ResourceViewState, "revision">> };
   "native.connect": { type: "native.connect" };
@@ -27,6 +30,9 @@ export interface CoreRequests {
 }
 
 export interface CoreResponses {
+  "workspace.open": { ok: boolean; error?: string; tabId?: number };
+  "workspace.ready": { ok: boolean };
+  "workspace.close": { ok: boolean; error?: string };
   "ui.context.get": { ok: boolean; error?: string; context?: UiContext };
   "ui.resource-state.patch": { ok: boolean; error?: string; state?: ResourceViewState };
   "native.connect": { ok: boolean; error?: string; capabilities?: string[] };

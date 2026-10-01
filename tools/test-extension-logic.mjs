@@ -43,7 +43,7 @@ const storageArea = (values, queries = null) => ({
 const api = {
   action: { setBadgeText: async () => {}, onClicked: { addListener: listener => { listeners.actionClicked = listener; } } },
   sidePanel: { setPanelBehavior: async value => { sidePanelBehavior = value; }, close: async value => { sidePanelCalls.push({ type: 'close', value: structuredClone(value) }); if (rejectSidePanelClose) throw new Error('close rejected'); }, open: async value => { sidePanelCalls.push({ type: 'open', value: structuredClone(value) }); if (rejectSidePanelOpen) throw new Error('open rejected'); } },
-  scripting: { executeScript: async value => { executedScripts.push(structuredClone(value)); if (value.files?.includes('dist/workspace.js')) queueMicrotask(() => listeners.message({ type: 'workspace.ready' }, { tab: { ...tabsById.get(value.target.tabId) } }, () => {})); return []; } },
+  scripting: { executeScript: async value => { executedScripts.push(structuredClone(value)); return []; } },
   storage: { local: storageArea(localValues, localGetQueries), session: storageArea(sessionValues), onChanged: { addListener: listener => { const previous = listeners.storageChanged; listeners.storageChanged = (...args) => { previous?.(...args); listener(...args); }; } } },
   webRequest: {
     OnBeforeSendHeadersOptions: { EXTRA_HEADERS: 'extraHeaders' },
@@ -85,7 +85,7 @@ const api = {
       Object.assign(tab, properties); tabUpdates.push({ id, properties: { ...properties } }); return { ...tab };
     },
     remove: async id => { tabsById.delete(id); },
-    sendMessage: async (id, message) => { tabMessages.push({ id, message: structuredClone(message) }); return { ok: true }; },
+    sendMessage: async (id, message) => { tabMessages.push({ id, message: structuredClone(message) }); if (message.type === 'workspace.navigate') queueMicrotask(() => listeners.message({ type: 'workspace.ready', attemptId: message.attemptId }, { tab: { ...tabsById.get(id) }, frameId: 0 }, () => {})); return { ok: true }; },
     onRemoved: { addListener: listener => { listeners.removed = listener; } },
     onUpdated: { addListener: listener => { listeners.updated = listener; } },
     onActivated: { addListener: listener => { listeners.activated = listener; } }
@@ -197,8 +197,8 @@ candidates = await send({ type: 'media.candidates', tabId: 7 });
 if (candidates.length !== 1000 || candidates.some(item => item.url.endsWith('segment-0.m4s')) || !candidates.some(item => item.url.endsWith('segment-1004.m4s'))) throw new Error('Segment bucket cap did not retain the newest 1000 candidates');
 
 await flush();
-if (JSON.stringify(sidePanelBehavior) !== JSON.stringify({ openPanelOnActionClick: true })) throw new Error(`Chrome action was not bound to the native side panel: ${JSON.stringify(sidePanelBehavior)}`);
-if (listeners.actionClicked) throw new Error('Chrome action retained a custom click handler instead of native side panel behavior');
+if (JSON.stringify(sidePanelBehavior) !== JSON.stringify({ openPanelOnActionClick: false })) throw new Error(`Chrome action was not bound to the native side panel: ${JSON.stringify(sidePanelBehavior)}`);
+if (!listeners.actionClicked) throw new Error('Toolbar handler must open a floating panel');
 if (!Array.isArray(localGetQueries[0]) || localGetQueries[0].some(value => typeof value !== 'string')) throw new Error(`Settings were not loaded with a plain key array: ${JSON.stringify(localGetQueries[0])}`);
 
 let activeView = await send({ type: 'ui.context.get', scope: 'active' });
@@ -248,15 +248,13 @@ if (staleTask.ok || staleTask.error !== 'resource_view_context_stale' || nativeP
 await send({ type: 'task.create', payload: { url: 'https://video.example/file.mp4', sourceTabId: 7, sourceContextId: senderView.context.sourceContextId } }, { tab: { ...tabsById.get(8) } });
 const workspaceTask = nativePosted.at(-1)?.payload;
 if (workspaceTask?.sourceTabId !== 8 || workspaceTask?.sourceContextId !== senderView.context.sourceContextId) throw new Error(`Workspace task escaped its sender context: ${JSON.stringify(workspaceTask)}`);
-const unmountsBeforeRejectedClose = tabMessages.filter(entry => entry.id === 8 && entry.message.type === 'workspace.unmount').length;
+const opensBeforeClose = sidePanelCalls.filter(call => call.type === 'open').length;
 rejectSidePanelOpen = true;
-const rejectedClose = await send({ type: 'workspace.close' }, { tab: { ...tabsById.get(8) } });
-rejectSidePanelOpen = false;
-if (rejectedClose.ok || rejectedClose.error !== 'workspace_sidebar_open_failed' || tabMessages.filter(entry => entry.id === 8 && entry.message.type === 'workspace.unmount').length !== unmountsBeforeRejectedClose) throw new Error(`Workspace disappeared when the Chromium side panel could not reopen: ${JSON.stringify(rejectedClose)}`);
 const firstClose = await send({ type: 'workspace.close' }, { tab: { ...tabsById.get(8) } });
 const secondClose = await send({ type: 'workspace.close' }, { tab: { ...tabsById.get(8) } });
-if (!firstClose.ok || !secondClose.ok || tabMessages.filter(entry => entry.id === 8 && entry.message.type === 'workspace.unmount').length < 2) throw new Error('Repeated workspace disposal was not idempotent');
-if (sidePanelCalls.filter(call => call.type === 'open' && call.value.windowId === 1).length < 2) throw new Error(`Workspace disposal did not restore the Chromium side panel: ${JSON.stringify(sidePanelCalls)}`);
+rejectSidePanelOpen = false;
+if (!firstClose.ok || !secondClose.ok) throw new Error('Repeated disposal failed');
+if (sidePanelCalls.filter(call => call.type === 'open').length !== opensBeforeClose) throw new Error('Closing the floating UI reopened a native sidebar');
 
 const controlTab = { id: 10, active: true, url: 'chrome-extension://streamfirefly-test/dist/app.html?surface=options&dispatch=test', title: '确认', windowId: 1 };
 tabsById.set(controlTab.id, controlTab);

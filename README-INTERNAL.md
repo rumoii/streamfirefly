@@ -1,5 +1,7 @@
 # StreamFirefly 0.10.0-beta.6 测试包指南
 
+> 当前源码新增了可拖动悬浮面板、非全屏工作区与主动最大化，操作见 [当前界面说明](README.md#悬浮窗口操作)。本文描述 beta.6 测试包；本次源码改造尚未重新发布安装包，下文原生侧栏操作不代表新源码行为。
+
 此版本仅用于受邀测试，通过私有仓库 `rumoii/streamfirefly-internal-releases` 的 Pre-release 交付，不是稳定版或 Chrome Web Store 正式发布版本。测试人员使用受邀 GitHub 账号下载，不需要源码仓库权限。发布以 Release 页面实际可见为准；请勿转发安装包、Release 链接或测试数据。
 
 StreamFirefly 不绕过 DRM。请只测试自己拥有版权或已获授权的内容。
