@@ -1,15 +1,18 @@
-# StreamFirefly 0.10.0-beta.6 测试包指南
+# StreamFirefly 0.10.0-beta.7 测试包指南
 
-> 当前源码新增了可拖动悬浮面板、非全屏工作区与主动最大化，操作见 [当前界面说明](README.md#悬浮窗口操作)。本文描述 beta.6 测试包；本次源码改造尚未重新发布安装包，下文原生侧栏操作不代表新源码行为。
+> 本测试包已包含可拖动悬浮面板、非全屏工作区、主动最大化与可配置媒体嗅探时机，操作见 [当前界面说明](README.md#悬浮窗口操作)。清单中打开侧栏、展开工作区等步骤按悬浮面板操作执行；原生侧栏仅用于浏览器内部页和注入失败时的恢复入口。
 
 此版本仅用于受邀测试，通过私有仓库 `rumoii/streamfirefly-internal-releases` 的 Pre-release 交付，不是稳定版或 Chrome Web Store 正式发布版本。测试人员使用受邀 GitHub 账号下载，不需要源码仓库权限。发布以 Release 页面实际可见为准；请勿转发安装包、Release 链接或测试数据。
 
 StreamFirefly 不绕过 DRM。请只测试自己拥有版权或已获授权的内容。
 
-本批增加 Windows 下载代理策略，并修复注入工作区图标与下载输出类型标识。本包由最终源码提交的干净本机构建生成并完成本地包审计；GitHub Actions 因账号存储配额无法上传 Artifact，相关失败记录不代表源码或包校验失败。7200 秒捕捉作为独立、手动、非阻断诊断，用于补充长期稳定性证据。是否已发布以私有 Release 页面为准。
+本批将网页内界面改造为可拖动悬浮面板与可最大化工作区，并增加媒体嗅探时机配置；同时保留 Beta 6 的 Windows 下载代理策略。本包由最终源码提交的干净本机构建生成并完成本地包审计；安装态 Smoke Test 与浏览器捕捉门禁尚未执行，是否已发布以私有 Release 页面为准。7200 秒捕捉作为独立、手动、非阻断诊断，用于补充长期稳定性证据。
 
 ## 本次更新与升级要求
 
+- 点击扩展图标在当前网页打开可拖动、可缩放的悬浮面板；“展开工作区”提供完整界面，可主动最大化并还原；每个浏览器窗口最多保留一个网页内界面，布局与位置跨会话记忆。
+- 媒体嗅探时机可配置：默认仅在流萤打开时嗅探，收起成小入口仍嗅探当前来源，可改为始终嗅探；关闭界面按打开模式释放嗅探占用，保留已发现结果与下载任务。
+- 浏览器内部页和受限页面使用原生侧栏显示不可嗅探状态；注入失败通过工具栏提示，再次点击进入侧栏恢复入口。
 - 下载代理支持“跟随 Windows 系统代理”“直连”和“自定义代理”。系统模式读取 Windows 固定 HTTP/HTTPS 代理；自定义模式仅接受无账号密码的 HTTP/HTTPS 地址。PAC/WPAD 和代理认证暂不支持。
 - 直连与自定义代理会显式设置 curl 路由，避免被进程环境中的代理变量改变；普通 HTTP 下载和 HLS/DASH 分片使用同一任务网络策略。
 - 注入网页的工作区使用内联 PNG 品牌图标，不再依赖网页相对路径；下载输出按 MIME、文件扩展名和流任务类型显示“图片”“音频”“视频”或“媒体”。
@@ -40,22 +43,22 @@ Windows ARM64 包完成构建及包审计不等于 ARM64 设备实机验收；�
 ## 一、下载测试包
 
 1. 登录受邀 GitHub 账号，进入私有仓库 `rumoii/streamfirefly-internal-releases` 的 **Releases**。
-2. 打开标记为 Pre-release 的 `v0.10.0-beta.6`，核对正文中的源码提交、本地构建与包审计结果和长期诊断边界。维护者可在源码仓库 **Actions → Package internal test bundles** 查阅源码与安装态门禁；本次运行因 GitHub Actions 存储配额无法上传 Artifact，不能把该运行当作附件来源。
+2. 打开标记为 Pre-release 的 `v0.10.0-beta.7`，核对正文中的源码提交、本地构建与包审计结果和长期诊断边界。维护者可在源码仓库 **Actions → Package internal test bundles** 查阅源码与安装态门禁；本次包由本机构建上传，不能把 Actions 运行当作附件来源。
 3. 在 Release 附件中选择与当前 Windows 架构匹配的压缩包：
-   - Intel 或 AMD Windows 电脑：`StreamFirefly-0.10.0-beta.6-internal-x64.zip`
-   - Windows ARM 电脑：`StreamFirefly-0.10.0-beta.6-internal-arm64.zip`
+   - Intel 或 AMD Windows 电脑：`StreamFirefly-0.10.0-beta.7-internal-x64.zip`
+   - Windows ARM 电脑：`StreamFirefly-0.10.0-beta.7-internal-arm64.zip`
 4. 同时下载该 Release 的 `INTERNAL-SHA256SUMS.txt`，用于核对压缩包完整性。
 
 可以在 Windows 的“设置 → 系统 → 系统信息 → 系统类型”中查看架构。大多数 Intel、AMD 电脑使用 x64；仅骁龙等 Windows ARM 设备使用 ARM64。
 
-> 本次附件来自最终源码 SHA 的干净本机构建；本机包审计和安装态 Smoke Test 已完成。Chrome 60 秒与 Edge 安装态捕捉属于发布门禁，7200 秒诊断只补充长期稳定性证据，不阻止打包或 Release；没有完整成功结论时，长期稳定性仍待验证。软件界面仍显示 0.10.0，请通过包名和 PACKAGE-INFO.json 区分批次。
+> 本次附件来自最终源码 SHA 的干净本机构建；本机包审计已完成，安装态 Smoke Test 与 Chrome/Edge 安装态捕捉门禁尚未执行。7200 秒诊断只补充长期稳定性证据，不阻止打包或 Release；没有完整成功结论时，长期稳定性仍待验证。软件界面仍显示 0.10.0，请通过包名和 PACKAGE-INFO.json 区分批次。
 
 ## 二、校验并解压
 
 在下载目录打开 PowerShell，计算压缩包的 SHA-256：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 -LiteralPath '.\StreamFirefly-0.10.0-beta.6-internal-x64.zip'
+Get-FileHash -Algorithm SHA256 -LiteralPath '.\StreamFirefly-0.10.0-beta.7-internal-x64.zip'
 ```
 
 ARM64 测试人员将文件名替换为 ARM64 包。输出应与 `INTERNAL-SHA256SUMS.txt` 中对应记录一致；不一致时不要继续安装，请重新下载并反馈。
@@ -63,8 +66,8 @@ ARM64 测试人员将文件名替换为 ARM64 包。输出应与 `INTERNAL-SHA25
 为避免 Windows 保留互联网下载标记，先解除 ZIP 锁定，再完整解压：
 
 ```powershell
-Unblock-File -LiteralPath '.\StreamFirefly-0.10.0-beta.6-internal-x64.zip'
-Expand-Archive -LiteralPath '.\StreamFirefly-0.10.0-beta.6-internal-x64.zip' -DestinationPath '.\StreamFirefly-Test'
+Unblock-File -LiteralPath '.\StreamFirefly-0.10.0-beta.7-internal-x64.zip'
+Expand-Archive -LiteralPath '.\StreamFirefly-0.10.0-beta.7-internal-x64.zip' -DestinationPath '.\StreamFirefly-Test'
 ```
 
 不要直接在压缩包内运行脚本，也不要单独移动 `extension`、`native-host` 或 `tools` 文件夹。
@@ -182,7 +185,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 ### 源码里的规则、外部工具和捕捉入口
 
-这些入口由 0.10.0-beta.6 测试包提供，旧版 0.9.1 内测包不会自动获得。扩展和助手必须成套更新，并通过本地程序调用、网络策略和缓存捕捉能力握手，不支持新旧组件混用。本次包的源码行为、双架构构建、包审计和 x64 安装态短链路已在本地完成；GitHub Actions 运行仅作为源码与门禁记录，因存储配额未生成可下载 Artifact。真实下载工具、真实网站捕捉、长时压力及 ARM64 实机仍待验收。捕捉只保存开启后的媒体数据，异常停止会保留片段，不自动删除已有下载。
+这些入口由 0.10.0-beta.7 测试包提供，旧版 0.9.1 内测包不会自动获得。扩展和助手必须成套更新，并通过本地程序调用、网络策略和缓存捕捉能力握手，不支持新旧组件混用。本次包的源码行为、双架构构建和包审计已在本地完成；x64 安装态短链路尚未执行。真实下载工具、真实网站捕捉、长时压力及 ARM64 实机仍待验收。捕捉只保存开启后的媒体数据，异常停止会保留片段，不自动删除已有下载。
 
 ### 扩展提示 Native Host 不可用
 
