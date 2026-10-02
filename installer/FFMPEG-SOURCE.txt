@@ -1,11 +1,11 @@
-StreamFirefly bundles the FFmpeg n8.1.2-46-g139afe709a GPL build for
+StreamFirefly bundles the FFmpeg n8.1.3-14-g330caae0c1 GPL build for
 Windows x64 or ARM64.
 
 Verified binary release:
-https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-08-26-13-06
+https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-10-01-13-06
 
 Exact FFmpeg source revision:
-https://github.com/FFmpeg/FFmpeg/tree/139afe709a
+https://github.com/FFmpeg/FFmpeg/tree/330caae0c1
 
 FFmpeg build scripts and provenance:
 https://github.com/BtbN/FFmpeg-Builds
