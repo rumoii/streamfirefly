@@ -386,7 +386,7 @@ onBeforeUnmount(() => { void disposePreview(); });
               <SfMenu :items="rowMenu(item)" :label="`更多操作：${resourceName(item)}`" @select="onRowMenu(item, $event)" />
             </span>
           </article>
-          <div v-if="!loading && !visible.length" class="empty-state"><span><SfIcon :name="resourceCandidates.length ? 'search' : 'radar-2'" :size="22" /></span><h3>{{ resourceCandidates.length ? '没有符合筛选条件的资源' : '等待发现媒体资源' }}</h3><p>{{ resourceCandidates.length ? '调整筛选条件后再试。' : '保持来源网页打开并播放视频，流萤会自动收集资源。' }}</p></div>
+          <div v-if="!loading && !visible.length" class="empty-state"><span><SfIcon :name="resourceCandidates.length ? 'search' : 'radar-2'" :size="22" /></span><h3>{{ resourceCandidates.length ? '没有符合筛选条件的资源' : '等待发现媒体资源' }}</h3><p>{{ resourceCandidates.length ? '调整筛选条件后再试。' : '播放视频后流萤会自动收集资源；仍未出现时，可刷新网页后重新打开流萤，或在设置中改为始终嗅探。' }}</p></div>
         </div>
       </div>
       <aside v-if="expanded" class="resource-detail-pane" :aria-label="`资源详情：${resourceName(expanded)}`">

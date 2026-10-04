@@ -406,15 +406,35 @@ async function fetchMediaText(tabId, id, requestedUrl) {
   catch (_) { return { ok: false, error: "media_url_invalid" }; }
   if (!/^https?:$/.test(url.protocol)) return { ok: false, error: "media_url_unsupported" };
   const headers = new Headers();
+  const pageHeaders = {};
   for (const [name, value] of Object.entries(owner.requestHeaders || {})) {
-    if (["authorization", "origin", "referer"].includes(name.toLowerCase()) && typeof value === "string" && value) headers.set(name, value);
+    const key = name.toLowerCase();
+    if (typeof value !== "string" || !value) continue;
+    if (key === "authorization") headers.set(name, value);
+    else if (["origin", "referer"].includes(key)) pageHeaders[key] = value;
   }
-  const response = await fetch(url.href, { headers, credentials: "include", redirect: "follow" });
-  if (!response.ok) return { ok: false, error: "media_fetch_failed", status: response.status };
-  let text;
-  try { text = await readBoundedText(response, 4 * 1024 * 1024); }
-  catch (error) { return { ok: false, error: error.message === "media_manifest_too_large" ? error.message : "media_fetch_failed" }; }
-  return { ok: true, url: response.url || url.href, text };
+  if (!pageHeaders.referer && /^https?:/i.test(owner.referer || owner.pageUrl || "")) pageHeaders.referer = owner.referer || owner.pageUrl;
+  // Fetch drops Referer and Origin as forbidden headers, so a short-lived session rule supplies them.
+  const removeRule = await applyFetchHeaders(url, pageHeaders);
+  try {
+    const response = await fetch(url.href, { headers, credentials: "include", redirect: "follow" });
+    if (!response.ok) return { ok: false, error: "media_fetch_failed", status: response.status };
+    let text;
+    try { text = await readBoundedText(response, 4 * 1024 * 1024); }
+    catch (error) { return { ok: false, error: error.message === "media_manifest_too_large" ? error.message : "media_fetch_failed" }; }
+    return { ok: true, url: response.url || url.href, text };
+  } finally { await removeRule(); }
+}
+
+let nextFetchRuleId = 2146000000;
+async function applyFetchHeaders(url, pageHeaders) {
+  const requestHeaders = Object.entries(pageHeaders).map(([header, value]) => ({ header: header.replace(/^(.)/, match => match.toUpperCase()), operation: "set", value }));
+  if (!requestHeaders.length || !api.declarativeNetRequest?.updateSessionRules) return async () => {};
+  const id = nextFetchRuleId++;
+  try {
+    await api.declarativeNetRequest.updateSessionRules({ addRules: [{ id, priority: 2, action: { type: "modifyHeaders", requestHeaders }, condition: { requestDomains: [url.hostname], resourceTypes: ["xmlhttprequest", "other"], tabIds: [-1] } }] });
+  } catch (_) { return async () => {}; }
+  return async () => { try { await api.declarativeNetRequest.updateSessionRules({ removeRuleIds: [id] }); } catch (_) {} };
 }
 
 async function reevaluate() {

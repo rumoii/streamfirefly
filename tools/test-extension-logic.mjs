@@ -157,6 +157,9 @@ if (video.pageTitle !== '媒体页面 A') throw new Error(`Candidate title prefi
 
 const manifest = await send({ type: 'media.fetchText', tabId: 7, id: video.id, url: 'https://media.example/master.m3u8' });
 if (!manifest.ok || !manifest.text.startsWith('#EXTM3U')) throw new Error(`Bounded manifest fetch failed: ${JSON.stringify(manifest)}`);
+const fetchRule = previewRuleUpdates.find(update => update.addRules?.[0]?.condition?.tabIds?.[0] === -1)?.addRules[0];
+if (!fetchRule || JSON.stringify(fetchRule.condition.requestDomains) !== '["media.example"]' || !fetchRule.action.requestHeaders.some(item => item.header === 'Referer' && item.value === 'https://media.example/page')) throw new Error(`Manifest fetch did not supply the page Referer: ${JSON.stringify(previewRuleUpdates)}`);
+if (!previewRuleUpdates.some(update => update.removeRuleIds?.includes(fetchRule.id))) throw new Error('Manifest fetch header rule was not removed');
 fetchResponse = new Response('too large', { headers: { 'content-length': String(4 * 1024 * 1024 + 1) } });
 const oversizedManifest = await send({ type: 'media.fetchText', tabId: 7, id: video.id, url: 'https://media.example/large.m3u8' });
 if (oversizedManifest.ok || oversizedManifest.error !== 'media_manifest_too_large') throw new Error(`Oversized manifest was not rejected: ${JSON.stringify(oversizedManifest)}`);

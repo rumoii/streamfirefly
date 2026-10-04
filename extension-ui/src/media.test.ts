@@ -64,6 +64,8 @@ test("chooses a compatible output container from codecs", () => {
   expect(chooseHlsContainer("avc1.640028,mp4a.40.2")).toBe("mp4");
   expect(chooseHlsContainer("hvc1.1.6.L120.90,mp4a.40.2")).toBe("mp4");
   expect(chooseHlsContainer("vp09.00.51.08,opus")).toBe("mkv");
+  expect(chooseHlsContainer("mp4a.40.2")).toBe("m4a");
+  expect(chooseHlsContainer("mp4a.40.2,mp4a.40.5")).toBe("m4a");
 });
 
 test("summarizes encryption and validates manual AES-128 input", () => {

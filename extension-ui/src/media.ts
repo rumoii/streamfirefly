@@ -158,8 +158,9 @@ export function defaultAudio(items: HlsTrack[], groupId: string | null): HlsTrac
   return candidates.find(item => item.isDefault) || candidates.find(item => item.autoselect) || candidates[0] || null;
 }
 
-export function chooseHlsContainer(codecs: string | null | undefined): "mp4" | "mkv" {
+export function chooseHlsContainer(codecs: string | null | undefined): "mp4" | "mkv" | "m4a" {
   const normalized = String(codecs || "").toLowerCase().replaceAll(" ", "");
+  if (normalized && normalized.split(",").every(codec => codec.startsWith("mp4a"))) return "m4a";
   return !normalized || /(?:^|,)(?:avc1|avc3|hvc1|hev1|mp4a)\b/.test(normalized) ? "mp4" : "mkv";
 }
 

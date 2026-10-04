@@ -35,7 +35,7 @@ function copyRuntimeFiles(destination) {
 function reporterSource(origin) {
   return `
 (() => {
-  const { loadTabState, queueTab, patchResourceViewState, openWorkspace, unmountWorkspace, handleToolbarClick, settings, sniffing } = StreamFireflyBackground.runtime;
+  const { loadTabState, queueTab, patchResourceViewState, openWorkspace, unmountWorkspace, handleToolbarClick, settings, sniffing, fetchMediaText } = StreamFireflyBackground.runtime;
   const testApi = globalThis.browser ?? globalThis.chrome;
   const origin = ${JSON.stringify(origin)};
   let probeResult;
@@ -87,6 +87,18 @@ function reporterSource(origin) {
     const afterClose = await candidatesFor(onDemandTab.id);
     if (!has(afterClose, '/media/direct.mp4') || has(afterClose, '/media/after-close.mp4')) throw new Error('closing StreamFirefly lost existing resources or kept discovering new ones');
     await testApi.tabs.remove(onDemandTab.id);
+    currentStage = 'verify-late-open-backfill';
+    const lateTab = await testApi.tabs.create({ url: origin + '/late-fixture' });
+    await waitFor(async () => (await testApi.tabs.get(lateTab.id)).status === 'complete', 'late fixture did not load');
+    await waitFor(async () => (await testApi.scripting.executeScript({ target: { tabId: lateTab.id }, world: 'MAIN', func: () => window.lateManifestLoaded === true }))[0]?.result, 'late fixture did not request its manifest');
+    if ((await candidatesFor(lateTab.id)).length) throw new Error('default mode sniffed the late fixture before opening StreamFirefly');
+    const lateOpened = await handleToolbarClick(await testApi.tabs.get(lateTab.id));
+    if (!lateOpened.ok) throw new Error('late fixture workspace did not open: ' + lateOpened.error);
+    const lateManifest = await waitFor(async () => (await candidatesFor(lateTab.id)).find(item => String(item.url).endsWith('/media/referer-only.m3u8')), 'opening StreamFirefly did not recover a manifest loaded before sniffing', 8000);
+    const lateText = await fetchMediaText(lateTab.id, lateManifest.id);
+    if (!lateText.ok || !lateText.text.startsWith('#EXTM3U')) throw new Error('Referer-protected manifest fetch failed: ' + JSON.stringify(lateText));
+    await unmountWorkspace(lateTab.id);
+    await testApi.tabs.remove(lateTab.id);
     await testApi.storage.local.set({ advancedDeepSearch: true, detectImages: false, sniffMode: 'always' });
     await waitFor(() => settings.get().advancedDeepSearch && !settings.get().detectImages && settings.get().sniffMode === 'always', 'settings were not applied');
     currentStage = 'create-fixture-tab';
@@ -335,6 +347,12 @@ function startFixtureServer() {
       const chunks = [];
       request.on('data', chunk => chunks.push(chunk));
       request.on('end', () => { try { events.push(JSON.parse(Buffer.concat(chunks).toString('utf8'))); } catch (_) {} response.writeHead(204).end(); });
+      return;
+    }
+    if (request.url === '/late-fixture') { response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end('<!doctype html><html><head><meta charset="utf-8"><title>Late fixture</title><script>fetch(["/media/referer-only", "m3u8"].join(".")).then(response => response.text()).then(() => { window.lateManifestLoaded = true; });</script></head><body></body></html>'); return; }
+    if (request.url === '/media/referer-only.m3u8') {
+      const allowed = String(request.headers.referer || '').startsWith(origin + '/late-fixture');
+      response.writeHead(allowed ? 200 : 403, { 'content-type': 'application/vnd.apple.mpegurl' }).end(allowed ? '#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nreferer-segment.ts\n#EXT-X-ENDLIST\n' : 'forbidden');
       return;
     }
     if (request.url === '/fixture') { response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(fixtureHtml(origin)); return; }

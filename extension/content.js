@@ -29,6 +29,32 @@
       source: "dom"
     }}).catch?.(() => {});
   };
+  // Manifests requested before sniffing started survive only in the page's resource timeline.
+  const timedMedia = /\.(?:m3u8?|mpd|mp4|webm|mov|mkv|flv|f4v|m4v|mp3|m4a|aac|wav|flac|ogg|opus|weba)(?:$|[?#&])/i;
+  const withoutHash = value => String(value).split("#", 1)[0];
+  const reportedTimings = new Set();
+  let timingUrl = withoutHash(location.href);
+  let timingFloor = 0;
+  let navigationStartedAt = null;
+  // Same-document navigations keep the old page's entries; only requests after the latest one belong to this page.
+  try { globalThis.navigation?.addEventListener?.("navigate", event => { if (!event.hashChange) navigationStartedAt = performance.now(); }); } catch (_) {}
+  const reportTimedResources = () => {
+    if (withoutHash(location.href) !== timingUrl) {
+      timingUrl = withoutHash(location.href);
+      timingFloor = navigationStartedAt ?? performance.now();
+    }
+    let entries = [];
+    try { entries = performance.getEntriesByType("resource"); } catch (_) { return; }
+    let sent = 0;
+    for (const entry of entries) {
+      const url = entry.name;
+      if (sent >= 200) break;
+      if (entry.startTime < timingFloor || !/^https?:/i.test(url) || reportedTimings.has(`${url}|${entry.startTime}`) || !timedMedia.test(url)) continue;
+      reportedTimings.add(`${url}|${entry.startTime}`);
+      sent += 1;
+      api.runtime.sendMessage({ type: "media.add", candidate: { url, mime: "", title: document.title, pageTitle: document.title, pageUrl: location.href, source: "timing" } }).catch?.(() => {});
+    }
+  };
   const scan = () => document.querySelectorAll("video, audio, source").forEach(element => {
     if (!active) return;
     report(element);
@@ -70,6 +96,7 @@
     seen.clear();
     observer.observe(document.documentElement, { childList: true, subtree: true });
     scan();
+    reportTimedResources();
   }
   async function setActive(next) {
     const current = ++revision;

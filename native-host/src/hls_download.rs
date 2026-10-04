@@ -401,9 +401,10 @@ pub(crate) fn merge_hls_checkpoint(
         if let Some(audio) = &audio_playlist {
             args.extend(["-i".into(), audio.to_string_lossy().into_owned()]);
         }
+        // The primary playlist may carry audio only, so its video stream is optional.
         args.extend([
             "-map".into(),
-            "0:v:0".into(),
+            "0:v:0?".into(),
             "-map".into(),
             if audio_playlist.is_some() {
                 "1:a:0"
@@ -521,6 +522,7 @@ pub(crate) fn merge_hls_checkpoint(
     Ok(subtitle_failures)
 }
 
+/// Runs a checkpointed HLS download on the scheduler-owned thread; live recordings poll in this same loop.
 pub(crate) fn start_hls_checkpoint_download(
     store: TaskRuntime,
     writer: Writer,
@@ -528,6 +530,23 @@ pub(crate) fn start_hls_checkpoint_download(
     output: String,
     runtime_plan: Option<HlsPlan>,
 ) {
+    let mut next = Some((task, runtime_plan));
+    while let Some((task, runtime_plan)) = next.take() {
+        next = hls_checkpoint_round(&store, &writer, task, &output, runtime_plan);
+    }
+}
+
+/// Returns the refreshed task and plan when a live recording must continue with another round.
+fn hls_checkpoint_round(
+    store: &TaskRuntime,
+    writer: &Writer,
+    task: Task,
+    output: &str,
+    runtime_plan: Option<HlsPlan>,
+) -> Option<(Task, Option<HlsPlan>)> {
+    let store = store.clone();
+    let writer = writer.clone();
+    let output = output.to_string();
     let work_dir = task_work_root_for_state(&store.repository.path).join(&task.id);
     let checkpoint_file = checkpoint_path_for_state(&store.repository.path, &task.id);
     let checkpoint = if checkpoint_available(&checkpoint_file) {
@@ -541,7 +560,7 @@ pub(crate) fn start_hls_checkpoint_download(
                     current.message = Some("HLS 检查点无效，未覆盖已有恢复数据".into());
                     current.checkpoint_state = Some("invalid".into());
                 });
-                return;
+                return None;
             }
         }
     } else {
@@ -564,7 +583,7 @@ pub(crate) fn start_hls_checkpoint_download(
                         );
                         current.checkpoint_state = Some("invalid".into());
                     });
-                    return;
+                    return None;
                 }
             },
             None => {
@@ -575,7 +594,7 @@ pub(crate) fn start_hls_checkpoint_download(
                     current.message = Some("HLS 检查点不存在，请重新创建任务".into());
                     current.checkpoint_state = Some("missing".into());
                 });
-                return;
+                return None;
             }
         }
     };
@@ -594,7 +613,7 @@ pub(crate) fn start_hls_checkpoint_download(
             current.resume_requirement = Some("authorization_required".into());
             current.message = Some("请回到来源页面重新授权后继续下载".into());
         });
-        return;
+        return None;
     }
     if task.requires_key_override && key_override.is_none() {
         update(&store, &writer, &task.id, |current| {
@@ -603,7 +622,7 @@ pub(crate) fn start_hls_checkpoint_download(
             current.resume_requirement = Some("key_required".into());
             current.message = Some("请重新输入自定义密钥后继续下载".into());
         });
-        return;
+        return None;
     }
     let mut checkpoint = checkpoint;
     if task.live_recording && !stop_requested(&store, &task.id) {
@@ -627,7 +646,7 @@ pub(crate) fn start_hls_checkpoint_download(
                 current.resume_requirement = authorization.then(|| "authorization_required".into());
                 current.message = Some("无法读取最新直播清单，可重试继续录制".into());
             });
-            return;
+            return None;
         }
     }
     let checkpoint = Arc::new(Mutex::new(checkpoint));
@@ -640,7 +659,7 @@ pub(crate) fn start_hls_checkpoint_download(
                 current.error = Some(error.clone());
                 current.message = Some("无法保存 HLS 检查点".into());
             });
-            return;
+            return None;
         }
         jobs
     };
@@ -679,13 +698,13 @@ pub(crate) fn start_hls_checkpoint_download(
                     current.checkpoint_state = Some("invalid".into());
                     current.message = Some("无法保存密钥验证检查点".into());
                 });
-                return;
+                return None;
             }
         }
         if let Some(error) = result.error {
             if error == "cancelled" {
                 mark_stopped(&store, &writer, &task.id);
-                return;
+                return None;
             }
             update(&store, &writer, &task.id, |current| {
                 if authorization_error(&error) {
@@ -716,7 +735,7 @@ pub(crate) fn start_hls_checkpoint_download(
                     "无法验证首个加密切片".into()
                 });
             });
-            return;
+            return None;
         }
     }
     let expected_results = jobs.len();
@@ -847,7 +866,7 @@ pub(crate) fn start_hls_checkpoint_download(
     unregister_all_processes(&store, &task.id);
     if cancel_requested(&store, &task.id) {
         mark_stopped(&store, &writer, &task.id);
-        return;
+        return None;
     }
     if let Some(error) = failure {
         let authorization = authorization_error(&error);
@@ -879,7 +898,7 @@ pub(crate) fn start_hls_checkpoint_download(
                 "部分 HLS 切片下载失败，可重试继续".into()
             });
         });
-        return;
+        return None;
     }
     if task.live_recording && !stop_requested(&store, &task.id) {
         let poll_seconds = {
@@ -920,7 +939,7 @@ pub(crate) fn start_hls_checkpoint_download(
             for _ in 0..poll_seconds * 10 {
                 if cancel_requested(&store, &task.id) {
                     mark_stopped(&store, &writer, &task.id);
-                    return;
+                    return None;
                 }
                 if stop_requested(&store, &task.id) {
                     break;
@@ -961,7 +980,7 @@ pub(crate) fn start_hls_checkpoint_download(
                             "直播清单刷新失败，可重试继续录制".into()
                         });
                     });
-                    return;
+                    return None;
                 }
             }
             let next_task = store
@@ -977,10 +996,7 @@ pub(crate) fn start_hls_checkpoint_download(
                     current
                 })
                 .unwrap_or(task.clone());
-            thread::spawn(move || {
-                start_hls_checkpoint_download(store, writer, next_task, output, Some(runtime_plan))
-            });
-            return;
+            return Some((next_task, Some(runtime_plan)));
         }
     }
     let checkpoint_value = checkpoint.lock().unwrap().clone();
@@ -1048,6 +1064,7 @@ pub(crate) fn start_hls_checkpoint_download(
             current.message = Some("切片已保存，但 FFmpeg 合并失败".into());
         }),
     }
+    None
 }
 
 pub(crate) fn fetch_live_manifest(

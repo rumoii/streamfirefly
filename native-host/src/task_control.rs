@@ -429,7 +429,8 @@ pub(crate) fn delete_task(
         .find(|task| task.id == id)
         .cloned()
         .ok_or("task_not_found")?;
-    let queued = remove_pending(store, id);
+    // Only a task that is still queued may skip cancellation; a running task never counts as pending.
+    let queued = task.state == "queued" && remove_pending(store, id);
     if !queued
         && matches!(
             task.state.as_str(),

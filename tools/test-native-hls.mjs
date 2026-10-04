@@ -30,6 +30,17 @@ const generated = spawnSync(ffmpeg, [
 if (generated.status !== 0) throw new Error(`FFmpeg fixture generation failed: ${generated.status}`);
 const segments = fs.readdirSync(mediaDir).filter(name => name.endsWith('.ts')).sort();
 if (segments.length < 3) throw new Error(`Too few HLS fixture segments: ${segments.length}`);
+const audioDir = path.join(temp, 'audio');
+fs.mkdirSync(audioDir, { recursive: true });
+const generatedAudio = spawnSync(ffmpeg, [
+  '-nostdin', '-y', '-loglevel', 'error',
+  '-f', 'lavfi', '-i', 'sine=frequency=660:sample_rate=44100',
+  '-t', '3', '-c:a', 'aac', '-f', 'hls', '-hls_time', '1', '-hls_list_size', '0',
+  '-hls_segment_filename', path.join(audioDir, 'audio-%03d.ts'),
+  path.join(audioDir, 'source.m3u8')
+], { stdio: 'inherit', windowsHide: true });
+if (generatedAudio.status !== 0) throw new Error(`FFmpeg audio fixture generation failed: ${generatedAudio.status}`);
+const audioSegments = fs.readdirSync(audioDir).filter(name => name.endsWith('.ts')).sort();
 
 const key = Buffer.from('00112233445566778899aabbccddeeff', 'hex');
 const retryCounts = new Map();
@@ -53,6 +64,12 @@ function manifest(prefix, count = segments.length, sequence = 0, encrypted = fal
   lines.push('#EXT-X-ENDLIST');
   return `${lines.join('\n')}\n`;
 }
+function audioOnlyManifest() {
+  const lines = ['#EXTM3U', '#EXT-X-TARGETDURATION:2', '#EXT-X-MEDIA-SEQUENCE:0'];
+  for (const name of audioSegments) lines.push('#EXTINF:1,', `http://127.0.0.1:${port}/audio-only/${name}`);
+  lines.push('#EXT-X-ENDLIST');
+  return `${lines.join('\n')}\n`;
+}
 function liveManifest(prefix, sequence, count = 2, endList = false) {
   const lines = ['#EXTM3U', '#EXT-X-TARGETDURATION:1', `#EXT-X-MEDIA-SEQUENCE:${sequence}`];
   for (let index = 0; index < count; index += 1) {
@@ -63,13 +80,20 @@ function liveManifest(prefix, sequence, count = 2, endList = false) {
 }
 
 const server = http.createServer((request, response) => {
-  const live = /^\/(auto-live|manual-live|restart-live)\.m3u8$/.exec(request.url || '');
+  const live = /^\/(auto-live|manual-live|restart-live|delete-live)\.m3u8$/.exec(request.url || '');
   if (live) {
     const name = live[1];
     const count = liveRequests.get(name) || 0;
     liveRequests.set(name, count + 1);
     const body = liveManifest(name === 'restart-live' ? 'slow' : 'plain', count, 2, name === 'auto-live' && count >= 2);
     response.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl', 'content-length': Buffer.byteLength(body) });
+    response.end(body);
+    return;
+  }
+  const audio = /^\/audio-only\/(audio-\d+\.ts)$/.exec(request.url || '');
+  if (audio && audioSegments.includes(audio[1])) {
+    const body = fs.readFileSync(path.join(audioDir, audio[1]));
+    response.writeHead(200, { 'content-type': 'video/mp2t', 'content-length': body.length });
     response.end(body);
     return;
   }
@@ -188,6 +212,15 @@ if (!stoppedLive.ok) throw new Error(`Stopping live recording failed: ${JSON.str
 const savedLive = await waitFor(host, manualLive.task.id, item => item.state === 'succeeded', 'manual live save', 180);
 assertPlayable(savedLive.output, 'Stopped live HLS');
 
+const deleteLive = await host.send('task.create', livePayload('delete-live', liveManifest('plain', 0)));
+await waitFor(host, deleteLive.task.id, item => item.state === 'running' && item.segments_completed >= 4, 'multi-round live recording', 260);
+const deletedLive = await host.send('task.delete', { id: deleteLive.task.id, deleteFile: true });
+if (!deletedLive.ok) throw new Error(`Deleting a live recording failed: ${JSON.stringify(deletedLive)}`);
+const playlistRequestsAfterDelete = liveRequests.get('delete-live');
+await new Promise(resolve => setTimeout(resolve, 2500));
+if (liveRequests.get('delete-live') !== playlistRequestsAfterDelete) throw new Error('Deleted live recording kept polling its playlist');
+if (fs.existsSync(path.join(temp, 'StreamFirefly', 'tasks', deleteLive.task.id))) throw new Error('Deleted live recording recreated its work directory');
+
 const restartLive = await host.send('task.create', livePayload('restart-live', liveManifest('slow', 0)));
 await waitFor(host, restartLive.task.id, item => item.state === 'running' && item.segments_completed >= 1, 'restartable live progress', 220);
 host.child.kill();
@@ -205,6 +238,14 @@ const plain = await host.send('task.create', payload('plain', manifest('plain'))
 const plainTask = await waitFor(host, plain.task.id, item => item.state === 'succeeded', 'plain HLS completion');
 if (!fs.existsSync(plainTask.output) || plainTask.segments_completed !== segments.length) throw new Error(`Plain HLS failed: ${JSON.stringify(plainTask)}`);
 assertPlayable(plainTask.output, 'Plain HLS');
+
+const audioOnlyPayload = payload('audio-only', audioOnlyManifest());
+audioOnlyPayload.hlsPlan.container = 'm4a';
+const audioOnly = await host.send('task.create', audioOnlyPayload);
+if (!audioOnly.ok) throw new Error(`Audio-only HLS task creation failed: ${JSON.stringify(audioOnly)}`);
+const audioOnlyTask = await waitFor(host, audioOnly.task.id, item => ['succeeded', 'failed'].includes(item.state), 'audio-only HLS completion');
+if (audioOnlyTask.state !== 'succeeded' || !audioOnlyTask.output.endsWith('.m4a')) throw new Error(`Audio-only HLS failed: ${JSON.stringify(audioOnlyTask)}`);
+assertPlayable(audioOnlyTask.output, 'Audio-only HLS');
 
 const aes = await host.send('task.create', payload('aes', manifest('aes', segments.length, 20, true)));
 const aesTask = await waitFor(host, aes.task.id, item => item.state === 'succeeded', 'AES HLS completion');
@@ -278,4 +319,4 @@ assertPlayable(recovered.output, 'Recovered HLS');
 
 host.child.stdin.end();
 server.close();
-console.log('Native HLS VOD/live, AES-128, retry, pause/stop, and restart recovery test passed');
+console.log('Native HLS VOD/live, audio-only, live deletion, AES-128, retry, pause/stop, and restart recovery test passed');

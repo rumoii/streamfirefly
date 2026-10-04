@@ -173,7 +173,7 @@ pub(crate) fn hls_plan(payload: &Value) -> Result<Option<HlsPlan>, &'static str>
         .map(|value| value.clamp(1, 30));
     let container = value["container"]
         .as_str()
-        .filter(|value| matches!(*value, "mp4" | "mkv"))
+        .filter(|value| matches!(*value, "mp4" | "mkv" | "m4a"))
         .ok_or("hls_plan_invalid")?
         .to_string();
     let video_manifest = parse_inline_manifest_value(&value["videoManifest"])?;
