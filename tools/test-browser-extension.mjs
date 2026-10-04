@@ -195,14 +195,15 @@ function reporterSource(origin) {
     await waitFor(async () => {
       const result = await testApi.scripting.executeScript({ target: { tabId: tab.id }, func: () => {
         const root = document.getElementById('streamfirefly-workspace-host')?.shadowRoot;
-        const selects = root ? [...root.querySelectorAll('.toolbar-grid select')] : [];
-        return selects.length >= 2 ? { type: selects[0].value, sort: selects[1].value } : null;
+        const type = root?.querySelector('.type-filter [aria-pressed="true"]')?.dataset.value;
+        const sort = root?.querySelector('.sf-select[aria-label="排序方式"]')?.dataset.value;
+        return type && sort ? { type, sort } : null;
       } });
       const value = result[0]?.result;
       return value?.type === 'video' && value?.sort === 'size' ? value : null;
     }, 'sidebar resource state did not reach the workspace');
     await testApi.scripting.executeScript({ target: { tabId: tab.id }, func: () => {
-      const input = document.getElementById('streamfirefly-workspace-host')?.shadowRoot?.querySelector('.toolbar-grid input[type="search"]');
+      const input = document.getElementById('streamfirefly-workspace-host')?.shadowRoot?.querySelector('.search-field input');
       input.value = 'direct';
       input.dispatchEvent(new Event('input', { bubbles: true }));
     } });

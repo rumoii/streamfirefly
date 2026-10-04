@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { vModalFocus } from "../modal-focus";
+import SfDialog from "../ui/SfDialog.vue";
 import { computed, onBeforeUnmount, reactive, watch } from "vue";
 import type { MediaCandidate } from "../types";
 import { sendMessage } from "../api";
@@ -56,13 +56,10 @@ async function create() {
 
 <template>
   <Transition name="fade">
-    <div v-if="candidate" class="dialog-backdrop" @click.self="$emit('close')">
-      <section v-modal-focus="() => emit('close')" class="dialog" role="dialog" aria-modal="true" aria-labelledby="download-title">
-        <div class="dialog-heading"><div><h2 id="download-title">开始下载</h2><p>确认文件名称与保存位置</p></div><button class="icon-button" type="button" aria-label="关闭" @click="$emit('close')">×</button></div>
-        <label class="field"><span>文件名称</span><div class="filename"><input v-model="form.name" maxlength="100" @keydown.enter="create"><b>.{{ form.extension }}</b></div><small class="error-text">{{ form.preparing ? "正在准备下载…" : form.error || validation }}</small></label>
-        <div class="path-summary"><span>保存目录</span><strong>{{ saveDir || '系统默认目录' }}</strong></div>
-        <div class="dialog-actions"><button class="button" type="button" @click="$emit('close')">取消</button><button class="button primary" type="button" :disabled="Boolean(validation) || form.busy || !form.ready || connected === false" @click="create">{{ form.busy ? '正在创建…' : '开始下载' }}</button></div>
-      </section>
-    </div>
+    <SfDialog v-if="candidate" title="开始下载" description="确认文件名称与保存位置" size="sm" @close="$emit('close')">
+      <label class="field"><span>文件名称</span><div class="filename"><input v-model="form.name" maxlength="100" @keydown.enter="create"><b>.{{ form.extension }}</b></div><small :class="{ 'error-text': !form.preparing }">{{ form.preparing ? "正在准备下载…" : form.error || validation }}</small></label>
+      <div class="path-summary"><span>保存目录</span><strong>{{ saveDir || '系统默认目录' }}</strong></div>
+      <template #footer><button class="button" type="button" @click="$emit('close')">取消</button><button class="button primary" type="button" :disabled="Boolean(validation) || form.busy || !form.ready || connected === false" @click="create">{{ form.busy ? '正在创建…' : '开始下载' }}</button></template>
+    </SfDialog>
   </Transition>
 </template>

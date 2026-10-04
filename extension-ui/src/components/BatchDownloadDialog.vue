@@ -4,7 +4,7 @@ import type { MediaCandidate } from "../types";
 import { createDownload, prepareCandidate } from "../download-client";
 import { sendMessage } from "../api";
 import { humanError } from "../store";
-import { vModalFocus } from "../modal-focus";
+import SfDialog from "../ui/SfDialog.vue";
 
 const props = defineProps<{ candidates: MediaCandidate[] | null; saveDir: string; downloadThreads: number; sourceContextId: string | null; sourceTabId: number | null; connected: boolean }>();
 const emit = defineEmits<{ close: []; inspect: [candidate: MediaCandidate] }>();
@@ -18,6 +18,7 @@ const directory = ref("");
 let alive = true;
 let sourceContextAtOpen: string | null = null;
 let sourceTabAtOpen: number | null = null;
+const stateLabels: Record<BatchItem["state"], string> = { pending: "待确认", preparing: "准备中", queued: "已入队", failed: "失败", manual: "需单独处理", stopped: "未提交" };
 const summary = computed(() => `已入队 ${items.value.filter(item => item.state === 'queued').length} · 失败 ${items.value.filter(item => item.state === 'failed').length} · 需单独处理 ${items.value.filter(item => item.state === 'manual').length}`);
 watch(() => props.candidates, candidates => {
   if (busy.value) return;
@@ -74,14 +75,17 @@ function retryFailed() {
 </script>
 
 <template>
-  <div v-if="candidates" class="dialog-backdrop" @click.self="requestClose">
-    <section v-modal-focus="requestClose" class="dialog batch-dialog" role="dialog" aria-modal="true" aria-labelledby="batch-title">
-      <div class="dialog-heading"><div><h2 id="batch-title">批量下载 {{ items.length }} 项资源</h2><p>HLS默认最高画质、默认音轨、全片，不附带字幕。最多同时执行2个任务。</p></div><button class="icon-button" aria-label="关闭批量下载" @click="requestClose">×</button></div>
-      <label class="field"><span>保存目录</span><input v-model="directory" class="control" :disabled="submitted" placeholder="留空使用系统默认目录"></label>
-      <div class="batch-results"><article v-for="item in items" :key="item.requestId"><strong>{{ item.candidate.title || item.candidate.pageTitle || item.candidate.url }}</strong><span :class="{ 'metric-danger': item.state === 'failed' }">{{ item.message }}</span><button v-if="item.state === 'manual' && !busy" class="text-button" @click="$emit('inspect', item.candidate)">单独处理</button></article></div>
-      <p role="status">{{ summary }}</p><button v-if="!busy && items.some(item => item.state === 'failed')" class="button" :disabled="!connected" @click="retryFailed">重试失败项</button>
-      <div v-if="confirmStop" class="confirm-warning"><div><strong>停止尚未提交的项目？</strong><p>正在确认的请求会完成确认，已入队任务继续下载。</p><button class="button" @click="confirmStop = false">继续提交</button><button class="button" @click="stop">停止未提交项</button></div></div>
-      <div class="dialog-actions"><button class="button" @click="requestClose">{{ busy ? '停止提交' : '关闭' }}</button><button v-if="!submitted" class="button primary" :disabled="!connected || !items.some(item => item.state === 'pending')" @click="submit">确认并排队</button></div>
-    </section>
-  </div>
+  <SfDialog v-if="candidates" :title="`批量下载 ${items.length} 项资源`" description="HLS 默认最高画质、默认音轨、全片，不附带字幕。最多同时执行 2 个任务。" close-label="关闭批量下载" size="lg" @close="requestClose">
+    <label class="field"><span>保存目录</span><input v-model="directory" class="control" :disabled="submitted" placeholder="留空使用系统默认目录"></label>
+    <div class="batch-results">
+      <article v-for="item in items" :key="item.requestId">
+        <div><strong>{{ item.candidate.title || item.candidate.pageTitle || item.candidate.url }}</strong><span :class="{ 'metric-danger': item.state === 'failed' }">{{ item.message }}</span></div>
+        <em class="state-badge" :data-state="item.state">{{ stateLabels[item.state] }}</em>
+        <button v-if="item.state === 'manual' && !busy" class="button sm" @click="$emit('inspect', item.candidate)">单独处理</button>
+      </article>
+    </div>
+    <div class="batch-summary"><p role="status">{{ summary }}</p><button v-if="!busy && items.some(item => item.state === 'failed')" class="button sm" :disabled="!connected" @click="retryFailed">重试失败项</button></div>
+    <div v-if="confirmStop" class="confirm-warning"><b>!</b><div><strong>停止尚未提交的项目？</strong><p>正在确认的请求会完成确认，已入队任务继续下载。</p><div class="confirm-actions"><button class="button sm" @click="confirmStop = false">继续提交</button><button class="button sm danger-solid" @click="stop">停止未提交项</button></div></div></div>
+    <template #footer><button class="button" @click="requestClose">{{ busy ? '停止提交' : '关闭' }}</button><button v-if="!submitted" class="button primary" :disabled="!connected || !items.some(item => item.state === 'pending')" @click="submit">确认并排队</button></template>
+  </SfDialog>
 </template>

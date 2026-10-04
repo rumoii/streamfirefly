@@ -1,0 +1,20 @@
+/* Element defaults shared by the extension pages and the injected floating window. */
+* { box-sizing: border-box; }
+html, body, #app { min-width: 320px; min-height: 100%; margin: 0; }
+body, .floating-window { font-family: var(--sf-font); font-size: var(--sf-text-md); line-height: 1.5; color: var(--sf-text); -webkit-font-smoothing: antialiased; font-synthesis: none; }
+body { min-height: 100vh; background: var(--sf-bg); }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+h1, h2, h3, h4 { color: var(--sf-text); font-weight: 600; }
+code { font-family: var(--sf-font-mono); }
+:where(button, input, select, textarea, summary, [tabindex]):focus-visible { outline: 2px solid var(--sf-focus); outline-offset: 1px; }
+::selection { background: var(--sf-brand-200); color: var(--sf-text); }
+* { scrollbar-width: thin; scrollbar-color: var(--sf-border-strong) transparent; }
+.sf-icon { flex: none; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+@keyframes shimmer { to { background-position: -200% 0; } }
+@keyframes sf-spin { to { transform: rotate(360deg); } }
+@keyframes sf-pop { from { opacity: 0; transform: translateY(-3px) scale(.98); } }
+@keyframes sf-rise { from { opacity: 0; transform: translateY(6px) scale(.985); } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .001ms !important; transition-duration: .001ms !important; } }

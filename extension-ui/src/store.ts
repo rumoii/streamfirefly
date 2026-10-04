@@ -15,7 +15,6 @@ export const DEFAULT_RESOURCE_VIEW_STATE: Readonly<ResourceViewState> = Object.f
   minDuration: "",
   maxDuration: "",
   sortMode: "detected",
-  collapsed: false,
   expandedId: "",
   revision: 0
 });

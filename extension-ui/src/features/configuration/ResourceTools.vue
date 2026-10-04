@@ -4,6 +4,7 @@ import type { UiContext } from "../../types";
 import { sendMessage } from "../../api";
 import { sessionError } from "../session-client";
 import DeepSearchPanel from "./DeepSearchPanel.vue";
+import SfIcon from "../../ui/SfIcon.vue";
 const props = defineProps<{ context: UiContext | null }>();
 const error = ref("");
 const busy = ref(false);
@@ -25,7 +26,7 @@ async function openCapture() {
 <template>
   <div v-if="context?.supported" class="resource-tools">
     <DeepSearchPanel :context="context" />
-    <button class="button subtle" :disabled="busy" title="打开缓存捕捉控制页" @click="openCapture">{{ busy ? '正在打开…' : '缓存捕捉' }}</button>
+    <button class="icon-button" :disabled="busy" :aria-label="busy ? '正在打开缓存捕捉…' : '缓存捕捉'" title="打开缓存捕捉控制页" @click="openCapture"><SfIcon name="capture" /></button>
     <span v-if="error" class="resource-tool-error" role="alert">{{ error }}</span>
   </div>
 </template>

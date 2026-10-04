@@ -1,11 +1,15 @@
 <script setup lang="ts">
 import { copyResources } from "../features/configuration/copy";
-import { vModalFocus } from "../modal-focus";
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import type { MediaCandidate, ResourceViewState } from "../types";
 import { filterCandidates, sortCandidates } from "../media";
 import { formatBytes, formatDuration, sourceLabel, typeLabel } from "../format";
 import { sendMessage } from "../api";
+import SfIcon from "../ui/SfIcon.vue";
+import SfMenu, { type MenuItem } from "../ui/SfMenu.vue";
+import SfPopover from "../ui/SfPopover.vue";
+import SfSelect from "../ui/SfSelect.vue";
+import type { IconName } from "../ui/icons";
 
 type PreviewState = "idle" | "preparing" | "ready" | "playing" | "failed";
 type HlsConstructor = typeof import("hls.js").default;
@@ -24,7 +28,7 @@ function loadHls(): Promise<HlsConstructor> {
   return hlsModulePromise;
 }
 
-const props = defineProps<{ candidates: MediaCandidate[]; loading: boolean; viewState: ResourceViewState; compact?: boolean; suspended?: boolean; connected?: boolean; externalEnabled?: boolean }>();
+const props = defineProps<{ candidates: MediaCandidate[]; loading: boolean; viewState: ResourceViewState; compact?: boolean; coverOnly?: boolean; suspended?: boolean; connected?: boolean; externalEnabled?: boolean }>();
 const emit = defineEmits<{
   download: [candidate: MediaCandidate];
   externalDownload: [candidates: MediaCandidate[]];
@@ -36,16 +40,16 @@ const emit = defineEmits<{
   updateViewState: [patch: Partial<Omit<ResourceViewState, "revision">>];
   metadata: [candidate: MediaCandidate, metadata: Partial<Pick<MediaCandidate, "duration" | "width" | "height" | "poster" | "live">>];
 }>();
-const moreFilters = ref(false);
-const downloadMenu = ref<MediaCandidate | null>(null);
+const typeOptions: { value: ResourceViewState["type"]; label: string }[] = [{ value: "all", label: "全部类型" }, { value: "video", label: "视频与流媒体" }, { value: "audio", label: "音频" }, { value: "image", label: "图片" }];
+const sortOptions: { value: ResourceViewState["sortMode"]; label: string }[] = [{ value: "detected", label: "嗅探顺序" }, { value: "size", label: "文件大小" }, { value: "duration", label: "媒体时长" }];
+const typeIcons: Record<string, IconName> = { video: "movie", audio: "music", image: "photo", hls: "playlist", dash: "playlist" };
 const advancedFilterCount = computed(() => [props.viewState.minMb, props.viewState.maxMb, props.viewState.minDuration, props.viewState.maxDuration].filter(value => value !== "" && value != null).length);
 const selectedIds = ref(new Set<string>());
+const failedImages = ref(new Set<string>());
 const previewState = ref<PreviewState>("idle");
 const previewError = ref("");
 const mediaElement = ref<HTMLVideoElement | HTMLAudioElement | null>(null);
-const resourceScroll = ref<HTMLElement | null>(null);
 const previewSessionId = `preview-${crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
-let savedScrollTop = 0;
 let hls: InstanceType<HlsConstructor> | null = null;
 let activePreviewId = "";
 let preparationToken = 0;
@@ -67,17 +71,22 @@ function isBlobCandidate(item: MediaCandidate) { return item.url.startsWith("blo
 
 watch(visible, items => {
   selectedIds.value = new Set([...selectedIds.value].filter(id => items.some(item => item.id === id)));
-  if (downloadMenu.value) downloadMenu.value = items.find(item => item.id === downloadMenu.value?.id) || null;
   if (props.viewState.expandedId && !items.some(item => item.id === props.viewState.expandedId)) emit("updateViewState", { expandedId: "" });
 });
 
-watch(() => [props.viewState.expandedId, props.viewState.collapsed, props.compact, props.suspended], async () => {
+watch(() => [props.viewState.expandedId, props.coverOnly, props.suspended], async () => {
   await disposePreview();
-  if (!props.viewState.expandedId || props.compact || props.viewState.collapsed || props.suspended) return;
+  if (!props.viewState.expandedId || props.coverOnly || props.suspended) return;
   await nextTick();
   const item = expanded.value;
-  if (item && !props.compact && !props.suspended && !props.viewState.collapsed && item.type !== "image" && !isBlobCandidate(item)) await preparePreview(item);
+  if (item && !props.coverOnly && !props.suspended && item.type !== "image" && !isBlobCandidate(item)) await preparePreview(item);
 }, { immediate: true });
+
+function coverUrl(item: MediaCandidate) {
+  const url = item.type === "image" ? item.url : item.poster || "";
+  return url && !failedImages.value.has(url) ? url : "";
+}
+function markImageFailed(url: string) { failedImages.value = new Set(failedImages.value).add(url); }
 
 function updateViewState<K extends keyof Omit<ResourceViewState, "revision">>(key: K, value: ResourceViewState[K]) {
   emit("updateViewState", { [key]: value } as Partial<Omit<ResourceViewState, "revision">>);
@@ -90,8 +99,29 @@ function toggleSelection(id: string) {
 }
 
 function selectAll() { selectedIds.value = selectedIds.value.size === visible.value.length ? new Set() : new Set(visible.value.map(item => item.id)); }
+function clearSelection() { selectedIds.value = new Set(); }
 function resourceName(item: MediaCandidate) { try { return item.title || item.pageTitle || new URL(item.url).pathname.split("/").pop() || "未命名资源"; } catch { return item.title || item.pageTitle || "未命名资源"; } }
-function resourceMeta(item: MediaCandidate) { return [typeLabel(item.type), item.sizeKind === "manifest" ? "最终大小未知" : formatBytes(item.size), item.width && item.height ? `${item.width}×${item.height}` : null, item.duration ? formatDuration(item.duration) : null, item.live ? "直播" : null, sourceLabel(item.source)].filter(Boolean).join(" · "); }
+function sizeText(item: MediaCandidate) { return item.sizeKind === "manifest" ? "最终大小未知" : formatBytes(item.size); }
+function resourceMeta(item: MediaCandidate) { return [sizeText(item), item.width && item.height ? `${item.width}×${item.height}` : null, item.duration ? formatDuration(item.duration) : null, sourceLabel(item.source)].filter(Boolean).join(" · "); }
+function isStream(item: MediaCandidate) { return item.type === "hls" || item.type === "dash"; }
+function primaryLabel(item: MediaCandidate) { return isBlobCandidate(item) ? "缓存捕捉" : props.compact && item.type === "hls" ? "快速下载" : "下载"; }
+function runPrimary(item: MediaCandidate) { if (isBlobCandidate(item)) emit("captureBlob", item); else emit("download", item); }
+function rowMenu(item: MediaCandidate): MenuItem[] {
+  return [
+    { key: "details", label: props.viewState.expandedId === item.id ? "关闭详情" : "查看详情", icon: "info-circle" },
+    ...(isStream(item) ? [{ key: "parse", label: "详细解析", icon: "adjustments-horizontal" as IconName }] : []),
+    ...(props.externalEnabled && !isBlobCandidate(item) ? [{ key: "external", label: "发送到外部工具…", icon: "external-link" as IconName }] : []),
+    { key: "copy", label: "复制地址", icon: "copy" },
+    { key: "remove", label: "从列表移除", icon: "trash", danger: true }
+  ];
+}
+function onRowMenu(item: MediaCandidate, key: string) {
+  if (key === "details") toggleDetails(item);
+  else if (key === "parse") emit("parse", item);
+  else if (key === "external") emit("externalDownload", [item]);
+  else if (key === "copy") copyUrl(item.url);
+  else if (key === "remove") emit("remove", [item.id]);
+}
 function copyUrl(value: string) { const candidate = props.candidates.find(item => item.url === value); if (candidate) void copyResources([candidate]).catch(error => { previewError.value = error.message; }); }
 function setMediaElement(value: unknown) { mediaElement.value = typeof HTMLMediaElement !== "undefined" && value instanceof HTMLMediaElement ? value as HTMLVideoElement | HTMLAudioElement : null; }
 
@@ -104,16 +134,7 @@ function toggleDetails(item: MediaCandidate) {
   updateViewState("expandedId", props.viewState.expandedId === item.id ? "" : item.id);
 }
 
-async function toggleList() {
-  if (!props.viewState.collapsed) {
-    savedScrollTop = resourceScroll.value?.scrollTop || 0;
-    updateViewState("collapsed", true);
-    return;
-  }
-  updateViewState("collapsed", false);
-  await nextTick();
-  if (resourceScroll.value) resourceScroll.value.scrollTop = savedScrollTop;
-}
+function closeDetails() { updateViewState("expandedId", ""); }
 
 async function applyPreviewHeaders(item: MediaCandidate) {
   await sendMessage({ type: "preview.headers.apply", payload: { previewSessionId, candidateId: item.id, url: item.url, headers: item.requestHeaders || {} } }).catch(() => {});
@@ -316,70 +337,92 @@ onBeforeUnmount(() => { void disposePreview(); });
 </script>
 
 <template>
-  <section class="resource-layout expandable-resources" :class="{ compact, 'has-detail': !compact && Boolean(expanded) }">
-    <div class="resource-list-panel panel">
-      <div class="panel-title">
-        <div><h2>发现资源</h2><p>{{ resourceCandidates.length }} 个媒体资源<span v-if="segments.length"> · {{ segments.length }} 个分片已收起</span></p></div>
-        <div class="panel-title-actions"><slot name="header-tools" /><button class="collapse-button" type="button" :aria-expanded="!viewState.collapsed" @click="toggleList">{{ viewState.collapsed ? '展开资源' : '收起资源' }}<i></i></button></div>
-      </div>
-      <Transition name="panel-collapse">
-        <div v-if="!viewState.collapsed" class="resource-panel-content">
-          <div class="toolbar-grid">
-            <input :value="viewState.pattern" class="control search" type="search" placeholder="正则筛选名称、URL 或 MIME" @input="updateViewState('pattern', ($event.target as HTMLInputElement).value)">
-            <select :value="viewState.type" class="control" @change="updateViewState('type', ($event.target as HTMLSelectElement).value as ResourceViewState['type'])"><option value="all">全部类型</option><option value="video">视频与流媒体</option><option value="audio">音频</option><option value="image">图片</option></select>
-            <select :value="viewState.sortMode" class="control" @change="updateViewState('sortMode', ($event.target as HTMLSelectElement).value as ResourceViewState['sortMode'])"><option value="detected">嗅探顺序</option><option value="size">文件大小</option><option value="duration">媒体时长</option></select>
-            <button class="button subtle more-filters" :aria-expanded="moreFilters" @click="moreFilters = !moreFilters">更多筛选<span v-if="advancedFilterCount"> · {{ advancedFilterCount }}</span></button>
-          </div>
-          <div v-if="moreFilters" class="advanced-resource-filters"><div class="range-controls" aria-label="文件大小范围"><input :value="viewState.minMb" class="control" type="number" min="0" placeholder="最小 MB" @input="updateViewState('minMb', ($event.target as HTMLInputElement).value)"><span>—</span><input :value="viewState.maxMb" class="control" type="number" min="0" placeholder="最大 MB" @input="updateViewState('maxMb', ($event.target as HTMLInputElement).value)"></div><div class="filter-row"><input :value="viewState.minDuration" class="control" type="number" min="0" aria-label="最短时长（秒）" placeholder="最短时长（秒）" @input="updateViewState('minDuration', ($event.target as HTMLInputElement).value)"><input :value="viewState.maxDuration" class="control" type="number" min="0" aria-label="最长时长（秒）" placeholder="最长时长（秒）" @input="updateViewState('maxDuration', ($event.target as HTMLInputElement).value)"></div><button class="text-button" :disabled="!advancedFilterCount" @click="$emit('updateViewState', { minMb: '', maxMb: '', minDuration: '', maxDuration: '' })">清除高级筛选</button></div>
-          <div v-if="filtered.error" class="inline-error">{{ filtered.error }}</div>
-          <div v-if="visible.length" class="batch-bar"><label><input type="checkbox" :checked="selectedIds.size === visible.length" @change="selectAll"> 全选当前结果</label><span>已选 {{ selectedIds.size }} 项<span v-if="selectedHasBlob"> · Blob 需单独缓存捕捉</span></span><div><button v-if="externalEnabled" class="text-button" :disabled="!selectedIds.size || selectedHasBlob" :title="selectedHasBlob ? 'Blob 临时媒体不能发送到外部工具' : ''" @click="$emit('externalDownload', selectedCandidates)">发送到外部工具…</button><button class="text-button" :disabled="!selectedIds.size || selectedHasBlob || connected === false" :title="selectedHasBlob ? 'Blob 临时媒体需单独缓存捕捉' : ''" @click="$emit('batchDownload', selectedCandidates)">批量下载</button><button class="text-button" :disabled="!selectedIds.size" @click="copySelected">复制</button><button class="text-button danger" :disabled="!selectedIds.size" @click="$emit('remove', [...selectedIds])">移除</button></div></div>
-          <div class="resource-table-heading" aria-hidden="true"><span></span><span>类型</span><span>资源名称</span><span>分辨率</span><span>时长</span><span>大小</span><span>操作</span></div>
-          <div class="resource-body">
-          <div ref="resourceScroll" class="resource-scroll resource-cards">
-            <template v-if="loading"><article v-for="index in 3" :key="index" class="resource-card skeleton-card"><i></i><div><b></b><span></span></div></article></template>
-            <article v-for="item in visible" v-else :key="item.id" class="resource-card" :class="{ expanded: !compact && viewState.expandedId === item.id }">
-              <div class="resource-summary">
-                <label class="resource-select"><input type="checkbox" :checked="selectedIds.has(item.id)" :aria-label="`选择${resourceName(item)}`" @change="toggleSelection(item.id)"></label>
-                <span class="resource-type">{{ typeLabel(item.type) }}</span>
-                <span class="resource-identity"><strong :title="resourceName(item)">{{ resourceName(item) }}</strong><small>{{ resourceMeta(item) }}</small></span>
-                <span class="resource-resolution">{{ item.width && item.height ? `${item.width}×${item.height}` : '未知' }}</span><span class="resource-duration">{{ formatDuration(item.duration) }}</span><span class="resource-size">{{ item.sizeKind === 'manifest' ? '最终大小未知' : formatBytes(item.size) }}</span>
-                <span class="card-actions"><button v-if="item.type === 'hls' || item.type === 'dash'" class="button subtle" type="button" @click="$emit('parse', item)">{{ compact ? '详细解析' : '解析' }}</button><button class="button subtle" type="button" :aria-expanded="!compact && viewState.expandedId === item.id" @click="compact ? $emit('inspect', item) : toggleDetails(item)">{{ !compact && viewState.expandedId === item.id ? '收起' : '详情' }}</button><button class="button primary" type="button" :disabled="connected === false" @click="isBlobCandidate(item) ? $emit('captureBlob', item) : $emit('download', item)">{{ isBlobCandidate(item) ? '缓存捕捉' : compact && item.type === 'hls' ? '快速下载' : '下载' }}</button><button v-if="externalEnabled && !isBlobCandidate(item)" class="button subtle download-more" type="button" :aria-label="`更多下载方式：${resourceName(item)}`" @click="downloadMenu = item">▾</button></span>
-              </div>
-
-            </article>
-            <div v-if="!loading && !visible.length" class="empty-state"><span>✦</span><h3>{{ resourceCandidates.length ? '没有符合筛选条件的资源' : '等待发现媒体资源' }}</h3><p>{{ resourceCandidates.length ? '调整筛选条件后再试。' : '保持来源网页打开并播放视频，流萤会自动收集资源。' }}</p></div>
-          </div>
-          <aside v-if="expanded && !compact" class="resource-detail-pane"><header><strong>资源详情</strong><button class="button subtle" @click="toggleDetails(expanded)">返回列表</button></header><template v-for="item in [expanded]" :key="item.id">
-              <Transition name="resource-detail">
-                <div v-if="!suspended" class="expanded-detail"><div class="expanded-detail-inner">
-                  <div class="expanded-preview" :class="{ image: item.type === 'image' }">
-                    <img v-if="item.type === 'image'" :src="item.url" alt="资源预览">
-                    <img v-else-if="isBlobCandidate(item) && item.poster" :src="item.poster" alt="媒体封面">
-                    <div v-else-if="isBlobCandidate(item)" class="blob-preview-status"><strong>Blob 页面临时媒体</strong><span>无法脱离来源页面直接预览，请使用缓存捕捉。</span></div>
-                    <video v-else-if="['video','hls','dash'].includes(item.type)" :ref="setMediaElement" controls preload="auto" playsinline :poster="item.poster || undefined" @loadedmetadata="onMediaMetadata" @durationchange="onMediaMetadata" @loadeddata="onMediaData" @play="onMediaPlay" @pause="onMediaPause"></video>
-                    <audio v-else-if="item.type === 'audio'" :ref="setMediaElement" controls preload="auto" @loadedmetadata="onMediaMetadata" @durationchange="onMediaMetadata" @loadeddata="onMediaData" @play="onMediaPlay" @pause="onMediaPause"></audio>
-                    <div v-if="previewState === 'preparing' && item.type !== 'image' && !isBlobCandidate(item)" class="preview-status" :class="{ 'has-poster': item.poster }"><i></i><strong>正在准备封面与媒体信息</strong><span>只加载预览所需的少量数据</span></div>
-                    <button v-if="(previewState === 'ready' || previewState === 'preparing' && item.poster) && item.type !== 'image' && !isBlobCandidate(item)" class="preview-play" type="button" @click="startPreview"><span>▶</span><strong>播放预览</strong></button>
-                    <div v-if="isBlobCandidate(item) && item.poster" class="blob-poster-note">Blob 页面临时媒体 · 请使用缓存捕捉</div>
-                  </div>
-                  <div class="expanded-info">
-                    <dl class="detail-grid"><div><dt>文件大小</dt><dd>{{ item.sizeKind === 'manifest' ? '最终大小未知' : formatBytes(item.size) }}</dd></div><div><dt>分辨率</dt><dd>{{ item.width && item.height ? `${item.width} × ${item.height}` : '未知' }}</dd></div><div><dt>媒体时长</dt><dd>{{ formatDuration(item.duration) }}</dd></div><div><dt>媒体状态</dt><dd>{{ item.live ? '直播流' : '点播资源' }}</dd></div><div><dt>发现来源</dt><dd>{{ sourceLabel(item.source) }}</dd></div><div><dt>MIME</dt><dd>{{ item.mime || '未知' }}</dd></div></dl>
-                    <div class="url-box"><span>资源地址</span><code>{{ item.url }}</code><button class="text-button" @click="copyUrl(item.url)">复制</button></div>
-                    <div v-if="item.extraction" class="url-box"><span>规则提取 · {{ item.extraction.ruleId }} · {{ item.extraction.observed ? '已观察到目标请求' : '尚未观察到目标请求' }}</span><code>{{ item.extraction.originalUrl }}</code><small>来源信息仅用于追溯；提取候选不自动发送到外部工具。</small></div>
-                    <p v-if="previewError" class="inline-error detail-error">{{ previewError }}</p>
-                  </div>
-                </div></div>
-              </Transition>
-          </template></aside>
-          </div>
+  <section class="resources" :class="{ compact, 'has-detail': Boolean(expanded) }">
+    <div v-if="!selectedIds.size" class="resource-toolbar">
+      <label class="search-field"><SfIcon name="search" /><input :value="viewState.pattern" type="search" aria-label="筛选资源" placeholder="筛选名称、URL 或 MIME（支持正则）" @input="updateViewState('pattern', ($event.target as HTMLInputElement).value)"></label>
+      <div v-if="!compact" class="segmented type-filter" role="group" aria-label="资源类型"><button v-for="option in typeOptions" :key="option.value" type="button" :data-value="option.value" :class="{ active: viewState.type === option.value }" :aria-pressed="viewState.type === option.value" @click="updateViewState('type', option.value)">{{ option.label }}</button></div>
+      <SfSelect v-else :model-value="viewState.type" :options="typeOptions" label="资源类型" @update:model-value="updateViewState('type', $event)" />
+      <SfSelect v-if="!compact" :model-value="viewState.sortMode" :options="sortOptions" label="排序方式" @update:model-value="updateViewState('sortMode', $event)" />
+      <SfPopover label="更多筛选" icon="adjustments-horizontal" :text="compact ? undefined : '筛选'" :badge="advancedFilterCount">
+        <div class="filter-form">
+          <label v-if="compact" class="field"><span>排序方式</span><SfSelect :model-value="viewState.sortMode" :options="sortOptions" label="排序方式" @update:model-value="updateViewState('sortMode', $event)" /></label>
+          <fieldset class="field"><legend>文件大小（MB）</legend><div class="range-controls"><input :value="viewState.minMb" class="control" type="number" min="0" aria-label="最小 MB" placeholder="最小" @input="updateViewState('minMb', ($event.target as HTMLInputElement).value)"><span>—</span><input :value="viewState.maxMb" class="control" type="number" min="0" aria-label="最大 MB" placeholder="最大" @input="updateViewState('maxMb', ($event.target as HTMLInputElement).value)"></div></fieldset>
+          <fieldset class="field"><legend>媒体时长（秒）</legend><div class="range-controls"><input :value="viewState.minDuration" class="control" type="number" min="0" aria-label="最短时长（秒）" placeholder="最短" @input="updateViewState('minDuration', ($event.target as HTMLInputElement).value)"><span>—</span><input :value="viewState.maxDuration" class="control" type="number" min="0" aria-label="最长时长（秒）" placeholder="最长" @input="updateViewState('maxDuration', ($event.target as HTMLInputElement).value)"></div></fieldset>
+          <button class="button ghost" type="button" :disabled="!advancedFilterCount" @click="$emit('updateViewState', { minMb: '', maxMb: '', minDuration: '', maxDuration: '' })">清除大小与时长条件</button>
         </div>
-      </Transition>
+      </SfPopover>
+      <slot name="header-tools" />
     </div>
-    <div v-if="downloadMenu" class="dialog-backdrop" @click.self="downloadMenu = null">
-      <section v-modal-focus="() => { downloadMenu = null; }" class="dialog download-choice-dialog" role="dialog" aria-modal="true" aria-label="下载方式">
-        <div class="dialog-heading"><div><h2>下载方式</h2><p>{{ resourceName(downloadMenu) }}</p></div><button class="icon-button" aria-label="关闭下载方式" @click="downloadMenu = null">×</button></div>
-        <div class="delete-choices"><button :disabled="connected === false" @click="$emit('download', downloadMenu); downloadMenu = null"><strong>内置下载</strong><span>加入流萤任务队列；DASH 先选择画质和音轨。</span></button><button @click="$emit('externalDownload', [downloadMenu]); downloadMenu = null"><strong>发送到外部工具…</strong><span>打开确认页，选择已配置的下载工具。</span></button></div>
-      </section>
+    <div v-else class="resource-toolbar selection-bar" role="toolbar" aria-label="已选资源操作">
+      <strong>已选 {{ selectedIds.size }} 项</strong><span v-if="selectedHasBlob" class="selection-hint">Blob 需单独缓存捕捉</span>
+      <div class="selection-actions">
+        <button class="button primary" :disabled="selectedHasBlob || connected === false" :title="selectedHasBlob ? 'Blob 临时媒体需单独缓存捕捉' : ''" @click="$emit('batchDownload', selectedCandidates)"><SfIcon name="download" /><span>批量下载</span></button>
+        <button class="button" @click="copySelected"><SfIcon name="copy" /><span>复制</span></button>
+        <button v-if="externalEnabled" class="button" :disabled="selectedHasBlob" :title="selectedHasBlob ? 'Blob 临时媒体不能发送到外部工具' : ''" @click="$emit('externalDownload', selectedCandidates)"><SfIcon name="external-link" /><span>发送到外部工具…</span></button>
+        <button class="button danger-ghost" @click="$emit('remove', [...selectedIds])"><SfIcon name="trash" /><span>移除</span></button>
+        <button class="icon-button" aria-label="取消选择" title="取消选择" @click="clearSelection"><SfIcon name="x" /></button>
+      </div>
+    </div>
+    <div v-if="filtered.error" class="inline-error">{{ filtered.error }}</div>
+    <div class="resource-body">
+      <div class="resource-list">
+        <div class="resource-head">
+          <label class="row-check"><input type="checkbox" class="checkbox" aria-label="全选当前结果" :checked="visible.length > 0 && selectedIds.size === visible.length" :indeterminate="selectedIds.size > 0 && selectedIds.size < visible.length" :disabled="!visible.length" @change="selectAll"></label>
+          <span class="head-name">{{ resourceCandidates.length }} 个资源<template v-if="visible.length !== resourceCandidates.length"> · 显示 {{ visible.length }} 个</template><template v-if="segments.length"> · {{ segments.length }} 个分片已隐藏</template></span>
+          <span class="cell-resolution">分辨率</span><span class="cell-duration">时长</span><span class="cell-size">大小</span><span class="cell-actions"></span>
+        </div>
+        <div class="resource-scroll">
+          <template v-if="loading"><div v-for="index in 4" :key="index" class="resource-row skeleton-row"><i></i><b></b></div></template>
+          <article v-for="item in visible" v-else :key="item.id" class="resource-row" :class="{ selected: selectedIds.has(item.id), active: viewState.expandedId === item.id }">
+            <label class="row-check"><input type="checkbox" class="checkbox" :checked="selectedIds.has(item.id)" :aria-label="`选择${resourceName(item)}`" @change="toggleSelection(item.id)"></label>
+            <span class="type-tile" :class="{ thumb: coverUrl(item) }" :data-type="item.type" :title="typeLabel(item.type)"><img v-if="coverUrl(item)" :src="coverUrl(item)" alt="" loading="lazy" decoding="async" @error="markImageFailed(coverUrl(item))"><SfIcon v-else :name="typeIcons[item.type] || 'file'" /></span>
+            <button class="row-main" type="button" :aria-expanded="viewState.expandedId === item.id" :title="resourceName(item)" @click="toggleDetails(item)">
+              <span class="row-title"><strong>{{ resourceName(item) }}</strong><em v-if="isStream(item)" class="chip">{{ typeLabel(item.type) }}</em><em v-if="item.live" class="chip live">直播</em></span>
+              <span class="row-meta">{{ resourceMeta(item) }}</span>
+            </button>
+            <span class="cell-resolution">{{ item.width && item.height ? `${item.width}×${item.height}` : '—' }}</span><span class="cell-duration">{{ item.duration ? formatDuration(item.duration) : '—' }}</span><span class="cell-size">{{ sizeText(item) }}</span>
+            <span class="cell-actions">
+              <button class="button sm" :class="isBlobCandidate(item) ? '' : 'primary-soft'" type="button" :disabled="connected === false" :aria-label="`${primaryLabel(item)}：${resourceName(item)}`" @click="runPrimary(item)"><SfIcon :name="isBlobCandidate(item) ? 'capture' : 'download'" /><span>{{ primaryLabel(item) }}</span></button>
+              <SfMenu :items="rowMenu(item)" :label="`更多操作：${resourceName(item)}`" @select="onRowMenu(item, $event)" />
+            </span>
+          </article>
+          <div v-if="!loading && !visible.length" class="empty-state"><span><SfIcon :name="resourceCandidates.length ? 'search' : 'radar-2'" :size="22" /></span><h3>{{ resourceCandidates.length ? '没有符合筛选条件的资源' : '等待发现媒体资源' }}</h3><p>{{ resourceCandidates.length ? '调整筛选条件后再试。' : '保持来源网页打开并播放视频，流萤会自动收集资源。' }}</p></div>
+        </div>
+      </div>
+      <aside v-if="expanded" class="resource-detail-pane" :aria-label="`资源详情：${resourceName(expanded)}`">
+        <header>
+          <button v-if="compact" class="icon-button" type="button" aria-label="返回资源列表" title="返回资源列表" @click="closeDetails"><SfIcon name="chevron-left" /></button>
+          <strong :title="resourceName(expanded)">{{ resourceName(expanded) }}</strong>
+          <button v-if="!compact" class="icon-button" type="button" aria-label="关闭详情" title="关闭详情" @click="closeDetails"><SfIcon name="x" /></button>
+        </header>
+        <template v-for="item in [expanded]" :key="item.id">
+          <div class="detail-body">
+            <div v-if="coverOnly" class="expanded-preview" :class="{ image: item.type === 'image' }">
+              <img v-if="coverUrl(item)" :src="coverUrl(item)" :alt="item.type === 'image' ? '资源预览' : '媒体封面'" @error="markImageFailed(coverUrl(item))">
+              <div v-else class="cover-placeholder"><SfIcon :name="typeIcons[item.type] || 'file'" :size="28" /><span>{{ isBlobCandidate(item) ? 'Blob 页面临时媒体，请使用缓存捕捉' : '暂无封面，可在工作区预览' }}</span></div>
+            </div>
+            <div v-else-if="!suspended" class="expanded-preview" :class="{ image: item.type === 'image' }">
+              <img v-if="item.type === 'image'" :src="item.url" alt="资源预览">
+              <img v-else-if="isBlobCandidate(item) && item.poster" :src="item.poster" alt="媒体封面">
+              <div v-else-if="isBlobCandidate(item)" class="blob-preview-status"><strong>Blob 页面临时媒体</strong><span>无法脱离来源页面直接预览，请使用缓存捕捉。</span></div>
+              <video v-else-if="['video','hls','dash'].includes(item.type)" :ref="setMediaElement" :controls="previewState === 'playing' || previewState === 'failed'" preload="auto" playsinline :poster="item.poster || undefined" @loadedmetadata="onMediaMetadata" @durationchange="onMediaMetadata" @loadeddata="onMediaData" @play="onMediaPlay" @pause="onMediaPause"></video>
+              <audio v-else-if="item.type === 'audio'" :ref="setMediaElement" controls preload="auto" @loadedmetadata="onMediaMetadata" @durationchange="onMediaMetadata" @loadeddata="onMediaData" @play="onMediaPlay" @pause="onMediaPause"></audio>
+              <div v-if="previewState === 'preparing' && item.type !== 'image' && !isBlobCandidate(item)" class="preview-status" :class="{ 'has-poster': item.poster }"><i></i><strong>正在准备封面与媒体信息</strong><span>只加载预览所需的少量数据</span></div>
+              <button v-if="(previewState === 'ready' || previewState === 'preparing' && item.poster) && item.type !== 'image' && !isBlobCandidate(item)" class="preview-play" type="button" @click="startPreview"><span><SfIcon name="player-play" :size="20" /></span><strong>播放预览</strong></button>
+              <div v-if="isBlobCandidate(item) && item.poster" class="blob-poster-note">Blob 页面临时媒体 · 请使用缓存捕捉</div>
+            </div>
+            <div class="detail-actions">
+              <button class="button primary" type="button" :disabled="connected === false" @click="runPrimary(item)"><SfIcon :name="isBlobCandidate(item) ? 'capture' : 'download'" /><span>{{ primaryLabel(item) }}</span></button>
+              <button v-if="isStream(item)" class="button" type="button" @click="$emit('parse', item)"><SfIcon name="adjustments-horizontal" /><span>详细解析</span></button>
+              <button v-if="coverOnly && item.type !== 'image' && !isBlobCandidate(item)" class="button" type="button" @click="$emit('inspect', item)"><SfIcon name="eye" /><span>在工作区预览</span></button>
+            </div>
+            <dl class="detail-grid"><div><dt>类型</dt><dd>{{ typeLabel(item.type) }}{{ item.live ? ' · 直播流' : '' }}</dd></div><div><dt>文件大小</dt><dd>{{ sizeText(item) }}</dd></div><div><dt>分辨率</dt><dd>{{ item.width && item.height ? `${item.width} × ${item.height}` : '未知' }}</dd></div><div><dt>媒体时长</dt><dd>{{ formatDuration(item.duration) }}</dd></div><div><dt>发现来源</dt><dd>{{ sourceLabel(item.source) }}</dd></div><div><dt>MIME</dt><dd>{{ item.mime || '未知' }}</dd></div></dl>
+            <div class="url-box"><span>资源地址</span><code>{{ item.url }}</code><button class="icon-button" type="button" aria-label="复制资源地址" title="复制资源地址" @click="copyUrl(item.url)"><SfIcon name="copy" /></button></div>
+            <div v-if="item.extraction" class="url-box"><span>规则提取 · {{ item.extraction.ruleId }} · {{ item.extraction.observed ? '已观察到目标请求' : '尚未观察到目标请求' }}</span><code>{{ item.extraction.originalUrl }}</code><small>来源信息仅用于追溯；提取候选不自动发送到外部工具。</small></div>
+            <p v-if="previewError" class="inline-error">{{ previewError }}</p>
+          </div>
+        </template>
+      </aside>
     </div>
   </section>
 </template>

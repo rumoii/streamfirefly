@@ -33,7 +33,6 @@ export interface ResourceViewState {
   minDuration: string;
   maxDuration: string;
   sortMode: "detected" | "size" | "duration";
-  collapsed: boolean;
   expandedId: string;
   revision: number;
 }

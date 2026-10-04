@@ -13,7 +13,7 @@ let currentContext: UiContext = {
   supported: true,
   paused: false,
   sniffingActive: true,
-  resourceViewState: { pattern: "", type: "all", minMb: "", maxMb: "", minDuration: "", maxDuration: "", sortMode: "detected", collapsed: false, expandedId: "", revision: 0 },
+  resourceViewState: { pattern: "", type: "all", minMb: "", maxMb: "", minDuration: "", maxDuration: "", sortMode: "detected", expandedId: "", revision: 0 },
   candidates: [{ id: "hls-1", url: "https://media.example/master.m3u8", type: "hls", sizeKind: "manifest", pageTitle: "测试 HLS" }]
 };
 
@@ -67,14 +67,14 @@ describe("sidebar surface", () => {
     expect(wrapper.find(".compact").exists()).toBe(true);
     expect(wrapper.get(".brand-logo").attributes("src")).toMatch(/^data:image\/png;base64,/);
     expect(wrapper.text()).toContain("快速下载");
-    expect(wrapper.text()).toContain("详细解析");
     expect(wrapper.text()).toContain("任务概览");
     expect(wrapper.text()).toContain("当前下载");
     expect(wrapper.text()).toContain("正在停止并保存");
     expect(wrapper.text()).toContain("LIVE");
     expect(wrapper.text()).toContain("活动任务 1 项");
 
-    await button(wrapper, "详细解析").trigger("click");
+    await wrapper.get('[aria-label="更多操作：测试 HLS"]').trigger("click"); await flushPromises();
+    await wrapper.findAll('[role="menuitem"]').find(item => item.text() === "详细解析")!.trigger("click");
     await button(wrapper, "设置").trigger("click");
     await button(wrapper, "展开工作区").trigger("click");
     await flushPromises();
@@ -82,7 +82,14 @@ describe("sidebar surface", () => {
     expect(sent).toContainEqual({ type: "workspace.open", view: "settings", candidateId: "", windowId: 1 });
     expect(sent).toContainEqual({ type: "workspace.open", view: "resources", candidateId: "", windowId: 1 });
 
-    const selection = wrapper.find(".resource-select input");
+    await wrapper.get(".row-main").trigger("click"); await flushPromises();
+    expect(wrapper.find(".resource-detail-pane .cover-placeholder").exists()).toBe(true);
+    expect(wrapper.find(".resource-detail-pane video").exists()).toBe(false);
+    await button(wrapper, "在工作区预览").trigger("click"); await flushPromises();
+    expect(sent).toContainEqual({ type: "workspace.open", view: "resources", candidateId: "hls-1", windowId: 1 });
+    await wrapper.get('[aria-label="返回资源列表"]').trigger("click"); await flushPromises();
+
+    const selection = wrapper.find(".resource-row .row-check input");
     await selection.setValue(true);
     await button(wrapper, "移除").trigger("click");
     await flushPromises();
@@ -91,7 +98,7 @@ describe("sidebar surface", () => {
   });
 
   it("rejects workspace actions on browser-internal pages", async () => {
-    currentContext = { sourceTabId: 9, sourceContextId: "", pageUrl: "about:addons", pageTitle: "扩展管理", favIconUrl: "", supported: false, paused: false, sniffingActive: false, resourceViewState: { pattern: "", type: "all", minMb: "", maxMb: "", minDuration: "", maxDuration: "", sortMode: "detected", collapsed: false, expandedId: "", revision: 0 }, candidates: [] };
+    currentContext = { sourceTabId: 9, sourceContextId: "", pageUrl: "about:addons", pageTitle: "扩展管理", favIconUrl: "", supported: false, paused: false, sniffingActive: false, resourceViewState: { pattern: "", type: "all", minMb: "", maxMb: "", minDuration: "", maxDuration: "", sortMode: "detected", expandedId: "", revision: 0 }, candidates: [] };
     const wrapper = mount(App, { global: { plugins: [createPinia()] } });
     await flushPromises();
 
@@ -103,7 +110,7 @@ describe("sidebar surface", () => {
   });
 
   it("renders the resource empty state without inventing a session", async () => {
-    currentContext = { sourceTabId: 7, sourceContextId: "context-empty", pageUrl: "https://media.example/empty", pageTitle: "空页面", favIconUrl: "", supported: true, paused: false, sniffingActive: true, resourceViewState: { pattern: "", type: "all", minMb: "", maxMb: "", minDuration: "", maxDuration: "", sortMode: "detected", collapsed: false, expandedId: "", revision: 0 }, candidates: [] };
+    currentContext = { sourceTabId: 7, sourceContextId: "context-empty", pageUrl: "https://media.example/empty", pageTitle: "空页面", favIconUrl: "", supported: true, paused: false, sniffingActive: true, resourceViewState: { pattern: "", type: "all", minMb: "", maxMb: "", minDuration: "", maxDuration: "", sortMode: "detected", expandedId: "", revision: 0 }, candidates: [] };
     const wrapper = mount(App, { global: { plugins: [createPinia()] } });
     await flushPromises();
     expect(wrapper.text()).toContain("等待发现媒体资源");

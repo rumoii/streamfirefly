@@ -1,0 +1,111 @@
+/* Design tokens: the only place colors, radii, spacing and type sizes are defined. */
+:root, :host {
+  color-scheme: light dark;
+  --sf-font: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  --sf-font-mono: "Cascadia Mono", "SF Mono", Consolas, ui-monospace, monospace;
+  --sf-text-xs: 11px;
+  --sf-text-sm: 12px;
+  --sf-text-md: 13px;
+  --sf-text-lg: 14px;
+  --sf-text-xl: 16px;
+  --sf-space-1: 4px;
+  --sf-space-2: 8px;
+  --sf-space-3: 12px;
+  --sf-space-4: 16px;
+  --sf-space-5: 24px;
+  --sf-radius-sm: 5px;
+  --sf-radius-md: 7px;
+  --sf-radius-lg: 10px;
+  --sf-radius-xl: 12px;
+  --sf-control-sm: 26px;
+  --sf-control-md: 30px;
+  --sf-duration: .14s;
+  --sf-ease: cubic-bezier(.2, .7, .3, 1);
+
+  --sf-brand-50: #edf8f5;
+  --sf-brand-100: #d3efe7;
+  --sf-brand-200: #a8dfd0;
+  --sf-brand-300: #75cab4;
+  --sf-brand-400: #4db89e;
+  --sf-brand-500: #36a990;
+  --sf-brand-600: #2a8b76;
+  --sf-brand-700: #236f5f;
+  --sf-brand-800: #1e594d;
+  --sf-brand-900: #1a4a40;
+
+  --sf-bg: #f4f6f7;
+  --sf-surface: #ffffff;
+  --sf-surface-2: #f8f9fa;
+  --sf-surface-3: #eff2f4;
+  --sf-hover: rgba(24, 39, 48, .05);
+  --sf-pressed: rgba(24, 39, 48, .09);
+  --sf-selected: #ebf7f3;
+  --sf-text: #1a2126;
+  --sf-text-2: #4e5961;
+  --sf-text-3: #7f8a93;
+  --sf-text-disabled: #b2bac1;
+  --sf-border: #e2e6e9;
+  --sf-border-strong: #cdd4d9;
+  --sf-accent: #2a8b76;
+  --sf-accent-hover: #236f5f;
+  --sf-accent-text: #237a68;
+  --sf-accent-soft: #e6f5f0;
+  --sf-on-accent: #ffffff;
+  --sf-focus: rgba(54, 169, 144, .45);
+  --sf-success: #1f8f63;
+  --sf-success-soft: #e5f6ee;
+  --sf-warning: #b4720b;
+  --sf-warning-soft: #fdf3e1;
+  --sf-danger: #d14343;
+  --sf-danger-hover: #b73636;
+  --sf-danger-soft: #fdecec;
+  --sf-info: #3474d4;
+  --sf-info-soft: #e9f1fd;
+  --sf-violet: #7c56e8;
+  --sf-violet-soft: #f0ebfd;
+  --sf-media-bg: #11181c;
+  --sf-overlay: rgba(16, 24, 30, .38);
+  --sf-shadow-sm: 0 1px 2px rgba(16, 24, 30, .06);
+  --sf-shadow-md: 0 6px 20px rgba(16, 24, 30, .12), 0 1px 3px rgba(16, 24, 30, .08);
+  --sf-shadow-lg: 0 18px 50px rgba(16, 24, 30, .2), 0 2px 8px rgba(16, 24, 30, .08);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root, :host {
+    --sf-bg: #0e1113;
+    --sf-surface: #16191c;
+    --sf-surface-2: #1b1f22;
+    --sf-surface-3: #23282c;
+    --sf-hover: rgba(235, 242, 245, .06);
+    --sf-pressed: rgba(235, 242, 245, .1);
+    --sf-selected: rgba(54, 169, 144, .16);
+    --sf-text: #e6ebee;
+    --sf-text-2: #a8b2b9;
+    --sf-text-3: #77828a;
+    --sf-text-disabled: #4d565c;
+    --sf-border: #2a3035;
+    --sf-border-strong: #3a4248;
+    --sf-accent: #3cb597;
+    --sf-accent-hover: #55c4a8;
+    --sf-accent-text: #5ccaad;
+    --sf-accent-soft: rgba(54, 169, 144, .16);
+    --sf-on-accent: #04130f;
+    --sf-focus: rgba(92, 202, 173, .5);
+    --sf-success: #4cc792;
+    --sf-success-soft: rgba(76, 199, 146, .14);
+    --sf-warning: #e5a33a;
+    --sf-warning-soft: rgba(229, 163, 58, .14);
+    --sf-danger: #f06c6c;
+    --sf-danger-hover: #f48a8a;
+    --sf-danger-soft: rgba(240, 108, 108, .14);
+    --sf-info: #6aa2f0;
+    --sf-info-soft: rgba(106, 162, 240, .14);
+    --sf-violet: #a68bf5;
+    --sf-violet-soft: rgba(166, 139, 245, .14);
+    --sf-media-bg: #050708;
+    --sf-overlay: rgba(0, 0, 0, .55);
+    --sf-shadow-sm: 0 1px 2px rgba(0, 0, 0, .4);
+    --sf-shadow-md: 0 8px 24px rgba(0, 0, 0, .45), 0 0 0 1px rgba(255, 255, 255, .04);
+    --sf-shadow-lg: 0 20px 56px rgba(0, 0, 0, .6), 0 0 0 1px rgba(255, 255, 255, .05);
+  }
+}

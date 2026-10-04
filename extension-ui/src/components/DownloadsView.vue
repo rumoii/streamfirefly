@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { vModalFocus } from "../modal-focus";
+import SfDialog from "../ui/SfDialog.vue";
 import { computed, reactive, ref } from "vue";
 import type { DownloadTask } from "../types";
 import { formatBytes, formatSpeed } from "../format";
@@ -64,7 +64,18 @@ function confirmResume() {
       </article>
       <div v-if="!visible.length" class="empty-state"><span>↓</span><h3>{{ scope === 'current' ? '当前页面还没有下载任务' : '暂无下载任务' }}</h3><p>从资源页选择媒体并开始下载后，任务会显示在这里。</p></div>
     </div>
-    <Transition name="fade"><div v-if="pendingDelete" class="dialog-backdrop" @click.self="pendingDelete = null"><section v-modal-focus="() => { pendingDelete = null; resumeTask = null; }" class="dialog" role="dialog" aria-modal="true"><div class="dialog-heading"><div><h2>{{ deleteStage === 'choice' ? '删除下载任务' : '再次确认删除' }}</h2><p>{{ pendingDelete.title }}</p></div><button class="icon-button" @click="pendingDelete = null">×</button></div><template v-if="deleteStage === 'choice'"><div class="delete-choices"><button @click="choose(false)"><strong>仅删除任务记录</strong><span>保留已经下载到本地的文件</span></button><button class="danger-choice" @click="choose(true)"><strong>删除记录和本地文件</strong><span>同时删除该任务产生的视频及字幕文件</span></button></div></template><template v-else><div class="confirm-warning"><b>!</b><div><strong>{{ deleteFile ? '确认永久删除任务和全部本地文件？' : '确认只删除任务记录？' }}</strong><p>{{ deleteFile ? '此操作无法撤销。主视频和附属字幕文件都会被删除。' : '本地文件将继续保留。' }}</p></div></div><div class="dialog-actions"><button class="button" @click="deleteStage = 'choice'">返回</button><button class="button danger-solid" @click="confirmDelete">确认删除</button></div></template></section></div></Transition>
-    <Transition name="fade"><div v-if="resumeTask" class="dialog-backdrop" @click.self="resumeTask = null"><section v-modal-focus="() => { pendingDelete = null; resumeTask = null; }" class="dialog" role="dialog" aria-modal="true"><div class="dialog-heading"><div><h2>重新输入 AES-128 密钥</h2><p>{{ resumeTask.title }}</p></div><button class="icon-button" @click="resumeTask = null">×</button></div><div class="resume-key-form"><label><span>密钥格式</span><select v-model="resumeKey.kind" class="control"><option value="hex">Hex</option><option value="base64">Base64</option><option value="url">密钥 URL</option></select></label><label><span>{{ resumeKey.kind === 'url' ? '密钥地址' : '密钥内容' }}</span><input v-model="resumeKey.value" class="control" autocomplete="off"></label><label><span>自定义 IV（可选）</span><input v-model="resumeKey.iv" class="control" autocomplete="off" placeholder="32 位十六进制"></label><p v-if="resumeKeyError" class="inline-error">{{ resumeKeyError }}</p><p class="privacy-hint">密钥只用于本次恢复，不会写入任务记录或检查点。</p></div><div class="dialog-actions"><button class="button" @click="resumeTask = null">取消</button><button class="button primary" :disabled="Boolean(resumeKeyError)" @click="confirmResume">验证并继续</button></div></section></div></Transition>
+    <Transition name="fade">
+      <SfDialog v-if="pendingDelete" :title="deleteStage === 'choice' ? '删除下载任务' : '再次确认删除'" :description="pendingDelete.title" size="sm" @close="pendingDelete = null">
+        <div v-if="deleteStage === 'choice'" class="delete-choices"><button @click="choose(false)"><strong>仅删除任务记录</strong><span>保留已经下载到本地的文件</span></button><button class="danger-choice" @click="choose(true)"><strong>删除记录和本地文件</strong><span>同时删除该任务产生的视频及字幕文件</span></button></div>
+        <div v-else class="confirm-warning"><b>!</b><div><strong>{{ deleteFile ? '确认永久删除任务和全部本地文件？' : '确认只删除任务记录？' }}</strong><p>{{ deleteFile ? '此操作无法撤销。主视频和附属字幕文件都会被删除。' : '本地文件将继续保留。' }}</p></div></div>
+        <template v-if="deleteStage === 'confirm'" #footer><button class="button" @click="deleteStage = 'choice'">返回</button><button class="button danger-solid" @click="confirmDelete">确认删除</button></template>
+      </SfDialog>
+    </Transition>
+    <Transition name="fade">
+      <SfDialog v-if="resumeTask" title="重新输入 AES-128 密钥" :description="resumeTask.title" @close="resumeTask = null">
+        <div class="resume-key-form"><label><span>密钥格式</span><select v-model="resumeKey.kind" class="control"><option value="hex">Hex</option><option value="base64">Base64</option><option value="url">密钥 URL</option></select></label><label><span>{{ resumeKey.kind === 'url' ? '密钥地址' : '密钥内容' }}</span><input v-model="resumeKey.value" class="control" autocomplete="off"></label><label><span>自定义 IV（可选）</span><input v-model="resumeKey.iv" class="control" autocomplete="off" placeholder="32 位十六进制"></label><p v-if="resumeKeyError" class="inline-error">{{ resumeKeyError }}</p><p class="privacy-hint">密钥只用于本次恢复，不会写入任务记录或检查点。</p></div>
+        <template #footer><button class="button" @click="resumeTask = null">取消</button><button class="button primary" :disabled="Boolean(resumeKeyError)" @click="confirmResume">验证并继续</button></template>
+      </SfDialog>
+    </Transition>
   </section>
 </template>

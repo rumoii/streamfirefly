@@ -25,6 +25,11 @@ const server = http.createServer((request, response) => {
     response.setHeader('Content-Type', 'image/svg+xml');
     response.end('<svg xmlns="http://www.w3.org/2000/svg" width="720" height="405"><rect width="720" height="405" fill="#287a69"/><circle cx="520" cy="110" r="130" fill="#36a990"/><text x="48" y="240" font-family="sans-serif" font-size="44" fill="white">StreamFirefly preview fixture</text></svg>'); return;
   }
+  if (url.pathname.startsWith('/media/')) {
+    response.setHeader('Content-Type', 'video/mp4');
+    response.end();
+    return;
+  }
   if (url.pathname === '/workspace.js') {
     response.setHeader('Content-Type', 'application/javascript');
     response.end(fs.readFileSync(path.join(root, 'extension/dist/workspace.js')));
@@ -52,7 +57,7 @@ try {
   page.on('request', request => { if (request.url().startsWith(origin)) assetRequests.push(new URL(request.url()).pathname); });
   await page.route('**/*', route => route.request().url().startsWith(origin) ? route.continue() : route.abort());
   await page.addInitScript(({ origin }) => {
-    let view = { pattern: '', type: 'all', minMb: '', maxMb: '', minDuration: '', maxDuration: '', sortMode: 'detected', collapsed: false, expandedId: '', revision: 0 };
+    let view = { pattern: '', type: 'all', minMb: '', maxMb: '', minDuration: '', maxDuration: '', sortMode: 'detected', expandedId: '', revision: 0 };
     const candidates = [{ id: 'one', title: '本地视频一', type: 'video', url: origin + '/one.mp4', duration: 30, size: 1024 }, { id: 'two', title: '本地视频二', type: 'video', url: origin + '/two.mp4', duration: 120, size: 2048 }];
     const tasks = [];
     const stored = {};
@@ -108,8 +113,6 @@ try {
   assert.equal(await page.getByRole('button', { name: '批量下载', exact: true }).isDisabled(), true);
   await page.getByText('当前来源 2 项 · 活动任务 2 项', { exact: true }).waitFor();
   assert.equal(await page.locator('.overview-list article').count(), 2);
-  await page.getByRole('button', { name: '收起资源', exact: true }).click();
-  await page.locator('.resource-panel-content').waitFor({ state: 'hidden' });
   await page.screenshot({ path: path.join(output, 'disconnected-retains-tasks.png') });
   assert.equal(await page.evaluate(() => window.__uiFixture.tasks.length), 2);
   await page.getByRole('button', { name: '重新连接', exact: true }).evaluate(element => {
@@ -130,8 +133,8 @@ try {
   await workspacePage.route('**/*', route => route.request().url().startsWith(origin) ? route.continue() : route.abort());
   await workspacePage.addInitScript(() => {
     const listeners = new Set();
-    const view = { pattern: '', type: 'all', minMb: '', maxMb: '', minDuration: '', maxDuration: '', sortMode: 'detected', collapsed: false, expandedId: '', revision: 0 };
-    const candidates = Array.from({ length: 64 }, (_, index) => ({ id: 'fixture-' + index, title: index === 0 ? '封面图片' : '媒体资源 ' + String(index).padStart(2, '0'), pageTitle: '注入工作区夹具', url: location.origin + (index === 0 ? '/poster.svg' : '/media/resource-' + index + '.mp4'), type: index === 0 ? 'image' : 'video', width: 1280, height: 720, duration: 126, size: 24 * 1024 * 1024, source: 'network' }));
+    const view = { pattern: '', type: 'all', minMb: '', maxMb: '', minDuration: '', maxDuration: '', sortMode: 'detected', expandedId: '', revision: 0 };
+    const candidates = Array.from({ length: 64 }, (_, index) => ({ id: 'fixture-' + index, title: index === 0 ? '封面图片' : '媒体资源 ' + String(index).padStart(2, '0'), pageTitle: '注入工作区夹具', url: location.origin + (index === 0 ? '/poster.svg' : '/media/resource-' + index + '.mp4'), type: index === 0 ? 'image' : 'video', poster: index % 3 === 1 ? location.origin + '/poster.svg' : undefined, width: 1280, height: 720, duration: 126, size: 24 * 1024 * 1024, source: 'network' }));
     const stored = {};
     const context = { sourceContextId: 'workspace-page', sourceTabId: 2, pageUrl: location.href, pageTitle: '注入工作区夹具', favIconUrl: '', supported: true, paused: false, sniffingActive: true, resourceViewState: view, candidates };
     const tasks = [{ id: 'image-task', title: '测试图片', state: 'succeeded', progress: 100, source_context_id: 'workspace-page', mime: 'image/jpeg', output: 'C:\\Downloads\\photo.jpg', outputs: [{ kind: 'media', path: 'C:\\Downloads\\photo.jpg', state: 'succeeded' }] }];
@@ -165,7 +168,26 @@ try {
   assert.equal(Math.round((await frame.boundingBox()).width), 420);
   await workspacePage.locator('#host-action').click();
   assert.equal(await workspacePage.locator('#host-action').getAttribute('data-clicked'), 'true');
+  await workspace.locator('.resource-row .type-tile.thumb img').first().waitFor();
+  assert.equal(await workspace.locator('.resource-row .type-tile.thumb img').evaluateAll(images => Promise.all(images.slice(0, 3).map(image => image.decode().then(() => image.naturalWidth > 0)))).then(values => values.every(Boolean)), true);
   await workspacePage.screenshot({ path: path.join(output, 'floating-panel.png') });
+  await workspace.locator('.row-main').nth(1).click();
+  await workspace.locator('.resource-detail-pane .expanded-preview video[poster$="/poster.svg"]').waitFor();
+  assert.equal(await workspace.locator('.resource-detail-pane').getByRole('button', { name: '在工作区预览', exact: true }).count(), 0);
+  assert.equal(await frame.getAttribute('data-display-mode'), 'panel', 'panel details stay inside the panel');
+  await workspacePage.screenshot({ path: path.join(output, 'floating-panel-detail.png') });
+  await workspace.getByRole('button', { name: '返回资源列表', exact: true }).click();
+  await workspace.getByRole('navigation', { name: '流萤功能' }).getByRole('button', { name: /^下载/ }).click();
+  await workspace.getByText('测试图片', { exact: true }).waitFor();
+  assert.equal(await frame.getAttribute('data-display-mode'), 'panel', 'panel shows downloads without expanding');
+  await workspace.getByRole('navigation', { name: '流萤功能' }).getByRole('button', { name: /^资源/ }).click();
+  await workspace.getByRole('button', { name: '更多筛选', exact: true }).click();
+  await workspace.getByRole('spinbutton', { name: '最短时长（秒）' }).waitFor();
+  await workspace.locator('[data-sf-popover]').evaluate(element => Promise.all(element.getAnimations().map(animation => animation.finished)));
+  await workspacePage.screenshot({ path: path.join(output, 'floating-panel-filters.png') });
+  await workspacePage.keyboard.press('Escape');
+  await workspace.getByRole('spinbutton', { name: '最短时长（秒）' }).waitFor({ state: 'hidden' });
+  assert.equal(await frame.getAttribute('data-display-mode'), 'panel', 'Escape closes the popover before the window');
   const titlebar = workspace.locator('.floating-titlebar');
   let box = await titlebar.boundingBox();
   await workspacePage.mouse.move(box.x + 150, box.y + 24); await workspacePage.mouse.down(); await workspacePage.mouse.move(box.x - 100, box.y + 120, { steps: 6 }); await workspacePage.mouse.up();
@@ -180,7 +202,7 @@ try {
   const workRect = await frame.boundingBox();
   assert.equal(Math.round(workRect.width), 1120);
   assert.equal(await workspacePage.evaluate(() => document.documentElement.style.overflow), hostBefore.overflow);
-  const firstSelect = workspace.locator('.resource-select input').first(); await firstSelect.check();
+  const firstSelect = workspace.locator('.resource-row .row-check input').first(); await firstSelect.check();
   const resourceScroll = workspace.locator('.resource-scroll'); await resourceScroll.evaluate(element => { element.scrollTop = 150; });
   await workspacePage.screenshot({ path: path.join(output, 'floating-workspace.png') });
   await workspace.getByRole('button', { name: '最大化工作区', exact: true }).click();
@@ -197,11 +219,11 @@ try {
   assert.equal(await frame.getAttribute('data-display-mode'), 'workspace');
   assert.equal(await firstSelect.isChecked(), true);
   await resourceScroll.evaluate(element => { element.scrollTop = 0; });
-  await workspace.getByRole('button', { name: '详情', exact: true }).first().click();
+  await workspace.locator('.row-main').first().click();
   await workspace.locator('.resource-detail-pane img').waitFor();
   assert.equal(await resourceScroll.isVisible(), true, 'wide workspace keeps the list beside details');
   await workspacePage.screenshot({ path: path.join(output, 'floating-details.png') });
-  await workspace.getByRole('button', { name: '返回列表', exact: true }).click();
+  await workspace.getByRole('button', { name: '关闭详情', exact: true }).click();
   const viewports = [{ width: 1366, height: 768 }, { width: 1920, height: 1080 }, { width: 2560, height: 1440 }, { width: 430, height: 640 }];
   for (const viewport of viewports) {
     await workspacePage.setViewportSize(viewport);
@@ -217,6 +239,14 @@ try {
   await workspace.getByText('测试图片', { exact: true }).click();
   await workspace.locator('.downloads-page').getByText('图片', { exact: true }).waitFor();
   await workspacePage.screenshot({ path: path.join(output, 'injected-workspace-image-task.png') });
+  await workspacePage.emulateMedia({ colorScheme: 'dark' });
+  await workspace.getByRole('navigation', { name: '流萤功能' }).getByRole('button', { name: /^资源/ }).click();
+  await workspace.locator('.row-main').first().click();
+  await workspace.locator('.resource-detail-pane img').waitFor();
+  assert.notEqual(await frame.evaluate(element => getComputedStyle(element).backgroundColor), 'rgb(255, 255, 255)', 'dark scheme switches surface tokens');
+  await workspacePage.screenshot({ path: path.join(output, 'floating-workspace-dark.png') });
+  await workspace.getByRole('button', { name: '关闭详情', exact: true }).click();
+  await workspacePage.emulateMedia({ colorScheme: 'light' });
   const beforeClose = await workspacePage.evaluate(() => ({ width: document.documentElement.clientWidth, overflow: document.documentElement.style.overflow, bodyOverflow: document.body.style.overflow }));
   await workspace.getByRole('button', { name: '关闭流萤', exact: true }).click();
   await workspacePage.locator('#streamfirefly-workspace-host').waitFor({ state: 'detached' });

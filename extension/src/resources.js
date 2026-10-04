@@ -20,7 +20,7 @@ const recentRequestContexts = new Map();
 function stateKey(tabId) { return `${STATE_PREFIX}${tabId}`; }
 
 
-function defaultResourceViewState() { return { pattern: "", type: "all", minMb: "", maxMb: "", minDuration: "", maxDuration: "", sortMode: normalizeSortMode(settings.get().candidateSort), collapsed: false, expandedId: "", revision: 0 }; }
+function defaultResourceViewState() { return { pattern: "", type: "all", minMb: "", maxMb: "", minDuration: "", maxDuration: "", sortMode: normalizeSortMode(settings.get().candidateSort), expandedId: "", revision: 0 }; }
 
 function normalizeResourceViewState(value) {
   const input = value && typeof value === "object" ? value : {};
@@ -30,7 +30,7 @@ function normalizeResourceViewState(value) {
     minMb: normalizeSizeFilter(input.minMb), maxMb: normalizeSizeFilter(input.maxMb),
     minDuration: normalizeSizeFilter(input.minDuration), maxDuration: normalizeSizeFilter(input.maxDuration),
     sortMode: normalizeSortMode(input.sortMode ?? settings.get().candidateSort),
-    collapsed: Boolean(input.collapsed), expandedId: typeof input.expandedId === "string" ? input.expandedId.slice(0, 16384) : "",
+    expandedId: typeof input.expandedId === "string" ? input.expandedId.slice(0, 16384) : "",
     revision: Number.isInteger(input.revision) && input.revision >= 0 ? input.revision : 0
   };
 }
@@ -311,7 +311,7 @@ async function patchResourceViewState(tabId, sourceContextId, patch) {
     if (!sourceContextId || sourceContextId !== state.sourceContextId) return { ok: false, error: "resource_view_context_stale" };
     const current = normalizeResourceViewState(state.resourceViewState);
     const allowed = {};
-    for (const key of ["pattern", "type", "minMb", "maxMb", "minDuration", "maxDuration", "sortMode", "collapsed", "expandedId"]) if (Object.prototype.hasOwnProperty.call(patch || {}, key)) allowed[key] = patch[key];
+    for (const key of ["pattern", "type", "minMb", "maxMb", "minDuration", "maxDuration", "sortMode", "expandedId"]) if (Object.prototype.hasOwnProperty.call(patch || {}, key)) allowed[key] = patch[key];
     const next = normalizeResourceViewState({ ...current, ...allowed, revision: current.revision + 1 });
     if (next.expandedId && !state.candidates.has(next.expandedId)) next.expandedId = "";
     state.resourceViewState = next;

@@ -1,4 +1,5 @@
 import type { ObjectDirective } from "vue";
+import { hasOpenPopover } from "./ui/popover";
 
 const cleanup = new WeakMap<HTMLElement, () => void>();
 function activeElement(root: Document | ShadowRoot = document): Element | null {
@@ -16,6 +17,7 @@ export const vModalFocus: ObjectDirective<HTMLElement, () => void> = {
       const root = element.getRootNode() as Document | ShadowRoot;
       const dialogs = root.querySelectorAll('[role="dialog"]');
       if (dialogs[dialogs.length - 1] !== element) return;
+      if (event.key === "Escape" && hasOpenPopover(root)) return;
       if (event.key === "Escape") { event.preventDefault(); event.stopImmediatePropagation(); binding.value(); }
       if (event.key !== "Tab") return;
       const items = focusable();

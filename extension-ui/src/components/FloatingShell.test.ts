@@ -2,7 +2,7 @@ import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import FloatingShell from "./FloatingShell.vue";
 const { storage } = vi.hoisted(() => ({ storage: { get: vi.fn(), set: vi.fn() } }));
 vi.mock("../api", () => ({ extensionApi: () => ({ storage: { local: storage } }) }));
-const props = () => ({ count: 12, paused: false, sniffing: true, loading: false, beforeLeave: vi.fn(() => true) });
+const props = () => ({ count: 12, paused: false, sniffing: true, loading: false, canExpand: true, beforeLeave: vi.fn(() => true) });
 enableAutoUnmount(afterEach);
 beforeEach(() => { storage.get.mockResolvedValue({}); storage.set.mockResolvedValue(undefined); });
 afterEach(() => { document.documentElement.style.overflow = ""; document.body.style.overflow = ""; vi.restoreAllMocks(); });
@@ -55,6 +55,19 @@ describe("floating shell transitions", () => {
     wrapper.vm.setMode("collapsed");
     expect(wrapper.vm.mode).toBe("workspace");
     wrapper.unmount();
+  });
+  it("leaves Escape to an open popover and switches panel and workspace from the titlebar", async () => {
+    const wrapper = mount(FloatingShell, { props: props(), attachTo: document.body });
+    await wrapper.get('[aria-label="展开工作区"]').trigger("click");
+    expect(wrapper.vm.mode).toBe("workspace");
+    const popover = document.createElement("div"); popover.setAttribute("data-sf-popover", ""); wrapper.get("section").element.append(popover);
+    await wrapper.get("section").trigger("keydown", { key: "Escape" });
+    expect(wrapper.vm.mode).toBe("workspace");
+    popover.remove();
+    await wrapper.get('[aria-label="返回面板"]').trigger("click");
+    expect(wrapper.vm.mode).toBe("panel");
+    await wrapper.setProps({ canExpand: false });
+    expect(wrapper.get('[aria-label="展开工作区"]').attributes("disabled")).toBeDefined();
   });
   it("loads saved geometry but tolerates inaccessible storage", async () => {
     storage.get.mockResolvedValue({ floatingUiLayout: { version: 1, panel: { x: 24, y: 36, width: 380, height: 400 }, launcher: { edge: "left", yRatio: .2 } } });

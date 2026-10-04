@@ -33,11 +33,11 @@ describe("resource tool navigation", () => {
     send.mockReturnValue(new Promise(done => { resolve = done; }));
     const wrapper = mount(ResourceTools, options);
     await wrapper.get("button").trigger("click");
-    expect(wrapper.get("button").text()).toBe("正在打开…");
+    expect(wrapper.get("button").attributes("aria-label")).toBe("正在打开缓存捕捉…");
     await wrapper.setProps({ context: { ...context, sourceContextId: "next" } });
     resolve({ ok: false, error: "旧页面已关闭" }); await flushPromises();
     expect(wrapper.find('[role="alert"]').exists()).toBe(false);
-    expect(wrapper.get("button").text()).toBe("缓存捕捉");
+    expect(wrapper.get("button").attributes("aria-label")).toBe("缓存捕捉");
     wrapper.unmount();
   });
 });

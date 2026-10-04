@@ -41,7 +41,7 @@ vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { cal
 
 const { default: ResourcesView } = await import("./ResourcesView.vue");
 
-const defaultState = (expandedId = "hls-1"): ResourceViewState => ({ pattern: "", type: "all", minMb: "", maxMb: "", minDuration: "", maxDuration: "", sortMode: "detected", collapsed: false, expandedId, revision: 0 });
+const defaultState = (expandedId = "hls-1"): ResourceViewState => ({ pattern: "", type: "all", minMb: "", maxMb: "", minDuration: "", maxDuration: "", sortMode: "detected", expandedId, revision: 0 });
 const candidate = { id: "hls-1", url: "https://media.example/master.m3u8", type: "hls", sizeKind: "manifest", pageTitle: "测试 HLS", requestHeaders: { Referer: "https://media.example/page" } };
 
 describe("resource preview lifecycle", () => {
@@ -57,8 +57,8 @@ describe("resource preview lifecycle", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  it("does not load HLS for the compact resource list", async () => {
-    const wrapper = mount(ResourcesView, { props: { candidates: [candidate], loading: false, viewState: defaultState(), compact: true } });
+  it("does not load HLS for the cover-only sidebar list", async () => {
+    const wrapper = mount(ResourcesView, { props: { candidates: [candidate], loading: false, viewState: defaultState(), compact: true, coverOnly: true } });
     await flushPromises();
 
     expect(hlsMock.loadCount).toBe(0);
@@ -75,14 +75,15 @@ describe("resource preview lifecycle", () => {
 
     expect(wrapper.find("video").exists()).toBe(false);
     expect(wrapper.find(".preview-status").exists()).toBe(false);
-    expect(wrapper.find(".download-more").exists()).toBe(false);
     expect(sent.some(message => message.type === "preview.headers.apply")).toBe(false);
     const capture = wrapper.findAll("button").find(button => button.text() === "缓存捕捉")!;
     await capture.trigger("click");
     expect(wrapper.emitted("captureBlob")?.at(-1)).toEqual([blob]);
+    await wrapper.get('[aria-label^="更多操作"]').trigger("click"); await flushPromises();
+    expect(wrapper.findAll('[role="menuitem"]').map(item => item.text())).not.toContain("发送到外部工具…");
 
-    await wrapper.find(".resource-select input").setValue(true);
-    const batch = wrapper.findAll(".batch-bar button");
+    await wrapper.find(".resource-row .row-check input").setValue(true);
+    const batch = wrapper.findAll(".selection-bar button");
     expect(batch.find(button => button.text() === "发送到外部工具…")!.attributes("disabled")).toBeDefined();
     expect(batch.find(button => button.text() === "批量下载")!.attributes("disabled")).toBeDefined();
     expect(wrapper.text()).toContain("Blob 需单独缓存捕捉");
@@ -140,36 +141,108 @@ describe("resource preview lifecycle", () => {
     second.unmount();
   });
 
-  it("keeps advanced filters effective while collapsed and clears them explicitly", async () => {
-    const wrapper = mount(ResourcesView, { props: { candidates: [candidate], loading: false, viewState: { ...defaultState(""), minDuration: "60" } } });
+  it("keeps advanced filters effective while the filter popover is closed and clears them explicitly", async () => {
+    const wrapper = mount(ResourcesView, { props: { candidates: [candidate], loading: false, viewState: { ...defaultState(""), minDuration: "60" } }, attachTo: document.body });
+    const filters = () => wrapper.get('[aria-label="更多筛选"]');
     expect(wrapper.find('[aria-label="最短时长（秒）"]').exists()).toBe(false);
-    expect(wrapper.get(".more-filters").text()).toContain("1");
-    await wrapper.get(".more-filters").trigger("click");
+    expect(filters().text()).toContain("1");
+    await filters().trigger("click"); await flushPromises();
     expect((wrapper.get('[aria-label="最短时长（秒）"]').element as HTMLInputElement).value).toBe("60");
-    await wrapper.get(".more-filters").trigger("click");
+    await filters().trigger("click"); await flushPromises();
+    expect(wrapper.find('[aria-label="最短时长（秒）"]').exists()).toBe(false);
     expect(wrapper.emitted("updateViewState")).toBeUndefined();
-    await wrapper.get(".more-filters").trigger("click");
-    await wrapper.findAll("button").find(button => button.text() === "清除高级筛选")!.trigger("click");
+    await filters().trigger("click"); await flushPromises();
+    await wrapper.findAll("button").find(button => button.text() === "清除大小与时长条件")!.trigger("click");
     expect(wrapper.emitted("updateViewState")?.at(-1)).toEqual([{ minMb: "", maxMb: "", minDuration: "", maxDuration: "" }]);
+    wrapper.unmount();
+  });
+
+  it("closes an open popover on Escape without reaching outer handlers", async () => {
+    const wrapper = mount(ResourcesView, { props: { candidates: [candidate], loading: false, viewState: defaultState("") }, attachTo: document.body });
+    await wrapper.get('[aria-label^="更多操作"]').trigger("click"); await flushPromises();
+    expect(document.querySelector("[data-sf-popover]")).not.toBeNull();
+    const outer = vi.fn();
+    window.addEventListener("keydown", outer);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    await flushPromises();
+    window.removeEventListener("keydown", outer);
+    expect(document.querySelector("[data-sf-popover]")).toBeNull();
+    expect(outer).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it("chooses a type from the keyboard-operable select in the compact list", async () => {
+    const wrapper = mount(ResourcesView, { props: { candidates: [candidate], loading: false, viewState: defaultState(""), compact: true }, attachTo: document.body });
+    const trigger = wrapper.get('[aria-label="资源类型"]');
+    await trigger.trigger("keydown", { key: "ArrowDown" }); await flushPromises();
+    expect(trigger.attributes("aria-expanded")).toBe("true");
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown" }));
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+    await flushPromises();
+    expect(wrapper.emitted("updateViewState")?.at(-1)).toEqual([{ type: "video" }]);
+    expect(trigger.attributes("aria-expanded")).toBe("false");
+    wrapper.unmount();
+  });
+
+  it("opens details with a cover preview inside the compact panel", async () => {
+    const withPoster = { ...candidate, poster: "https://media.example/poster.jpg" };
+    const wrapper = mount(ResourcesView, { props: { candidates: [withPoster], loading: false, viewState: defaultState(""), compact: true } });
+    await wrapper.get(".row-main").trigger("click");
+    expect(wrapper.emitted("updateViewState")?.at(-1)).toEqual([{ expandedId: candidate.id }]);
+    await wrapper.setProps({ viewState: { ...defaultState(), revision: 1 } }); await flushPromises();
+    expect(wrapper.get(".resource-detail-pane video").attributes("poster")).toBe("https://media.example/poster.jpg");
+    expect(hlsMock.instances.at(-1)?.source).toBe(candidate.url);
+    expect(wrapper.get(".resource-detail-pane").text()).not.toContain("在工作区预览");
+    expect(wrapper.emitted("inspect")).toBeUndefined();
+    await wrapper.get('[aria-label="返回资源列表"]').trigger("click");
+    expect(wrapper.emitted("updateViewState")?.at(-1)).toEqual([{ expandedId: "" }]);
+    wrapper.unmount();
+  });
+
+  it("shows only known covers in the cover-only sidebar and offers the workspace preview", async () => {
+    const withPoster = { ...candidate, poster: "https://media.example/poster.jpg" };
+    const wrapper = mount(ResourcesView, { props: { candidates: [withPoster], loading: false, viewState: defaultState(), compact: true, coverOnly: true } });
+    await flushPromises();
+    expect(wrapper.find("video").exists()).toBe(false);
+    expect(sent.some(message => message.type === "preview.headers.apply")).toBe(false);
+    const cover = wrapper.get('.expanded-preview img[alt="媒体封面"]');
+    expect(cover.attributes("src")).toBe("https://media.example/poster.jpg");
+    await cover.trigger("error");
+    expect(wrapper.get(".cover-placeholder").text()).toContain("暂无封面");
+    const inspect = wrapper.findAll(".detail-actions button").find(button => button.text() === "在工作区预览");
+    await inspect!.trigger("click");
+    expect(wrapper.emitted("inspect")?.[0]?.[0]).toMatchObject({ id: candidate.id });
+    wrapper.unmount();
+  });
+
+  it("shows known covers as row thumbnails and falls back to the type icon", async () => {
+    const items = [{ ...candidate, poster: "https://media.example/poster.jpg" }, { ...candidate, id: "plain", url: "https://media.example/plain.mp4", type: "video", pageTitle: "无封面视频" }];
+    const wrapper = mount(ResourcesView, { props: { candidates: items, loading: false, viewState: defaultState(""), compact: true } });
+    const tiles = wrapper.findAll(".resource-row .type-tile");
+    expect(tiles[0].classes()).toContain("thumb");
+    expect(tiles[0].get("img").attributes("src")).toBe("https://media.example/poster.jpg");
+    expect(tiles[1].find("img").exists()).toBe(false);
+    await tiles[0].get("img").trigger("error");
+    expect(wrapper.findAll(".resource-row .type-tile")[0].find("img").exists()).toBe(false);
+    expect(wrapper.findAll(".resource-row .type-tile")[0].find("svg").exists()).toBe(true);
     wrapper.unmount();
   });
 
   it("dispatches only selected visible resources without requiring the native host", async () => {
     const second = { ...candidate, id: "second", title: "另一个资源" };
-    const wrapper = mount(ResourcesView, { props: { candidates: [candidate, second], loading: false, viewState: defaultState(""), connected: false, externalEnabled: true } });
-    await wrapper.findAll('.resource-select input')[0].setValue(true);
-    const batch = wrapper.findAll('.batch-bar button');
+    const wrapper = mount(ResourcesView, { props: { candidates: [candidate, second], loading: false, viewState: defaultState(""), connected: false, externalEnabled: true }, attachTo: document.body });
+    await wrapper.findAll('.resource-row .row-check input')[0].setValue(true);
+    const batch = wrapper.findAll('.selection-bar button');
     expect(batch.find(button => button.text() === "批量下载")!.attributes("disabled")).toBeDefined();
     await batch.find(button => button.text() === "发送到外部工具…")!.trigger("click");
     expect(wrapper.emitted("externalDownload")?.at(-1)).toEqual([[candidate]]);
     await wrapper.setProps({ candidates: [second] });
-    expect(batch.find(button => button.text() === "发送到外部工具…")!.attributes("disabled")).toBeDefined();
-    await wrapper.get(".download-more").trigger("click");
-    const choices = wrapper.findAll('[role="dialog"] .delete-choices button');
-    expect(choices[0].attributes("disabled")).toBeDefined();
-    await choices[1].trigger("click");
+    expect(wrapper.find(".selection-bar").exists()).toBe(false);
+    expect(wrapper.get('[aria-label="下载：另一个资源"]').attributes("disabled")).toBeDefined();
+    await wrapper.get('[aria-label="更多操作：另一个资源"]').trigger("click"); await flushPromises();
+    await wrapper.findAll('[role="menuitem"]').find(item => item.text() === "发送到外部工具…")!.trigger("click");
     expect(wrapper.emitted("externalDownload")?.at(-1)).toEqual([[second]]);
-    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+    expect(wrapper.find('[role="menu"]').exists()).toBe(false);
     wrapper.unmount();
   });
 
@@ -232,22 +305,24 @@ describe("resource preview lifecycle", () => {
     wrapper.unmount();
   });
 
-  it("stops preview when suspended or compact while retaining resource selection", async () => {
+  it("stops preview when suspended or cover-only while retaining resource selection", async () => {
     const wrapper = mount(ResourcesView, { props: { candidates: [candidate], loading: false, viewState: defaultState() } });
     await flushPromises();
     const first = hlsMock.instances.at(-1);
     expect(first).toBeDefined();
-    await wrapper.get('.resource-select input').setValue(true);
+    await wrapper.get('.resource-row .row-check input').setValue(true);
     await wrapper.setProps({ suspended: true }); await flushPromises();
     expect(first.destroyed).toBe(true);
     expect(wrapper.find('video').exists()).toBe(false);
     await wrapper.setProps({ suspended: false }); await flushPromises();
     const second = hlsMock.instances.at(-1);
     expect(second).not.toBe(first);
-    expect((wrapper.get('.resource-select input').element as HTMLInputElement).checked).toBe(true);
+    expect((wrapper.get('.resource-row .row-check input').element as HTMLInputElement).checked).toBe(true);
     await wrapper.setProps({ compact: true }); await flushPromises();
+    expect(second.destroyed).toBe(false);
+    await wrapper.setProps({ coverOnly: true }); await flushPromises();
     expect(second.destroyed).toBe(true);
-    expect((wrapper.get('.resource-select input').element as HTMLInputElement).checked).toBe(true);
+    expect((wrapper.get('.resource-row .row-check input').element as HTMLInputElement).checked).toBe(true);
     wrapper.unmount();
   });
 });

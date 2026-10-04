@@ -3,8 +3,10 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { extensionApi } from "../api";
 import { clampRect, defaultLayout, initialRect, LAYOUT_KEY, parseLayout, type DisplayMode, type Rect, type WindowMode } from "../floating-layout";
 import logoUrl from "../../../extension/icon48.png?inline";
+import SfIcon from "../ui/SfIcon.vue";
+import { hasOpenPopover } from "../ui/popover";
 
-const props = defineProps<{ count: number; paused: boolean; sniffing: boolean; loading: boolean; beforeLeave: () => boolean }>();
+const props = defineProps<{ count: number; paused: boolean; sniffing: boolean; loading: boolean; canExpand: boolean; beforeLeave: () => boolean }>();
 const emit = defineEmits<{ change: [mode: DisplayMode]; close: []; refresh: []; toggleSniffing: [] }>();
 const shell = ref<HTMLElement | null>(null);
 const mode = ref<DisplayMode>("panel");
@@ -52,7 +54,7 @@ function restore() { if (mode.value === "collapsed") setMode(previousMode.value)
 function maximize() { setMode(mode.value === "maximized" ? "workspace" : "maximized"); }
 function close() { if (!blocked() && props.beforeLeave()) emit("close"); }
 function onKey(event: KeyboardEvent) {
-  if (event.key !== "Escape" || blocked() || !event.composedPath().some(node => node === shell.value)) return;
+  if (event.key !== "Escape" || blocked() || hasOpenPopover(shell.value) || !event.composedPath().some(node => node === shell.value)) return;
   event.preventDefault(); event.stopPropagation();
   setMode(mode.value === "maximized" ? "workspace" : mode.value === "workspace" ? "panel" : "collapsed");
 }
@@ -119,16 +121,22 @@ defineExpose({ setMode, restore, mode });
 </script>
 
 <template>
-  <button v-if="mode === 'collapsed'" class="floating-launcher" :style="launcherStyle" :title="`流萤 · ${count} 个资源 · ${stateText}`" aria-label="恢复流萤面板" @pointerdown="beginPointer($event, '', true)" @click="($event.detail === 0) && restore()"><img :src="logoUrl" alt="流萤"><b>{{ count > 99 ? '99+' : count }}</b><i :class="{ paused: paused || !sniffing }"></i></button>
+  <button v-if="mode === 'collapsed'" class="floating-launcher" :style="launcherStyle" :title="`流萤 · ${count} 个资源 · ${stateText}`" aria-label="恢复流萤面板" @pointerdown="beginPointer($event, '', true)" @click="($event.detail === 0) && restore()"><img :src="logoUrl" alt="流萤"><b v-if="count">{{ count > 99 ? '99+' : count }}</b><i :class="{ paused: paused || !sniffing }"></i></button>
   <section v-show="mode !== 'collapsed'" ref="shell" class="floating-window" :class="[mode, { 'is-collapsed': mode === 'collapsed' }]" :style="windowStyle" tabindex="-1" aria-label="流萤" :data-display-mode="mode">
     <header class="floating-titlebar" @pointerdown="beginPointer($event)">
-      <img class="brand-logo" :src="logoUrl" alt="流萤"><h1>流萤</h1><span class="floating-state"><i :class="{ paused: paused || !sniffing }"></i>{{ stateText }}</span>
+      <img class="brand-logo" :src="logoUrl" alt="流萤"><h1>流萤</h1>
+      <span class="floating-state" :title="stateText"><i :class="{ paused: paused || !sniffing }"></i><span>{{ stateText }}</span></span>
+      <div class="floating-source"><slot name="source" /></div>
       <div class="floating-controls">
-        <button class="icon-button" :aria-label="paused ? '继续嗅探' : '暂停嗅探'" :title="paused ? '继续嗅探' : '暂停嗅探'" :aria-pressed="paused" @click="emit('toggleSniffing')"><svg viewBox="0 0 24 24" aria-hidden="true"><path v-if="paused" d="m8 5 11 7-11 7Z"/><path v-else d="M8 5v14M16 5v14"/></svg></button>
-        <button class="icon-button" aria-label="刷新" title="刷新" :disabled="loading" @click="emit('refresh')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M20 12a8 8 0 1 0-2 5"/></svg></button>
-        <button v-if="mode !== 'panel'" class="icon-button" :aria-label="mode === 'maximized' ? '还原工作区' : '最大化工作区'" :title="mode === 'maximized' ? '还原工作区' : '最大化工作区'" @click="maximize"><svg viewBox="0 0 24 24" aria-hidden="true"><path v-if="mode === 'maximized'" d="M8 8h12v12H8ZM4 16V4h12"/><path v-else d="M4 4h16v16H4Z"/></svg></button>
-        <button class="icon-button" aria-label="收起流萤" title="收起流萤" @click="setMode('collapsed')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 16h14"/></svg></button>
-        <button class="icon-button" aria-label="关闭流萤" title="关闭流萤" @click="close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+        <button class="icon-button" :aria-label="paused ? '继续嗅探' : '暂停嗅探'" :title="paused ? '继续嗅探' : '暂停嗅探'" :aria-pressed="paused" @click="emit('toggleSniffing')"><SfIcon :name="paused ? 'player-play' : 'player-pause'" /></button>
+        <button class="icon-button" aria-label="刷新" title="刷新" :disabled="loading" @click="emit('refresh')"><SfIcon name="refresh" /></button>
+        <button v-if="mode === 'panel'" class="icon-button" aria-label="展开工作区" title="展开工作区" :disabled="!canExpand" @click="setMode('workspace')"><SfIcon name="arrows-diagonal" /></button>
+        <template v-else>
+          <button class="icon-button" aria-label="返回面板" title="返回面板" @click="setMode('panel')"><SfIcon name="arrows-diagonal-minimize-2" /></button>
+          <button class="icon-button" :aria-label="mode === 'maximized' ? '还原工作区' : '最大化工作区'" :title="mode === 'maximized' ? '还原工作区' : '最大化工作区'" @click="maximize"><SfIcon :name="mode === 'maximized' ? 'window-restore' : 'window-maximize'" /></button>
+        </template>
+        <button class="icon-button" aria-label="收起流萤" title="收起流萤" @click="setMode('collapsed')"><SfIcon name="minus" /></button>
+        <button class="icon-button close" aria-label="关闭流萤" title="关闭流萤" @click="close"><SfIcon name="x" /></button>
       </div>
     </header>
     <slot :mode="mode" />

@@ -207,7 +207,7 @@ if (activeView.context.pageTitle !== '媒体页面 A') throw new Error(`Recursiv
 if (!activeView.context.resourceViewState || activeView.context.resourceViewState.sortMode !== 'detected') throw new Error(`Resource view state was missing: ${JSON.stringify(activeView.context.resourceViewState)}`);
 const oldSourceContextId = activeView.context.sourceContextId;
 const patchedView = await send({ type: 'ui.resource-state.patch', scope: 'active', sourceContextId: oldSourceContextId, patch: { type: 'video', pattern: 'm3u8', sortMode: 'size', collapsed: true } });
-if (!patchedView.ok || patchedView.state.type !== 'video' || patchedView.state.pattern !== 'm3u8' || patchedView.state.sortMode !== 'size' || !patchedView.state.collapsed) throw new Error(`Resource view state patch failed: ${JSON.stringify(patchedView)}`);
+if (!patchedView.ok || patchedView.state.type !== 'video' || patchedView.state.pattern !== 'm3u8' || patchedView.state.sortMode !== 'size' || 'collapsed' in patchedView.state) throw new Error(`Resource view state patch failed: ${JSON.stringify(patchedView)}`);
 if (!tabMessages.some(entry => entry.id === 7 && entry.message.type === 'ui.resource-state.changed' && entry.message.state.revision === patchedView.state.revision)) throw new Error('Resource state was not delivered to the content-script workspace');
 const sharedView = await send({ type: 'ui.context.get', scope: 'sender' }, { tab: { ...tabsById.get(7) } });
 if (sharedView.context.resourceViewState.revision !== patchedView.state.revision || sharedView.context.resourceViewState.type !== 'video') throw new Error(`Workspace did not receive sidebar resource state: ${JSON.stringify(sharedView.context.resourceViewState)}`);
@@ -287,7 +287,7 @@ listeners.beforeNavigate({ tabId: 7, frameId: 0, url: tabsById.get(7).url });
 await flush();
 activeView = await send({ type: 'ui.context.get', scope: 'active' });
 if (!activeView.ok || activeView.context.sourceContextId === oldSourceContextId || activeView.context.candidates.length) throw new Error(`Source navigation did not rotate context and clear resources: ${JSON.stringify(activeView)}`);
-if (activeView.context.resourceViewState.type !== 'all' || activeView.context.resourceViewState.pattern || activeView.context.resourceViewState.collapsed) throw new Error(`Source navigation did not reset resource view state: ${JSON.stringify(activeView.context.resourceViewState)}`);
+if (activeView.context.resourceViewState.type !== 'all' || activeView.context.resourceViewState.pattern) throw new Error(`Source navigation did not reset resource view state: ${JSON.stringify(activeView.context.resourceViewState)}`);
 
 await send({ type: 'media.add', candidate: { url: 'https://media.example/final.mp4', mime: 'video/mp4' } }, { tab: { id: 7 } });
 tabsById.delete(7);
