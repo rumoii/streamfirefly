@@ -25,6 +25,10 @@ async function runDiscoverySuite(origin, cases, manifest, stimulate, mediaOrigin
     
       const settings = StreamFireflyBackground.runtime.settings;
       await settings.ready;
+      // Firefox must finish loading the temporary extension before storage change events are delivered.
+      tab = await api.tabs.create({ url: 'about:blank' });
+      await wait(async () => (await api.tabs.get(tab.id)).status === 'complete', 'Extension startup tab readiness');
+      await api.tabs.remove(tab.id); tab = null;
       await api.storage.local.set({ advancedDeepSearch: true, detectImages: false, sniffMode: 'always' });
       await wait(() => settings.get().advancedDeepSearch && !settings.get().detectImages && settings.get().sniffMode === 'always', 'StreamFirefly settings');
     

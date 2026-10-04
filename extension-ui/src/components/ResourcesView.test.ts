@@ -163,7 +163,7 @@ describe("resource preview lifecycle", () => {
     expect(document.querySelector("[data-sf-popover]")).not.toBeNull();
     const outer = vi.fn();
     window.addEventListener("keydown", outer);
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    wrapper.get('[role="menuitem"]').element.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
     await flushPromises();
     window.removeEventListener("keydown", outer);
     expect(document.querySelector("[data-sf-popover]")).toBeNull();
@@ -176,8 +176,9 @@ describe("resource preview lifecycle", () => {
     const trigger = wrapper.get('[aria-label="资源类型"]');
     await trigger.trigger("keydown", { key: "ArrowDown" }); await flushPromises();
     expect(trigger.attributes("aria-expanded")).toBe("true");
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown" }));
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+    const list = wrapper.get('[role="listbox"]').element;
+    list.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }));
+    list.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
     await flushPromises();
     expect(wrapper.emitted("updateViewState")?.at(-1)).toEqual([{ type: "video" }]);
     expect(trigger.attributes("aria-expanded")).toBe("false");

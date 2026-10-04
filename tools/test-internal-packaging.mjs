@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -52,9 +53,23 @@ requireText(nativeTest, 'process.env.STREAMFIREFLY_NATIVE_EXE', 'Native host tes
 requireText(nativeDownloadTest, 'process.env.STREAMFIREFLY_NATIVE_EXE', 'Native download test');
 requireText(nativeHlsTest, 'process.env.STREAMFIREFLY_NATIVE_EXE', 'Native HLS test');
 requireText(nativeHlsTest, 'process.env.STREAMFIREFLY_FFMPEG_EXE', 'Native HLS FFmpeg fixture');
-requireText(readme, `StreamFirefly-${bundleVersion}-internal-x64.zip`, 'Internal test guide');
-requireText(readme, `StreamFirefly-${bundleVersion}-internal-arm64.zip`, 'Internal test guide');
-requireText(readme, `# StreamFirefly ${bundleVersion} 测试包指南`, 'Internal test guide version');
+function checkGuideVersion(text) {
+  const guideVersion = text.match(/^# StreamFirefly (\S+) 测试包指南$/m)?.[1];
+  if (!guideVersion || !validBundleVersion.test(guideVersion) || guideVersion.replace(/-beta\.\d+$/, '') !== version) {
+    throw new Error('README-INTERNAL.md: invalid guide version or software version mismatch');
+  }
+  for (const architecture of ['x64', 'arm64']) {
+    requireText(text, `StreamFirefly-${guideVersion}-internal-${architecture}.zip`, 'README-INTERNAL.md package name');
+  }
+  for (const match of text.matchAll(/StreamFirefly-(\S+?)-internal-(?:x64|arm64)\.zip/g)) {
+    if (match[1] !== guideVersion) throw new Error(`README-INTERNAL.md: package version ${match[1]} differs from guide version ${guideVersion}`);
+  }
+  return guideVersion;
+}
+const guideVersion = checkGuideVersion(readme);
+assert.throws(() => checkGuideVersion(readme.replace(`# StreamFirefly ${guideVersion}`, '# StreamFirefly invalid')), /invalid guide version/);
+assert.throws(() => checkGuideVersion(readme.replaceAll(`StreamFirefly-${guideVersion}-internal-x64.zip`, 'StreamFirefly-0.0.0-internal-x64.zip')), /README-INTERNAL.md package name/);
+assert.throws(() => checkGuideVersion(`${readme}\nStreamFirefly-0.0.0-internal-arm64.zip`), /differs from guide version/);
 requireText(releaseNotes, `# StreamFirefly ${releaseTitleVersion} 内测版`, 'Internal release notes');
 requireText(releaseNotes, `\`${bundleVersion}\``, 'Internal release notes version');
 requireText(readme, 'Actions → Package internal test bundles', 'Test artifact delivery');

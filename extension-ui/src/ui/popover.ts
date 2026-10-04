@@ -8,30 +8,43 @@ export function hasOpenPopover(root: Document | ShadowRoot | Element | null | un
 }
 
 type Placement = "start" | "end";
+const keyboardOwners = new Set<(event: Event) => boolean>();
 
 export function usePopover(trigger: Ref<HTMLElement | null>, panel: Ref<HTMLElement | null>, options: { placement?: Placement; matchWidth?: boolean; onKey?: (event: KeyboardEvent) => void } = {}) {
   const open = ref(false);
   const style = ref<Record<string, string>>({ position: "fixed", left: "0px", top: "0px", visibility: "hidden" });
   let listening = false;
+  let focusRoot: ShadowRoot | null = null;
 
   function inside(event: Event) {
     const path = event.composedPath();
     return Boolean((trigger.value && path.includes(trigger.value)) || (panel.value && path.includes(panel.value)));
   }
   const onPointer = (event: PointerEvent) => { if (!inside(event)) hide(false); };
+  const onFocus = (event: FocusEvent) => { if (!inside(event)) hide(false); };
   const onScroll = (event: Event) => { if (!panel.value || !event.composedPath().includes(panel.value)) hide(false); };
   const onResize = () => hide(false);
   const onKey = (event: KeyboardEvent) => {
-    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); hide(true); return; }
-    if (event.key === "Tab") { hide(false); return; }
+    if ([...keyboardOwners].reverse().find(owner => owner(event)) !== inside) return;
+    if (event.key === "Escape") { event.preventDefault(); event.stopImmediatePropagation(); hide(true); return; }
+    if (event.key === "Tab") { if (options.onKey) hide(true); return; }
     options.onKey?.(event);
   };
 
   function listen(active: boolean) {
     if (active === listening) return;
     listening = active;
+    if (active) keyboardOwners.add(inside); else keyboardOwners.delete(inside);
     const method = active ? "addEventListener" : "removeEventListener";
+    if (active) {
+      const root = trigger.value?.getRootNode();
+      focusRoot = root instanceof ShadowRoot ? root : null;
+    }
+    // Focus changes within one shadow root may never reach window after retargeting.
+    focusRoot?.[method]("focusin", onFocus as EventListener, true);
+    if (!active) focusRoot = null;
     window[method]("pointerdown", onPointer as EventListener, true);
+    window[method]("focusin", onFocus as EventListener, true);
     window[method]("scroll", onScroll, true);
     window[method]("resize", onResize);
     window[method]("keydown", onKey as EventListener, true);
