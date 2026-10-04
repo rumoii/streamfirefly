@@ -14,8 +14,9 @@ beforeEach(() => { send.mockReset(); });
 describe("configuration serialization", () => {
   it("tests an unsaved disabled program draft without persisting or invoking it", async () => {
     send.mockImplementation(async (message: any) => message.type === "integration.get" ? { ok: true, value: { config: integrationDefaults(), receipts: [], error: "" } } : { ok: true, value: {} });
-    const wrapper = mount(ToolsPanel); await flushPromises();
-    await wrapper.get('[aria-label="工具类型"]').setValue("program");
+    const wrapper = mount(ToolsPanel, { attachTo: document.body }); await flushPromises();
+    await wrapper.get('[aria-label="工具类型"]').trigger("click"); await flushPromises();
+    await wrapper.findAll('[role="option"]').find(option => option.text() === "N_m3u8DL-RE / 本地程序")!.trigger("click"); await flushPromises();
     const button = (name: string) => wrapper.findAll("button").find(item => item.text() === name)!;
     await button("添加工具").trigger("click");
     await wrapper.get('[aria-label="程序保存目录"]').setValue("C:\\Media files");
@@ -146,6 +147,22 @@ describe("configuration serialization", () => {
     expect(wrapper.text()).toContain("已定位此 Blob 对应的媒体源");
     await wrapper.findAll("button").find(button => button.text() === "返回来源播放")!.trigger("click");
     expect(send.mock.calls.find(([message]) => message.type === "ui.source.activate")?.[0].payload).toEqual({ tabId: 7, closeCurrent: false });
+    wrapper.unmount();
+  });
+  it("reorders, duplicates and removes rules from the card icon buttons", async () => {
+    send.mockImplementation(async (message: any) => message.type === "discovery.get" ? { ok: true, value: { config: defaultDiscovery(), disabled: {}, error: "" } } : { ok: true, value: structuredClone(message.payload) });
+    const wrapper = mount(RulesPanel); await flushPromises();
+    const add = wrapper.findAll("button").find(item => item.text() === "新增规则")!;
+    await add.trigger("click"); await add.trigger("click");
+    const names = () => wrapper.findAll('[aria-label="规则名称"]').map(input => (input.element as HTMLInputElement).value);
+    await wrapper.findAll('[aria-label="规则名称"]')[0].setValue("第一条"); await wrapper.findAll('[aria-label="规则名称"]')[1].setValue("第二条");
+    expect(wrapper.findAll('[aria-label="上移"]')[0].attributes("disabled")).toBeDefined();
+    await wrapper.findAll('[aria-label="下移"]')[0].trigger("click");
+    expect(names()).toEqual(["第二条", "第一条"]);
+    await wrapper.findAll('[aria-label="复制"]')[1].trigger("click");
+    expect(names()).toEqual(["第二条", "第一条", "第一条 副本"]);
+    await wrapper.findAll('[aria-label="删除"]')[0].trigger("click");
+    expect(names()).toEqual(["第一条", "第一条 副本"]);
     wrapper.unmount();
   });
   it("saves edited rules as plain JSON instead of a Vue proxy", async () => {

@@ -6,6 +6,10 @@ const { send, surface } = vi.hoisted(() => ({ send: vi.fn(), surface: vi.fn(() =
 vi.mock("../api", () => ({ sendMessage: send, surfaceFromUrl: surface }));
 const settings = { saveDir: "", downloadThreads: 6, detectImages: false, advancedDeepSearch: false, sniffMode: "on_open" as const, candidateSort: "detected" as const, proxyMode: "system" as const, proxyUrl: "" };
 beforeEach(() => { surface.mockReturnValue("options"); send.mockReset(); send.mockImplementation(async () => ({ ok: true, value: { config: defaultDiscovery(), disabled: {}, error: "" } })); });
+async function choose(wrapper: ReturnType<typeof mount>, label: string, option: string) {
+  await wrapper.get(`[aria-label="${label}"]`).trigger("click"); await flushPromises();
+  await wrapper.findAll('[role="option"]').find(item => item.text() === option)!.trigger("click"); await flushPromises();
+}
 describe("unified settings navigation", () => {
   it("keeps general and rule drafts when navigating between categories", async () => {
     const wrapper = mount(SettingsView, { props: { settings } });
@@ -23,9 +27,8 @@ describe("unified settings navigation", () => {
     expect(send.mock.calls.some(([message]) => message.type === "discovery.save")).toBe(false); wrapper.unmount();
   });
   it("validates a custom proxy before saving", async () => {
-    const wrapper = mount(SettingsView, { props: { settings } });
-    const fields = wrapper.findAll("select");
-    await fields[0].setValue("custom");
+    const wrapper = mount(SettingsView, { props: { settings }, attachTo: document.body });
+    await choose(wrapper, "下载代理", "自定义代理");
     const proxy = wrapper.get('input[placeholder="例如 http://127.0.0.1:7897"]');
     await proxy.setValue("socks5://127.0.0.1:7897");
     expect(wrapper.text()).toContain("HTTP/HTTPS");
@@ -35,12 +38,20 @@ describe("unified settings navigation", () => {
     wrapper.unmount();
   });
   it("saves the selected sniffing mode", async () => {
-    const wrapper = mount(SettingsView, { props: { settings } });
-    const mode = wrapper.findAll("select").find(item => item.find('option[value="on_open"]').exists())!;
-    expect((mode.element as HTMLSelectElement).value).toBe("on_open");
-    await mode.setValue("always");
+    const wrapper = mount(SettingsView, { props: { settings }, attachTo: document.body });
+    expect(wrapper.get('[aria-label="嗅探时机"]').attributes("data-value")).toBe("on_open");
+    await choose(wrapper, "嗅探时机", "始终嗅探");
     await wrapper.findAll("button").find(button => button.text() === "验证并保存")!.trigger("click");
     expect(wrapper.emitted("save")?.[0]?.[0]).toMatchObject({ sniffMode: "always" });
+    wrapper.unmount();
+  });
+  it("shows whether the general form has unsaved changes", async () => {
+    const wrapper = mount(SettingsView, { props: { settings } });
+    expect(wrapper.get(".save-state").text()).toBe("已保存");
+    await wrapper.get(".settings-fields input").setValue("D:\\Draft");
+    expect(wrapper.get(".save-state").text()).toBe("有未保存的修改");
+    await wrapper.setProps({ settings: { ...settings, saveDir: "D:\\Draft" } });
+    expect(wrapper.get(".save-state").text()).toBe("已保存");
     wrapper.unmount();
   });
   it("does not mount privileged panels in the page workspace", async () => {

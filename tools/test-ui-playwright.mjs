@@ -130,6 +130,17 @@ try {
   assert.equal(await page.locator('.overview-list .task-row').count(), 2);
   assert.equal(assetRequests.some(url => url.endsWith('/assets/hls.js')), false, 'normal sidebar load must not request assets/hls.js');
 
+  await page.setViewportSize({ width: 1280, height: 860 });
+  await page.goto(`${origin}/app.html?surface=options`);
+  await page.getByRole('navigation', { name: '设置分类' }).waitFor();
+  assert.equal(await page.locator('.save-state').textContent(), '已保存');
+  await page.getByRole('button', { name: '下载代理', exact: true }).click();
+  await page.getByRole('option', { name: '自定义代理', exact: true }).click();
+  await page.getByPlaceholder('例如 http://127.0.0.1:7897').fill('http://127.0.0.1:7897');
+  assert.equal(await page.locator('.save-state').textContent(), '有未保存的修改');
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1), 'options settings have no horizontal overflow');
+  await page.screenshot({ path: path.join(output, 'options-settings.png'), fullPage: true });
+
   const workspacePage = await browser.newPage();
   await workspacePage.setViewportSize({ width: 1920, height: 1080 });
   const workspaceErrors = [];

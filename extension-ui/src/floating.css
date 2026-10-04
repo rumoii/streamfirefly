@@ -32,6 +32,7 @@
 .floating-window .resources { min-height: 0; flex: 1; }
 .floating-window .panel { border-radius: var(--sf-radius-lg); }
 .floating-window .settings-page { max-width: 1080px; }
+.floating-window .settings-footer { bottom: -12px; }
 .floating-window .dialog-backdrop { position: absolute; pointer-events: auto; border-radius: inherit; padding: 12px; }
 .floating-window .dialog { max-height: 100%; }
 .floating-window .toast { position: absolute; max-width: calc(100% - 24px); bottom: 12px; pointer-events: auto; }
@@ -58,13 +59,18 @@
 @container floating (max-width: 899px) {
   .floating-window .parser-grid, .floating-window .download-summary, .floating-window .key-form, .floating-window .resume-key-form, .floating-window .dash-selection { grid-template-columns: 1fr; }
   .floating-window .settings-layout { grid-template-columns: 1fr; }
-  .floating-window .settings-navigation { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--sf-border); }
+  .floating-window .settings-navigation { grid-column: 1 / -1; flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--sf-border); border-radius: var(--sf-radius-lg) var(--sf-radius-lg) 0 0; }
+  .floating-window .settings-footer { border-radius: 0 0 var(--sf-radius-lg) var(--sf-radius-lg); }
+  .floating-window .settings-field-row { grid-template-columns: 1fr; }
+  .floating-window .feature-head { flex-direction: column; }
+  .floating-window .feature-head-actions { justify-content: flex-start; }
   .floating-window .settings-content { grid-column: 1 / -1; }
 }
 @container floating (max-width: 519px) {
   .floating-state span { display: none; }
   .floating-state { padding: 4px; }
   .floating-window .app-content { padding: 8px; }
+  .floating-window .settings-footer { bottom: -8px; }
   .floating-window .app-content.resource-content { padding: 0; }
   .floating-window .detail-grid { grid-template-columns: 1fr 1fr; }
 }
