@@ -1,4 +1,4 @@
-import { INLINE_MANIFEST_MAX_BYTES, newId, supportedPage, cleanPageTitle, pageTitleFor, normalizeSortMode } from './platform.js';
+import { INLINE_MANIFEST_MAX_BYTES, newId, supportedPage, cleanPageTitle, pageTitleFor, normalizeSortMode, pageKey } from './platform.js';
 export function createResources(api, settings, sniffing, notifyWorkspaceMessage, detect, extract) {
 const candidateListeners = new Set();
 const STATE_VERSION = 2;
@@ -67,7 +67,7 @@ async function uiContextForTab(tab) {
   if (!state.pageUrl) {
     state.pageUrl = pageUrl;
     await persistState(state);
-  } else if (state.pageUrl !== pageUrl) {
+  } else if (pageKey(state.pageUrl) !== pageKey(pageUrl)) {
     await clearTab(sourceTabId, pageUrl);
     state = await loadTabState(sourceTabId);
   }

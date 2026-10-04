@@ -184,16 +184,13 @@ pub(crate) fn task_control(
                 task.message = Some("正在暂停下载".into());
             });
             stop_process(store, id);
-            if !wait_for_state(
+            // The runner settles as paused once it observes the request, even after this wait.
+            wait_for_state(
                 store,
                 id,
                 &["paused"],
                 Instant::now() + Duration::from_secs(5),
-            ) {
-                clear_pause(store, id);
-                clear_cancellation(store, id);
-                return Err("pause_failed");
-            }
+            );
         }
         "cancel" => {
             if task.state == "cancelled" {
@@ -217,15 +214,13 @@ pub(crate) fn task_control(
             if task.state == "paused" {
                 mark_stopped(store, writer, id);
             }
-            if !wait_for_state(
+            // The runner settles as cancelled once it observes the request, even after this wait.
+            wait_for_state(
                 store,
                 id,
                 &["cancelled"],
                 Instant::now() + Duration::from_secs(5),
-            ) {
-                clear_cancellation(store, id);
-                return Err("cancel_failed");
-            }
+            );
         }
         "resume" | "retry" | "reauthorize" => {
             let allowed = if action == "resume" {
@@ -518,6 +513,9 @@ pub(crate) fn delete_task(
     clear_cancellation(store, id);
     clear_pause(store, id);
     let _ = fs::remove_dir_all(task_work_root_for_state(&store.repository.path).join(id));
+    if let Some(output) = &task.output {
+        let _ = fs::remove_dir_all(crate::http_download::parallel_part_dir(output, id));
+    }
     emit(writer, json!({"version":1,"type":"task.deleted","id":id}));
     Ok(
         json!({"id": id, "fileDeleted": file_deleted, "fileKept": !delete_file && task.output.is_some()}),

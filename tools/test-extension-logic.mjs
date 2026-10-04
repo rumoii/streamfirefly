@@ -199,6 +199,16 @@ await Promise.all(Array.from({ length: 1005 }, (_, index) => send({ type: 'media
 candidates = await send({ type: 'media.candidates', tabId: 7 });
 if (candidates.length !== 1000 || candidates.some(item => item.url.endsWith('segment-0.m4s')) || !candidates.some(item => item.url.endsWith('segment-1004.m4s'))) throw new Error('Segment bucket cap did not retain the newest 1000 candidates');
 
+const segmentsUrl = tabsById.get(7).url;
+tabsById.get(7).url = segmentsUrl + '#comments';
+listeners.history({ tabId: 7, frameId: 0, url: tabsById.get(7).url });
+await settle();
+if ((await send({ type: 'ui.context.get', scope: 'active' })).context.candidates.length !== 1000) throw new Error('A fragment-only page change cleared discovered resources');
+listeners.history({ tabId: 7, frameId: 0, url: segmentsUrl });
+await settle();
+if ((await send({ type: 'media.candidates', tabId: 7 })).length !== 1000) throw new Error('replaceState to the same page cleared discovered resources');
+tabsById.get(7).url = segmentsUrl;
+
 await flush();
 if (JSON.stringify(sidePanelBehavior) !== JSON.stringify({ openPanelOnActionClick: false })) throw new Error(`Chrome action was not bound to the native side panel: ${JSON.stringify(sidePanelBehavior)}`);
 if (!listeners.actionClicked) throw new Error('Toolbar handler must open a floating panel');

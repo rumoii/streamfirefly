@@ -1,5 +1,6 @@
 use crate::model::Task;
 use crate::processes::cancel_requested;
+use crate::processes::pause_requested;
 use crate::processes::mark_stopped;
 use crate::processes::register_process;
 use crate::processes::stop_process;
@@ -13,8 +14,11 @@ use std::fs::OpenOptions;
 use std::io;
 use std::io::Read;
 use std::path::PathBuf;
+use std::process::Child;
 use std::process::Command;
 use std::process::Stdio;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
@@ -272,6 +276,38 @@ pub(crate) fn start_single_http_download(
     }
 }
 
+pub(crate) fn parallel_part_dir(output: &str, task_id: &str) -> PathBuf {
+    PathBuf::from(format!("{output}.streamfirefly-parts-{task_id}"))
+}
+
+struct PartTransfer {
+    part: PathBuf,
+    length: u64,
+    continuation: PathBuf,
+    child: Option<Arc<Mutex<Child>>>,
+}
+
+fn part_bytes(transfer: &PartTransfer) -> u64 {
+    fs::metadata(&transfer.part).map(|m| m.len()).unwrap_or(0)
+        + fs::metadata(&transfer.continuation)
+            .map(|m| m.len())
+            .unwrap_or(0)
+}
+
+/// Appends the bytes a range request delivered after the part's existing prefix; curl writes them contiguously.
+fn absorb_continuation(transfer: &PartTransfer) -> io::Result<()> {
+    if !transfer.continuation.is_file() {
+        return Ok(());
+    }
+    let mut destination = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&transfer.part)?;
+    io::copy(&mut fs::File::open(&transfer.continuation)?, &mut destination)?;
+    drop(destination);
+    fs::remove_file(&transfer.continuation)
+}
+
 pub(crate) fn start_parallel_http_download(
     store: TaskRuntime,
     writer: Writer,
@@ -280,9 +316,16 @@ pub(crate) fn start_parallel_http_download(
     total: u64,
 ) -> bool {
     let count = usize::from(task.download_threads.clamp(2, MAX_DOWNLOAD_THREADS));
-    let part_dir = PathBuf::from(format!("{output}.streamfirefly-parts-{}", task.id));
-    if fs::create_dir_all(&part_dir).is_err() {
-        return false;
+    let part_dir = parallel_part_dir(&output, &task.id);
+    // Parts from a paused run are reused only when they were split for the same size and connection count.
+    let layout_file = part_dir.join("layout");
+    let layout = format!("{total}:{count}");
+    if fs::read_to_string(&layout_file).ok().as_deref() != Some(layout.as_str()) {
+        let _ = fs::remove_dir_all(&part_dir);
+        if fs::create_dir_all(&part_dir).is_err() || fs::write(&layout_file, &layout).is_err() {
+            let _ = fs::remove_dir_all(&part_dir);
+            return false;
+        }
     }
     let ranges: Vec<(u64, u64)> = (0..count)
         .map(|index| {
@@ -291,71 +334,93 @@ pub(crate) fn start_parallel_http_download(
             (start, end)
         })
         .collect();
-    let mut children = Vec::new();
+    let mut transfers = Vec::new();
     for (index, (start, end)) in ranges.iter().enumerate() {
-        let part = part_dir.join(format!("{index:04}.part"));
-        let mut args = vec![
-            "--silent".into(),
-            "--show-error".into(),
-            "--fail".into(),
-            "--location".into(),
-            "--retry".into(),
-            "3".into(),
-            "--retry-all-errors".into(),
-            "--range".into(),
-            format!("{start}-{end}"),
-            "--output".into(),
-            part.to_string_lossy().into(),
-        ];
-        add_request_args(&mut args, &task, &task.url);
-        args.push(task.url.clone());
-        match Command::new("curl")
-            .args(args)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-        {
-            Ok(child) => children.push((part, register_process(&store, &task.id, child))),
-            Err(_) => {
-                stop_process(&store, &task.id);
-                let _ = fs::remove_dir_all(&part_dir);
-                return false;
+        let mut transfer = PartTransfer {
+            part: part_dir.join(format!("{index:04}.part")),
+            length: end - start + 1,
+            continuation: part_dir.join(format!("{index:04}.next")),
+            child: None,
+        };
+        if absorb_continuation(&transfer).is_err() {
+            let _ = fs::remove_file(&transfer.part);
+            let _ = fs::remove_file(&transfer.continuation);
+        }
+        let mut existing = fs::metadata(&transfer.part).map(|m| m.len()).unwrap_or(0);
+        if existing > transfer.length {
+            let _ = fs::remove_file(&transfer.part);
+            existing = 0;
+        }
+        if existing < transfer.length {
+            let mut args = vec![
+                "--silent".into(),
+                "--show-error".into(),
+                "--fail".into(),
+                "--location".into(),
+                "--retry".into(),
+                "3".into(),
+                "--retry-all-errors".into(),
+                "--range".into(),
+                format!("{}-{end}", start + existing),
+                "--output".into(),
+                transfer.continuation.to_string_lossy().into(),
+            ];
+            add_request_args(&mut args, &task, &task.url);
+            args.push(task.url.clone());
+            match Command::new("curl")
+                .args(args)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+            {
+                Ok(child) => transfer.child = Some(register_process(&store, &task.id, child)),
+                Err(_) => {
+                    stop_process(&store, &task.id);
+                    let _ = fs::remove_dir_all(&part_dir);
+                    return false;
+                }
             }
         }
+        transfers.push(transfer);
     }
+    let initial_bytes: u64 = transfers.iter().map(part_bytes).sum();
     update(&store, &writer, &task.id, |t| {
         t.state = "running".into();
         t.phase = "downloading".into();
         t.total_bytes = Some(total);
-        t.active_connections = count as u8;
+        t.downloaded_bytes = initial_bytes;
+        t.active_connections = transfers.iter().filter(|item| item.child.is_some()).count() as u8;
         t.segments_total = count as u32;
         t.segments_completed = 0;
         t.message = Some(format!("正在并发下载（{count} 路）"));
     });
     let mut sampled_at = Instant::now();
-    let mut last_bytes = 0u64;
+    let mut last_bytes = initial_bytes;
     let mut smoothed_speed = 0u64;
     loop {
         thread::sleep(Duration::from_millis(500));
         if cancel_requested(&store, &task.id) {
             stop_process(&store, &task.id);
-            if let Some((first_part, _)) = children.first() {
-                if fs::metadata(first_part)
-                    .map(|metadata| metadata.len())
-                    .unwrap_or(0)
-                    > 0
-                {
-                    let _ = fs::copy(first_part, &output);
+            if pause_requested(&store, &task.id) {
+                // Keep every delivered byte so resuming continues each part where it stopped.
+                for transfer in &transfers {
+                    let _ = absorb_continuation(transfer);
                 }
+            } else {
+                // A cancelled download keeps its contiguous prefix as the partial output file.
+                if let Some(first) = transfers.first() {
+                    if absorb_continuation(first).is_ok()
+                        && fs::metadata(&first.part).map(|m| m.len()).unwrap_or(0) > 0
+                    {
+                        let _ = fs::copy(&first.part, &output);
+                    }
+                }
+                let _ = fs::remove_dir_all(&part_dir);
             }
-            let _ = fs::remove_dir_all(&part_dir);
             mark_stopped(&store, &writer, &task.id);
             return true;
         }
-        let bytes: u64 = children
-            .iter()
-            .map(|(path, _)| fs::metadata(path).map(|m| m.len()).unwrap_or(0))
-            .sum();
+        let bytes: u64 = transfers.iter().map(part_bytes).sum();
         let sample_seconds = sampled_at.elapsed().as_secs_f64().max(0.001);
         let sampled_speed = bytes.saturating_sub(last_bytes) as f64 / sample_seconds;
         if sampled_speed > 0.0 {
@@ -367,18 +432,18 @@ pub(crate) fn start_parallel_http_download(
         }
         sampled_at = Instant::now();
         last_bytes = bytes;
-        let completed = children
+        let statuses: Vec<Option<bool>> = transfers
             .iter()
-            .filter(|(path, child)| {
-                child
+            .map(|transfer| match &transfer.child {
+                None => Some(true),
+                Some(child) => child
                     .lock()
                     .ok()
                     .and_then(|mut child| child.try_wait().ok().flatten())
-                    .map(|status| status.success())
-                    .unwrap_or(false)
-                    && path.exists()
+                    .map(|status| status.success()),
             })
-            .count() as u32;
+            .collect();
+        let completed = statuses.iter().filter(|status| **status == Some(true)).count() as u32;
         update(&store, &writer, &task.id, |t| {
             t.progress = ((bytes.saturating_mul(100) / total).min(99)) as u8;
             t.downloaded_bytes = bytes;
@@ -387,24 +452,15 @@ pub(crate) fn start_parallel_http_download(
                 (smoothed_speed > 0).then(|| total.saturating_sub(bytes) / smoothed_speed);
             t.segments_completed = completed;
         });
-        let statuses: Vec<Option<bool>> = children
-            .iter()
-            .map(|(_, child)| {
-                child
-                    .lock()
-                    .ok()
-                    .and_then(|mut child| child.try_wait().ok().flatten())
-                    .map(|status| status.success())
-            })
-            .collect();
         if statuses.iter().all(Option::is_some) {
-            for (_, child) in &children {
+            for child in transfers.iter().filter_map(|transfer| transfer.child.as_ref()) {
                 unregister_process(&store, &task.id, child);
             }
             let valid = statuses.iter().all(|status| *status == Some(true))
-                && children.iter().enumerate().all(|(index, (path, _))| {
-                    fs::metadata(path).map(|m| m.len()).unwrap_or(0)
-                        == ranges[index].1 - ranges[index].0 + 1
+                && transfers.iter().all(|transfer| {
+                    absorb_continuation(transfer).is_ok()
+                        && fs::metadata(&transfer.part).map(|m| m.len()).unwrap_or(0)
+                            == transfer.length
                 });
             if !valid {
                 let _ = fs::remove_dir_all(&part_dir);
@@ -422,8 +478,8 @@ pub(crate) fn start_parallel_http_download(
                     return false;
                 }
             };
-            for (path, _) in &children {
-                let mut part = match fs::File::open(path) {
+            for transfer in &transfers {
+                let mut part = match fs::File::open(&transfer.part) {
                     Ok(file) => file,
                     Err(_) => {
                         let _ = fs::remove_dir_all(&part_dir);
@@ -474,5 +530,7 @@ pub(crate) fn start_http_download(store: TaskRuntime, writer: Writer, task: Task
             }
         }
     }
+    // Parts left by an earlier paused run cannot be continued by a single connection.
+    let _ = fs::remove_dir_all(parallel_part_dir(&output, &task.id));
     start_single_http_download(store, writer, task, output, probe.total);
 }

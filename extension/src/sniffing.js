@@ -22,11 +22,8 @@ export function createSniffing(api, settings) {
     onChange(tabId, active);
   }
 
+  // Active tabs change only once the new lease set is known, so unrelated refreshes never drop in-flight discoveries.
   function refresh(all = false, extraTabId = null) {
-    if (settings.get().sniffMode !== "always") {
-      for (const tabId of activeTabs) bump(tabId);
-      activeTabs = new Set();
-    }
     pending = pending.catch(() => {}).then(async () => {
       await settings.ready;
       const nextMode = settings.get().sniffMode;

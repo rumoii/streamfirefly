@@ -4,6 +4,8 @@ use crate::repository::sanitized_task;
 use crate::repository::sanitized_tasks;
 use crate::repository::save_store;
 use crate::runtime::load_store;
+use crate::processes::stop_process;
+use crate::runtime::TaskRuntime;
 use crate::scheduler::start_download;
 use crate::task_control::delete_task;
 use crate::task_control::task_control;
@@ -149,5 +151,26 @@ pub(crate) fn run() -> io::Result<()> {
             start_recovery_once(&store, &writer);
         }
     }
-    Ok(())
+    shutdown_downloads(&store)
+}
+
+/// Ends every download child before the host exits so no orphaned writer outlives it.
+/// Holding the task list blocks runner updates, so persisted states stay resumable on the next start.
+fn shutdown_downloads(store: &TaskRuntime) -> ! {
+    let _tasks = store
+        .repository
+        .tasks
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let ids: Vec<String> = store
+        .processes
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .keys()
+        .cloned()
+        .collect();
+    for id in ids {
+        stop_process(store, &id);
+    }
+    std::process::exit(0)
 }

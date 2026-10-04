@@ -12,7 +12,7 @@ import { createResources } from './resources.js';
 import { createPreview } from './preview.js';
 import { createWorkspace } from './workspace.js';
 import { createSniffing } from './sniffing.js';
-import { supportedPage } from './platform.js';
+import { supportedPage, pageKey } from './platform.js';
 const api = globalThis.browser ?? globalThis.chrome;
 const settings = createSettings(api);
 const sniffing = createSniffing(api, settings);
@@ -100,9 +100,13 @@ api.webNavigation?.onBeforeNavigate?.addListener(details => {
   void unmountWorkspace(details.tabId).then(() => clearTab(details.tabId, details.url)).then(() => notifyUiContext(details.tabId));
 });
 api.webNavigation?.onHistoryStateUpdated?.addListener(details => {
-  void capture.interrupted(details.tabId, details.frameId === 0 ? undefined : details.frameId);
-  if (details.frameId !== 0) return;
-  void unmountWorkspace(details.tabId).then(() => clearTab(details.tabId, details.url)).then(() => api.tabs.sendMessage?.(details.tabId, { type: "media.rescan" })?.catch?.(() => {})).then(() => notifyUiContext(details.tabId));
+  if (details.frameId !== 0) { void capture.interrupted(details.tabId, details.frameId); return; }
+  void loadTabState(details.tabId).then(state => {
+    // replaceState and fragment updates that keep the page address leave the page, its resources and the panel intact.
+    if (state.pageUrl && pageKey(state.pageUrl) === pageKey(details.url)) return;
+    void capture.interrupted(details.tabId);
+    return unmountWorkspace(details.tabId).then(() => clearTab(details.tabId, details.url)).then(() => api.tabs.sendMessage?.(details.tabId, { type: "media.rescan" })?.catch?.(() => {})).then(() => notifyUiContext(details.tabId));
+  });
 });
 
 api.tabs.onRemoved.addListener(tabId => {

@@ -15,6 +15,7 @@ let rangeRequests = 0;
 let authorizationSeen = false;
 let forbiddenHeaderSeen = false;
 let slowHeadGets = 0;
+let slowBytesServed = 0;
 let notifySlowHeadStarted;
 const slowHeadStarted = new Promise(resolve => { notifySlowHeadStarted = resolve; });
 const server = http.createServer((request, response) => {
@@ -50,6 +51,7 @@ const server = http.createServer((request, response) => {
     const chunkSize = request.url === '/slow.mp4' ? 64 * 1024 : 512 * 1024;
     const next = Math.min(offset + chunkSize, responseBody.length);
     response.write(responseBody.subarray(offset, next));
+    if (request.url === '/slow.mp4') slowBytesServed += next - offset;
     offset = next;
     if (offset >= responseBody.length) { clearInterval(timer); response.end(); }
   }, 120);
@@ -168,10 +170,13 @@ if (!pauseResult.ok || pauseResult.task?.state !== 'paused') throw new Error(`Ta
 const pausedSize = fs.existsSync(paused.task.output) ? fs.statSync(paused.task.output).size : 0;
 await new Promise(resolve => setTimeout(resolve, 700));
 if ((fs.existsSync(paused.task.output) ? fs.statSync(paused.task.output).size : 0) !== pausedSize) throw new Error('Paused task continued writing');
+const servedBeforeResume = slowBytesServed;
 const resumeResult = await send('task.control', { id: paused.task.id, action: 'resume' });
 if (!resumeResult.ok) throw new Error(`Task resume failed: ${JSON.stringify(resumeResult)}`);
 const resumedTask = await waitTask(paused.task.id);
 if (resumedTask?.state !== 'succeeded' || !fs.readFileSync(resumedTask.output).equals(slowPayload)) throw new Error(`Resumed task did not complete: ${JSON.stringify(resumedTask)}`);
+const resumedBytes = slowBytesServed - servedBeforeResume;
+if (resumedBytes > slowPayload.length - pauseResult.task.downloaded_bytes) throw new Error(`Resumed parallel download fetched already downloaded bytes again: ${JSON.stringify({ resumedBytes, paused: pauseResult.task.downloaded_bytes })}`);
 const pausedRemove = await send('task.create', { url: `http://127.0.0.1:${port}/slow.mp4`, title: 'pause-delete', fileName: '暂停后删除', mime: 'video/mp4', saveDir: customDir });
 if (!await waitRunning(pausedRemove.task.id)) throw new Error('Paused delete task did not enter running state');
 const pausedRemoveResult = await send('task.control', { id: pausedRemove.task.id, action: 'pause' });
@@ -184,7 +189,16 @@ if (!await waitRunning(slowRemove.task.id)) throw new Error('Second slow task di
 const slowRemoveDelete = await send('task.delete', { id: slowRemove.task.id, deleteFile: true });
 if (!slowRemoveDelete.ok || fs.existsSync(slowRemove.task.output)) throw new Error(`Active file deletion failed: ${JSON.stringify(slowRemoveDelete)}`);
 await assertTaskAbsent(slowRemove.task.id);
+const orphanCheck = await send('task.create', { url: `http://127.0.0.1:${port}/slow.mp4`, title: 'host-exit', fileName: '助手退出', mime: 'video/mp4', saveDir: customDir, downloadThreads: 1 });
+if (!await waitRunning(orphanCheck.task.id)) throw new Error('Host exit task did not enter running state');
+const exited = new Promise(resolve => child.once('exit', resolve));
 child.stdin.end();
+await exited;
+const sizeAtExit = fs.statSync(orphanCheck.task.output).size;
+await new Promise(resolve => setTimeout(resolve, 1200));
+if (fs.statSync(orphanCheck.task.output).size !== sizeAtExit) throw new Error('A download process kept writing after the host exited');
+const persisted = JSON.parse(fs.readFileSync(path.join(temp, 'StreamFirefly', 'tasks.json'), 'utf8')).tasks.find(item => item.id === orphanCheck.task.id);
+if (!['running', 'starting'].includes(persisted?.state)) throw new Error(`Host exit did not leave the download resumable: ${JSON.stringify(persisted)}`);
 server.close();
 proxy.close();
 if (task?.state !== 'succeeded') throw new Error(`Download did not succeed: ${JSON.stringify(task)}`);
