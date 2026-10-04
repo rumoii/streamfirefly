@@ -33,6 +33,7 @@
 .floating-window .panel { border-radius: var(--sf-radius-lg); }
 .floating-window .settings-page { max-width: 1080px; }
 .floating-window .settings-footer { bottom: -12px; }
+.floating-window .parser-page > .download-summary { bottom: -12px; border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 .floating-window .dialog-backdrop { position: absolute; pointer-events: auto; border-radius: inherit; padding: 12px; }
 .floating-window .dialog { max-height: 100%; }
 .floating-window .toast { position: absolute; max-width: calc(100% - 24px); bottom: 12px; pointer-events: auto; }
@@ -70,7 +71,7 @@
   .floating-state span { display: none; }
   .floating-state { padding: 4px; }
   .floating-window .app-content { padding: 8px; }
-  .floating-window .settings-footer { bottom: -8px; }
+  .floating-window .settings-footer, .floating-window .parser-page > .download-summary { bottom: -8px; }
   .floating-window .app-content.resource-content { padding: 0; }
   .floating-window .detail-grid { grid-template-columns: 1fr 1fr; }
 }

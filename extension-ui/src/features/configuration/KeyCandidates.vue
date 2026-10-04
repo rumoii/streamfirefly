@@ -2,6 +2,7 @@
 import { onBeforeUnmount, ref, watch } from "vue";
 import type { UiContext } from "../../types";
 import { sessionRequest } from "../session-client";
+import SfIcon from "../../ui/SfIcon.vue";
 const props = defineProps<{ context: UiContext }>();
 const emit = defineEmits<{ select: [hex: string] }>();
 const keys = ref<{ hex: string; source: string; frameId: number }[]>([]);
@@ -18,13 +19,12 @@ async function refresh() {
 watch(() => props.context.sourceContextId, () => { sequence++; keys.value = []; error.value = ""; });
 </script>
 <template>
-  <div class="feature-panel">
-    <button class="button small" @click="refresh">读取深度搜索密钥候选</button>
-    <p v-if="keys.length">选择仅填入本次下载，仍需通过首片验证。</p>
-    <div v-for="key in keys" :key="key.hex" class="feature-row">
+  <div class="key-candidate-panel">
+    <div class="feature-row"><button class="button sm" @click="refresh"><SfIcon name="radar-2" /><span>读取深度搜索密钥候选</span></button><span v-if="keys.length" class="feature-note">选择仅填入本次下载，仍需通过首片验证。</span></div>
+    <div v-for="key in keys" :key="key.hex" class="key-candidate">
       <code>{{ key.hex }}</code><span>{{ key.source }} · frame {{ key.frameId }}</span>
-      <button class="button small" @click="emit('select', key.hex)">使用此候选</button>
+      <button class="button sm" @click="emit('select', key.hex)">使用此候选</button>
     </div>
-    <p v-if="error" role="alert">{{ error }}</p>
+    <p v-if="error" class="inline-error" role="alert">{{ error }}</p>
   </div>
 </template>

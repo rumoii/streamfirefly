@@ -7,6 +7,8 @@ import { createDownload } from "../download-client";
 import { candidatePayload } from "../download-plan";
 import { formatDuration } from "../format";
 import { humanError } from "../store";
+import SfIcon from "../ui/SfIcon.vue";
+import SfSelect from "../ui/SfSelect.vue";
 
 const props = defineProps<{ candidate: MediaCandidate; context: UiContext; capabilities: string[]; saveDir: string; downloadThreads: number; connected?: boolean }>();
 const emit = defineEmits<{ back: []; created: [message: string] }>();
@@ -30,6 +32,9 @@ const selection = computed(() => {
   try { return { plan: buildDashPlan(manifest.value, videoId.value, audioId.value, container.value), error: "" }; }
   catch (reason) { return { plan: null, error: (reason as Error).message }; }
 });
+const videoOptions = computed(() => [{ value: "", label: "不下载视频" }, ...videos.value.map(track => ({ value: track.id, label: label(track) }))]);
+const audioOptions = computed(() => [{ value: "", label: "不下载音频" }, ...audios.value.map(track => ({ value: track.id, label: label(track) }))]);
+const containerOptions: { value: "mp4" | "mkv"; label: string }[] = [{ value: "mp4", label: "MP4" }, { value: "mkv", label: "MKV" }];
 function label(track: DashTrack) { return `${track.kind === "video" ? `${track.width} × ${track.height}` : track.language} · ${Math.round(track.bandwidth / 1000)} kbps · ${track.codecs || "未知编码"}`; }
 
 watch(() => props.candidate, async candidate => {
@@ -71,16 +76,16 @@ async function submit() {
 
 <template>
   <section class="parser-page">
-    <div class="subpage-heading"><button class="button subtle" type="button" @click="$emit('back')">← 返回资源</button><div><span class="tag">DASH · 实验性</span><h2>媒体解析</h2><p>{{ candidate.pageTitle || candidate.title || candidate.url }}</p></div></div>
-    <p class="privacy-hint">仍在完善中的新功能，欢迎尝试并反馈问题。</p>
+    <div class="subpage-heading"><button class="icon-button" type="button" aria-label="返回资源" title="返回资源" @click="$emit('back')"><SfIcon name="chevron-left" /></button><div><div class="subpage-title"><span class="tag">DASH · 实验性</span><h2>媒体解析</h2></div><p :title="candidate.pageTitle || candidate.title || candidate.url">{{ candidate.pageTitle || candidate.title || candidate.url }}</p></div></div>
+    <p class="tool-notice"><SfIcon name="sparkles" />仍在完善中的新功能，欢迎尝试并反馈问题。</p>
     <div v-if="error" class="status-banner error" role="alert">{{ error }}</div>
     <div v-if="!supported" class="status-banner warning">请同时更新扩展与本地助手，以使用 DASH 选轨下载。</div>
-    <div v-if="loading" class="empty-state" role="status">正在解析 DASH 清单…</div>
+    <div v-if="loading" class="panel dash-loading" role="status"><div class="option-skeleton"><i v-for="index in 4" :key="index"></i></div><span class="sr-only">正在解析 DASH 清单…</span></div>
     <fieldset v-else-if="manifest" class="dash-selection panel" :disabled="busy || Boolean(submittedPayload)">
-      <label><span>视频画质</span><select v-model="videoId" class="control" aria-label="视频画质"><option value="">不下载视频</option><option v-for="track in videos" :key="track.id" :value="track.id">{{ label(track) }}</option></select></label>
-      <label><span>音轨</span><select v-model="audioId" class="control" aria-label="音轨"><option value="">不下载音频</option><option v-for="track in audios" :key="track.id" :value="track.id">{{ label(track) }}</option></select></label>
-      <label><span>输出容器</span><select v-model="container" class="control" aria-label="输出容器"><option value="mp4">MP4</option><option value="mkv">MKV</option></select></label>
-      <label><span>文件名</span><input v-model="fileName" class="control" maxlength="100" aria-label="文件名"></label>
+      <div class="field"><span>视频画质</span><SfSelect v-model="videoId" :options="videoOptions" label="视频画质" /></div>
+      <div class="field"><span>音轨</span><SfSelect v-model="audioId" :options="audioOptions" label="音轨" /></div>
+      <div class="field"><span>输出容器</span><SfSelect v-model="container" :options="containerOptions" label="输出容器" /></div>
+      <label class="field"><span>文件名</span><input v-model="fileName" class="control" maxlength="100" aria-label="文件名"></label>
     </fieldset>
     <div v-if="selection.error" class="status-banner error" role="alert">{{ selection.error }}</div>
     <section v-if="manifest" class="download-summary panel">

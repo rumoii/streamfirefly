@@ -14,6 +14,7 @@ import ResourceTools from "./features/configuration/ResourceTools.vue";
 import { openCapture, openDispatch } from "./features/configuration/client";
 import DownloadDialog from "./components/DownloadDialog.vue";
 import TaskOverview from "./components/TaskOverview.vue";
+import SfIcon from "./ui/SfIcon.vue";
 
 const store = useAppStore();
 const surface = surfaceFromUrl();
@@ -50,17 +51,16 @@ onBeforeUnmount(() => { store.dispose(); clearTimeout(toastTimer); });
       <ConnectionBanner :state="store.connection" :error="store.connectionError" @retry="store.refresh" />
       <div v-if="store.error" class="status-banner error">{{ store.error }}</div>
       <div v-else-if="store.context && !store.context.supported" class="restricted-state">
-        <span>⌁</span><h2>当前页面不支持嗅探</h2><p>浏览器内部页面、扩展页面和本地受限页面不能读取媒体请求，也不能展开工作区。</p>
+        <span><SfIcon name="plug-connected-x" :size="22" /></span><h2>当前页面不支持嗅探</h2><p>浏览器内部页面、扩展页面和本地受限页面不能读取媒体请求，也不能展开工作区。</p>
       </div>
       <template v-else>
-        <div class="sidebar-source-summary"><strong>{{ store.candidates.filter(item => item.type !== 'segment').length }}</strong><span>个媒体资源</span><i></i><strong>{{ store.activeTasks.length }}</strong><span>个活动任务</span></div>
         <ResourcesView :connected="store.connection === 'ready'" @batch-download="batchCandidates = $event" :candidates="store.candidates" :loading="store.loading" :view-state="store.resourceViewState" compact cover-only @download="openDownload" @capture-blob="captureBlob" @parse="openParser" @inspect="candidate => guard(() => store.openWorkspace('resources', candidate.id))" @remove="guard(() => store.removeCandidates($event), '已从列表移除资源')" @update-view-state="patch => guard(() => store.patchResourceView(patch))" @metadata="(candidate, metadata) => guard(() => store.updateCandidateMetadata(candidate, metadata))" :external-enabled="Boolean(store.context?.supported)" @external-download="sendExternal"><template #header-tools><ResourceTools :context="store.context" /></template></ResourcesView>
         <TaskOverview :source-tasks="store.sourceTasks" :active-tasks="store.activeTasks" />
       </template>
     </main>
     <footer class="sidebar-actions">
-      <button class="button primary" type="button" :disabled="!store.context?.supported" @click="guard(() => store.openWorkspace('resources'))">展开工作区</button>
-      <button class="button subtle" type="button" :disabled="!store.context?.supported" @click="guard(() => store.openWorkspace('settings'))">设置</button>
+      <button class="button primary" type="button" :disabled="!store.context?.supported" @click="guard(() => store.openWorkspace('resources'))"><SfIcon name="arrows-diagonal" /><span>展开工作区</span></button>
+      <button class="button subtle" type="button" :disabled="!store.context?.supported" @click="guard(() => store.openWorkspace('settings'))"><SfIcon name="settings" /><span>设置</span></button>
     </footer>
     <BatchDownloadDialog :candidates="batchCandidates" :save-dir="store.settings.saveDir" :download-threads="store.settings.downloadThreads" :source-context-id="store.context?.sourceContextId || null" :source-tab-id="store.context?.sourceTabId ?? null" :connected="store.connection === 'ready'" @close="batchCandidates = null" @inspect="candidate => { batchCandidates = null; openParser(candidate); }" />
     <DownloadDialog :connected="store.connection === 'ready'" :candidate="downloadCandidate" :save-dir="store.settings.saveDir" :download-threads="store.settings.downloadThreads" :source-context-id="store.context?.sourceContextId || null" :source-tab-id="store.context?.sourceTabId ?? null" :capabilities="store.capabilities" @close="downloadCandidate = null" @created="message => { showToast(message); downloadCandidate = null; }" />

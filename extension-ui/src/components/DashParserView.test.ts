@@ -10,7 +10,7 @@ beforeEach(() => { send.mockReset(); create.mockReset(); create.mockResolvedValu
 describe("DASH workbench", () => {
   it("uses inline content, defaults to highest bandwidth, and submits plain selected plan", async () => {
     const wrapper = mount(DashParserView, { props: props() }); await flushPromises();
-    expect(send).not.toHaveBeenCalled(); expect(wrapper.get('[aria-label="视频画质"]').element).toHaveProperty("value", "video-1");
+    expect(send).not.toHaveBeenCalled(); expect(wrapper.get('[aria-label="视频画质"]').attributes("data-value")).toBe("video-1");
     await wrapper.findAll("button").find(button => button.text() === "开始下载")!.trigger("click"); await flushPromises();
     expect(create).toHaveBeenCalledOnce(); const payload = create.mock.calls[0][0];
     expect(() => structuredClone(payload)).not.toThrow(); expect(payload.inlineManifest).toBeNull(); expect(payload.dashPlan.tracks).toHaveLength(1);

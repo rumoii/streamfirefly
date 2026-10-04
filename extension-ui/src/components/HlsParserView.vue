@@ -8,6 +8,8 @@ import { humanError } from "../store";
 import { buildHlsPlan } from "../download-plan";
 import { createDownload } from "../download-client";
 import KeyCandidates from "../features/configuration/KeyCandidates.vue";
+import SfIcon from "../ui/SfIcon.vue";
+import SfSelect from "../ui/SfSelect.vue";
 const requestId = ref(crypto.randomUUID());
 
 const props = defineProps<{ candidate: MediaCandidate; context: UiContext; capabilities: string[]; saveDir: string; downloadThreads: number; connected?: boolean }>();
@@ -24,6 +26,7 @@ const range = reactive({ startTime: 0, endTime: 0, first: 0, last: 0 });
 const form = reactive({ name: "", extension: "mp4", container: "mp4", busy: false });
 const keyMode = ref<"auto" | "manual">("auto");
 const keyForm = reactive<{ kind: HlsKeyOverrideKind; value: string; iv: string }>({ kind: "hex", value: "", iv: "" });
+const keyKinds: { value: HlsKeyOverrideKind; label: string }[] = [{ value: "hex", label: "Hex" }, { value: "base64", label: "Base64" }, { value: "url", label: "密钥 URL" }];
 const trackManifests = new Map<string, HlsManifest>();
 let variantSequence = 0;
 let disposed = false;
@@ -159,7 +162,7 @@ function previewManifest(url: string) {
 
 <template>
   <section class="parser-page">
-    <div class="subpage-heading"><button class="button subtle" type="button" @click="$emit('back')">← 返回资源</button><div><span class="tag">HLS</span><h2>媒体解析</h2><p>{{ candidate.pageTitle || candidate.title || candidate.url }}</p></div></div>
+    <div class="subpage-heading"><button class="icon-button" type="button" aria-label="返回资源" title="返回资源" @click="$emit('back')"><SfIcon name="chevron-left" /></button><div><div class="subpage-title"><span class="tag">HLS</span><h2>媒体解析</h2></div><p :title="candidate.pageTitle || candidate.title || candidate.url">{{ candidate.pageTitle || candidate.title || candidate.url }}</p></div></div>
     <div v-if="error" class="status-banner error">{{ error }}</div>
     <div v-if="isLive" class="status-banner warning"><strong>检测到直播清单</strong><span>流萤会持续获取新增切片；结束时点击“停止并保存”，或等待直播清单自然结束。</span></div>
     <div v-if="unsupportedLiveFeature" class="status-banner error"><strong>暂不支持录制</strong><span>{{ unsupportedLiveFeature }}</span></div>
@@ -185,19 +188,19 @@ function previewManifest(url: string) {
           <div v-if="rangeMode === 'segment'" class="range-inputs"><label><span>起始切片</span><input v-model.number="range.first" class="control" type="number" min="0" :max="videoManifest.segments.length - 1"></label><label><span>结束切片</span><input v-model.number="range.last" class="control" type="number" :min="range.first" :max="videoManifest.segments.length - 1"></label></div>
           <dl v-if="actualRange" class="range-summary"><div><dt>清单总时长</dt><dd>{{ formatDuration(videoManifest.duration) }}</dd></div><div><dt>实际下载范围</dt><dd>{{ formatDuration(actualRange.actualStart) }} — {{ formatDuration(actualRange.actualEnd) }}</dd></div><div><dt>实际切片</dt><dd>#{{ actualRange.first }} — #{{ actualRange.last }}（{{ actualRange.count }} 个）</dd></div><div><dt>预计时长</dt><dd>{{ formatDuration(actualRange.actualEnd - actualRange.actualStart) }}</dd></div></dl>
         </div>
-        <div v-else-if="isLive" class="empty-state"><span>●</span><h3>直播录制模式</h3><p>当前窗口已有 {{ videoManifest?.segments.length || 0 }} 个切片；开始后会自动轮询并去重保存。</p></div>
-        <div v-else-if="!loading" class="empty-state"><span>⌁</span><h3>没有可用切片</h3><p>此清单没有可下载的完整媒体切片。</p></div>
+        <div v-else-if="isLive" class="empty-state"><span><SfIcon name="broadcast" :size="22" /></span><h3>直播录制模式</h3><p>当前窗口已有 {{ videoManifest?.segments.length || 0 }} 个切片；开始后会自动轮询并去重保存。</p></div>
+        <div v-else-if="!loading" class="empty-state"><span><SfIcon name="alert-triangle" :size="22" /></span><h3>没有可用切片</h3><p>此清单没有可下载的完整媒体切片。</p></div>
       </section>
     </div>
     <details class="panel encryption-panel">
-      <summary><span><strong>加密与密钥</strong><small>{{ encryptionMethods.length ? `检测到 ${encryptionMethods.join('、')}` : '当前所选画质未检测到加密' }}</small></span><i>⌄</i></summary>
+      <summary><span><strong>加密与密钥</strong><small>{{ encryptionMethods.length ? `检测到 ${encryptionMethods.join('、')}` : '当前所选画质未检测到加密' }}</small></span><SfIcon name="chevron-down" /></summary>
       <div class="encryption-body">
         <div v-if="unsupportedEncryption" class="status-banner error"><strong>不支持 {{ unsupportedEncryption }}</strong><span>仅支持标准 AES-128；SAMPLE-AES 与 DRM 只识别，不尝试绕过。</span></div>
         <label class="choice-card compact"><input v-model="keyMode" type="radio" value="auto"><span><strong>自动使用清单密钥</strong><small>按照 #EXT-X-KEY 获取密钥，并在批量下载前验证首个加密切片。</small></span></label>
         <label class="choice-card compact" :class="{ disabled: !keyOverrideSupported }"><input v-model="keyMode" type="radio" value="manual" :disabled="!keyOverrideSupported"><span><strong>手动指定 AES-128 密钥</strong><small>密钥仅保存在本次 Native Host 进程内，不写入任务记录或检查点。</small></span></label>
         <KeyCandidates v-if="keyOverrideSupported" :context="context" @select="value => { keyMode = 'manual'; keyForm.kind = 'hex'; keyForm.value = value; }" />
         <div v-if="keyMode === 'manual'" class="key-form">
-          <label><span>密钥格式</span><select v-model="keyForm.kind" class="control"><option value="hex">Hex</option><option value="base64">Base64</option><option value="url">密钥 URL</option></select></label>
+          <div class="field"><span>密钥格式</span><SfSelect v-model="keyForm.kind" :options="keyKinds" label="密钥格式" /></div>
           <label class="key-value"><span>{{ keyForm.kind === 'url' ? '密钥地址' : '密钥内容' }}</span><input v-model="keyForm.value" class="control" autocomplete="off" :placeholder="keyForm.kind === 'hex' ? '32 位十六进制' : keyForm.kind === 'base64' ? '解码后 16 字节' : 'https://example.com/key.bin'"></label>
           <label><span>自定义 IV（可选）</span><input v-model="keyForm.iv" class="control" autocomplete="off" placeholder="32 位十六进制"></label>
           <p v-if="keyError" class="inline-error">{{ keyError }}</p>

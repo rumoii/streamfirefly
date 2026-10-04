@@ -3,6 +3,7 @@ import { onMounted, ref } from "vue";
 import type { UiContext } from "../../types";
 import CapturePanel from "./CapturePanel.vue";
 import { configurationRequest } from "./client";
+import SfIcon from "../../ui/SfIcon.vue";
 const context = ref<UiContext | null>(null);
 const error = ref("");
 const query = new URLSearchParams(location.search);
@@ -19,9 +20,9 @@ async function returnToSource() {
 onMounted(refresh);
 </script>
 <template>
-  <main class="settings-page">
-    <h2>缓存捕捉控制</h2><p>{{ context?.pageTitle }} · {{ context?.pageUrl }}</p>
-    <div class="feature-row"><button class="button" @click="refresh">刷新来源页面状态</button><button class="button" :disabled="!context" @click="returnToSource">返回来源播放</button></div>
-    <CapturePanel :context="context" :target-object-url="targetObjectUrl" /><p v-if="error" role="alert">{{ error }}</p>
+  <main class="settings-page standalone-page">
+    <header class="page-head"><div><h2>缓存捕捉控制</h2><p :title="context?.pageUrl">{{ context?.pageTitle }} · {{ context?.pageUrl }}</p></div><div class="page-head-actions"><button class="button" @click="refresh"><SfIcon name="refresh" /><span>刷新来源页面状态</span></button><button class="button" :disabled="!context" @click="returnToSource"><SfIcon name="arrow-back-up" /><span>返回来源播放</span></button></div></header>
+    <p v-if="error" class="inline-error" role="alert">{{ error }}</p>
+    <CapturePanel :context="context" :target-object-url="targetObjectUrl" />
   </main>
 </template>

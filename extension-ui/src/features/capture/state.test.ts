@@ -21,7 +21,7 @@ describe("capture and deep-search session state", () => {
     const wrapper = mount(CapturePanel, { props: { context } }); await flushPromises();
     const button = (name: string) => wrapper.findAll("button").find(item => item.text() === name)!;
     await button("扫描媒体源").trigger("click"); await flushPromises();
-    expect(wrapper.find("select").element.value).toBe("2:doc:1");
+    expect(wrapper.get('[aria-label="媒体源"]').attributes("data-value")).toBe("2:doc:1");
     await wrapper.find('input[type="checkbox"]').setValue(true); await button("开始捕捉").trigger("click"); await flushPromises();
     expect(send.mock.calls.find(([message]) => message.type === "capture.open")?.[0].payload.source).toEqual(source);
     await button("停止并保存").trigger("click"); await flushPromises();
@@ -35,7 +35,10 @@ describe("capture and deep-search session state", () => {
     await wrapper.findAll("button").find(button => button.text() === "扫描媒体源")!.trigger("click");
     await wrapper.setProps({ context: { ...context, sourceContextId: "new-page" } });
     resolveScan({ ok: true, value: { sources: [source], frames: [] } }); await flushPromises();
-    expect(wrapper.findAll("option")).toHaveLength(1); expect(wrapper.find("select").element.value).toBe(""); wrapper.unmount();
+    const trigger = wrapper.get('[aria-label="媒体源"]');
+    expect(trigger.attributes("data-value")).toBe(""); expect(trigger.text()).toBe("请选择媒体源");
+    await trigger.trigger("click"); await flushPromises();
+    expect(wrapper.findAll('[role="option"]')).toHaveLength(1); wrapper.unmount();
   });
   it("auto-selects only the source mapped to a requested Blob URL", async () => {
     send.mockImplementation(async message => {
@@ -46,8 +49,8 @@ describe("capture and deep-search session state", () => {
     });
     const wrapper = mount(CapturePanel, { props: { context, targetObjectUrl: source.objectUrls[0] } });
     await flushPromises();
-    expect(wrapper.findAll("option")).toHaveLength(2);
-    expect(wrapper.find("select").element.value).toBe("2:doc:1");
+    expect(wrapper.get('[aria-label="媒体源"]').attributes("data-value")).toBe("2:doc:1");
+    expect(wrapper.get('[aria-label="媒体源"]').attributes("disabled")).toBeDefined();
     expect(wrapper.text()).toContain("已定位此 Blob 对应的媒体源");
     await wrapper.find('input[type="checkbox"]').setValue(true);
     await wrapper.findAll("button").find(button => button.text() === "开始捕捉")!.trigger("click");

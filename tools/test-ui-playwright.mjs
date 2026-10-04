@@ -153,6 +153,10 @@ try {
     const listeners = new Set();
     const view = { pattern: '', type: 'all', minMb: '', maxMb: '', minDuration: '', maxDuration: '', sortMode: 'detected', expandedId: '', revision: 0 };
     const candidates = Array.from({ length: 64 }, (_, index) => ({ id: 'fixture-' + index, title: index === 0 ? '封面图片' : '媒体资源 ' + String(index).padStart(2, '0'), pageTitle: '注入工作区夹具', url: location.origin + (index === 0 ? '/poster.svg' : '/media/resource-' + index + '.mp4'), type: index === 0 ? 'image' : 'video', poster: index % 3 === 1 ? location.origin + '/poster.svg' : undefined, width: 1280, height: 720, duration: 126, size: 24 * 1024 * 1024, source: 'network' }));
+    const dashText = '<MPD mediaPresentationDuration="PT8S"><Period><AdaptationSet mimeType="video/mp4" codecs="avc1.64001f"><SegmentTemplate duration="2" media="$RepresentationID$-$Number$.m4s" initialization="init.mp4"/><Representation id="low" bandwidth="100000" width="640" height="360"/><Representation id="high" bandwidth="200000" width="1280" height="720"/></AdaptationSet><AdaptationSet mimeType="audio/mp4" codecs="mp4a.40.2" lang="zh"><SegmentTemplate duration="2" media="audio-$Number$.m4s" initialization="audio-init.mp4"/><Representation id="audio" bandwidth="64000"/></AdaptationSet></Period></MPD>';
+    candidates.push({ id: 'fixture-hls', title: 'HLS 解析夹具', pageTitle: 'HLS 解析夹具', url: location.origin + '/stream/master.m3u8', type: 'hls', mime: 'application/vnd.apple.mpegurl', sizeKind: 'manifest', source: 'network', requestHeaders: {} }, { id: 'fixture-dash', title: 'DASH 解析夹具', pageTitle: 'DASH 解析夹具', url: location.origin + '/manifest.mpd', type: 'dash', mime: 'application/dash+xml', inlineManifest: { format: 'dash', text: dashText, baseUrl: location.origin + '/manifest.mpd' }, source: 'network', requestHeaders: {} });
+    const playlists = { 'master.m3u8': '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=2600000,RESOLUTION=1280x720\n720.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=900000,RESOLUTION=640x360\n360.m3u8\n' };
+    const mediaPlaylist = ['#EXTM3U', '#EXT-X-TARGETDURATION:6', ...Array.from({ length: 24 }, (_, index) => '#EXTINF:6.0,\nseg-' + index + '.ts'), '#EXT-X-ENDLIST', ''].join('\n');
     const stored = {};
     const context = { sourceContextId: 'workspace-page', sourceTabId: 2, pageUrl: location.href, pageTitle: '注入工作区夹具', favIconUrl: '', supported: true, paused: false, sniffingActive: true, resourceViewState: view, candidates };
     const tasks = [
@@ -171,6 +175,7 @@ try {
           if (message.type === 'native.connect') return { ok: true, capabilities: ['hls-selection-v1', 'hls-segment-engine-v1', 'task-queue-v1', 'task-idempotency-v1'] };
           if (message.type === 'ui.context.get') return { ok: true, context };
           if (message.type === 'task.list') return { ok: true, tasks };
+          if (message.type === 'media.fetchText') { const url = new URL(message.url, location.origin); return { ok: true, text: playlists[url.pathname.split('/').pop()] || mediaPlaylist, url: url.href }; }
           if (message.type === 'workspace.ready') return { ok: true };
           if (message.type === 'workspace.close') { queueMicrotask(() => window.dispatchEvent(new Event('streamfirefly-workspace-unmount'))); return { ok: true }; }
           if (message.type === 'ui.resource-state.patch') { Object.assign(view, message.patch, { revision: view.revision + 1 }); for (const listener of listeners) listener({ type: 'ui.resource-state.changed', sourceContextId: context.sourceContextId, state: structuredClone(view) }); return { ok: true, state: structuredClone(view) }; }
@@ -294,6 +299,23 @@ try {
   await workspace.getByText('测试图片', { exact: true }).click();
   await workspace.locator('.downloads-page').getByText('图片', { exact: true }).waitFor();
   await workspacePage.screenshot({ path: path.join(output, 'injected-workspace-image-task.png') });
+  const navigateParser = candidateId => workspacePage.evaluate(id => window.dispatchEvent(new CustomEvent('streamfirefly-workspace-navigate', { detail: { view: 'parser', candidateId: id } })), candidateId);
+  await navigateParser('fixture-hls');
+  await workspace.locator('.parser-page').getByText('1280 × 720', { exact: true }).waitFor();
+  await workspacePage.waitForFunction(() => document.getElementById('streamfirefly-workspace-host').shadowRoot.getAnimations().every(animation => animation.effect?.getComputedTiming().iterations === Infinity || animation.playState !== 'running'));
+  let summaryBox = await workspace.locator('.parser-page > .download-summary').boundingBox();
+  let frameBox = await frame.boundingBox();
+  assert.ok(summaryBox.y + summaryBox.height <= frameBox.y + frameBox.height + 1, 'HLS download summary stays inside the window: ' + JSON.stringify({ summaryBox, frameBox }));
+  assert.equal(await workspace.getByRole('button', { name: '开始可靠下载', exact: true }).isVisible(), true);
+  await workspacePage.screenshot({ path: path.join(output, 'workspace-hls-parser.png') });
+  await navigateParser('fixture-dash');
+  await workspace.locator('.parser-page').getByText('DASH 解析夹具').first().waitFor();
+  await workspace.getByRole('button', { name: '视频画质', exact: true }).click();
+  await workspace.getByRole('option', { name: '不下载视频', exact: true }).click();
+  assert.equal(await workspace.getByRole('button', { name: '视频画质', exact: true }).getAttribute('data-value'), '');
+  await workspacePage.screenshot({ path: path.join(output, 'workspace-dash-parser.png') });
+  await workspace.getByRole('button', { name: '返回资源', exact: true }).click();
+  await workspace.locator('.parser-page').waitFor({ state: 'detached' });
   await workspacePage.emulateMedia({ colorScheme: 'dark' });
   await workspace.getByRole('navigation', { name: '流萤功能' }).getByRole('button', { name: /^资源/ }).click();
   await workspace.locator('.row-main').first().click();
