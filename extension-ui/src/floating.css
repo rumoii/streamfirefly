@@ -28,6 +28,7 @@
 .floating-window .app-content { width: 100%; max-width: none; min-height: 0; flex: 1; margin: 0; padding: 12px; overflow: auto; overscroll-behavior: contain; background: var(--sf-bg); }
 .floating-window .app-content.resource-content { display: flex; flex-direction: column; padding: 0; overflow: hidden; background: var(--sf-surface); }
 .floating-window .app-content.resource-content > .status-banner { margin: 8px 12px 0; }
+.floating-window .downloads-page { flex: 1; border: 0; border-radius: 0; }
 .floating-window .resources { min-height: 0; flex: 1; }
 .floating-window .panel { border-radius: var(--sf-radius-lg); }
 .floating-window .settings-page { max-width: 1080px; }
@@ -66,6 +67,4 @@
   .floating-window .app-content { padding: 8px; }
   .floating-window .app-content.resource-content { padding: 0; }
   .floating-window .detail-grid { grid-template-columns: 1fr 1fr; }
-  .floating-window .task-detail { padding-left: 14px; }
-  .floating-window .downloads-title { flex-wrap: wrap; }
 }

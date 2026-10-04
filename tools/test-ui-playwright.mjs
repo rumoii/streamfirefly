@@ -119,7 +119,7 @@ try {
   await page.getByText('本地助手已断开', { exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: '批量下载', exact: true }).isDisabled(), true);
   await page.getByText('当前来源 2 项 · 活动任务 2 项', { exact: true }).waitFor();
-  assert.equal(await page.locator('.overview-list article').count(), 2);
+  assert.equal(await page.locator('.overview-list .task-row').count(), 2);
   await page.screenshot({ path: path.join(output, 'disconnected-retains-tasks.png') });
   assert.equal(await page.evaluate(() => window.__uiFixture.tasks.length), 2);
   await page.getByRole('button', { name: '重新连接', exact: true }).evaluate(element => {
@@ -127,7 +127,7 @@ try {
   });
   await page.getByRole('button', { name: '重新连接', exact: true }).click();
   await page.getByText('本地助手已断开', { exact: true }).waitFor({ state: 'hidden' });
-  assert.equal(await page.locator('.overview-list article').count(), 2);
+  assert.equal(await page.locator('.overview-list .task-row').count(), 2);
   assert.equal(assetRequests.some(url => url.endsWith('/assets/hls.js')), false, 'normal sidebar load must not request assets/hls.js');
 
   const workspacePage = await browser.newPage();
@@ -144,7 +144,13 @@ try {
     const candidates = Array.from({ length: 64 }, (_, index) => ({ id: 'fixture-' + index, title: index === 0 ? '封面图片' : '媒体资源 ' + String(index).padStart(2, '0'), pageTitle: '注入工作区夹具', url: location.origin + (index === 0 ? '/poster.svg' : '/media/resource-' + index + '.mp4'), type: index === 0 ? 'image' : 'video', poster: index % 3 === 1 ? location.origin + '/poster.svg' : undefined, width: 1280, height: 720, duration: 126, size: 24 * 1024 * 1024, source: 'network' }));
     const stored = {};
     const context = { sourceContextId: 'workspace-page', sourceTabId: 2, pageUrl: location.href, pageTitle: '注入工作区夹具', favIconUrl: '', supported: true, paused: false, sniffingActive: true, resourceViewState: view, candidates };
-    const tasks = [{ id: 'image-task', title: '测试图片', state: 'succeeded', progress: 100, source_context_id: 'workspace-page', mime: 'image/jpeg', output: 'C:\\Downloads\\photo.jpg', outputs: [{ kind: 'media', path: 'C:\\Downloads\\photo.jpg', state: 'succeeded' }] }];
+    const tasks = [
+      { id: 'image-task', title: '测试图片', state: 'succeeded', progress: 100, source_context_id: 'workspace-page', mime: 'image/jpeg', output: 'C:\\Downloads\\photo.jpg', outputs: [{ kind: 'media', path: 'C:\\Downloads\\photo.jpg', state: 'succeeded' }] },
+      { id: 'failed-task', title: '分片失败的点播', state: 'failed', progress: 63, message: '分片 214 连续 3 次请求失败（HTTP 403）', retry_count: 3, failed_segments: 1, source_context_id: 'workspace-page' },
+      { id: 'paused-task', title: '已暂停的长视频', state: 'paused', progress: 22, downloaded_bytes: 2 * 1024 * 1024, total_bytes: 9 * 1024 * 1024, source_context_id: 'workspace-page' },
+      { id: 'live-task', title: '直播间录制', state: 'running', phase: 'recording', live_recording: true, progress: 0, recorded_duration: 754, source_context_id: 'workspace-page' },
+      { id: 'running-task', title: '正在下载的 HLS 正片', state: 'running', phase: 'downloading_segments', progress: 47, segments_total: 912, segments_completed: 428, downloaded_bytes: 612 * 1024 * 1024, total_bytes: 1300 * 1024 * 1024, speed_bytes_per_second: 8.6 * 1024 * 1024, eta_seconds: 82, source_context_id: 'workspace-page' }
+    ];
     window.chrome = {
       storage: { local: { get: async query => Object.fromEntries((Array.isArray(query) ? query : [query]).filter(key => key in stored).map(key => [key, structuredClone(stored[key])])), set: async values => Object.assign(stored, structuredClone(values)) } },
       runtime: {
@@ -187,6 +193,11 @@ try {
   await workspace.getByRole('navigation', { name: '流萤功能' }).getByRole('button', { name: /^下载/ }).click();
   await workspace.getByText('测试图片', { exact: true }).waitFor();
   assert.equal(await frame.getAttribute('data-display-mode'), 'panel', 'panel shows downloads without expanding');
+  assert.equal(await workspace.locator('.downloads-page .task-row').count(), 5);
+  assert.equal(await workspace.locator('.downloads-page .task-percent').count(), 1, 'panel folds percentages except LIVE');
+  await workspace.getByRole('button', { name: '暂停：正在下载的 HLS 正片', exact: true }).waitFor();
+  await workspacePage.waitForFunction(() => document.getElementById('streamfirefly-workspace-host').shadowRoot.getAnimations().every(animation => animation.effect?.getComputedTiming().iterations === Infinity || animation.playState !== 'running'));
+  await workspacePage.screenshot({ path: path.join(output, 'floating-panel-downloads.png') });
   await workspace.getByRole('navigation', { name: '流萤功能' }).getByRole('button', { name: /^资源/ }).click();
   await workspace.getByRole('button', { name: '更多筛选', exact: true }).click();
   await workspace.getByRole('spinbutton', { name: '最短时长（秒）' }).waitFor();
