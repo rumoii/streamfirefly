@@ -16,7 +16,7 @@ use std::{
         mpsc,
     },
     thread,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 fn download_resource(
@@ -183,23 +183,42 @@ fn execute(
         }
         drop(sender);
         let mut first_error = None;
+        let mut completed = 0_u32;
+        let mut bytes = 0_u64;
+        let mut published = 0_u32;
+        let mut last_update = Instant::now();
+        // Progress is summarised at most every 250 ms instead of rewriting the task store per segment.
+        let publish = |completed: u32, bytes: u64| {
+            update(store, writer, &task.id, |current| {
+                current.segments_completed = completed;
+                current.downloaded_bytes = bytes;
+                current.progress = (u64::from(completed) * 85 / jobs.len() as u64) as u8;
+                current.speed_bytes_per_second =
+                    (bytes as f64 / started.elapsed().as_secs_f64().max(0.001)) as u64;
+            })
+        };
         for result in receiver {
             match result {
-                Ok(bytes) => update(store, writer, &task.id, |current| {
-                    current.segments_completed += 1;
-                    current.downloaded_bytes += bytes;
-                    current.progress =
-                        (u64::from(current.segments_completed) * 85 / jobs.len() as u64) as u8;
-                    current.speed_bytes_per_second = (current.downloaded_bytes as f64
-                        / started.elapsed().as_secs_f64().max(0.001))
-                        as u64;
-                }),
+                Ok(segment_bytes) => {
+                    completed += 1;
+                    bytes += segment_bytes;
+                    if last_update.elapsed() >= Duration::from_millis(250)
+                        || completed as usize == jobs.len()
+                    {
+                        publish(completed, bytes);
+                        published = completed;
+                        last_update = Instant::now();
+                    }
+                }
                 Err(error) => {
                     if first_error.is_none() {
                         first_error = Some(error);
                     }
                 }
             }
+        }
+        if published != completed {
+            publish(completed, bytes);
         }
         first_error.map_or(Ok(()), Err)
     });

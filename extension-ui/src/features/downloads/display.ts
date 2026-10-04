@@ -57,9 +57,10 @@ export function taskActions(task: DownloadTask): { primary: TaskAction | null; m
   const available: TaskAction[] = [];
   if (task.live_recording && ["queued", "starting", "running", "retrying", "paused", "interrupted"].includes(task.state)) available.push({ key: "stop", label: "停止并保存", icon: "player-stop" });
   if (task.resume_requirement !== "dash_reparse_required" && (task.state === "paused" || (task.state === "interrupted" && Boolean(task.resume_requirement)))) available.push({ key: "resume", label: resumeLabel(task), icon: task.resume_requirement?.includes("key") ? "key" : "player-play" });
-  if (isActive(task) && task.state !== "pausing" && task.state !== "stopping") available.push({ key: "pause", label: "暂停", icon: "player-pause" });
+  if (isActive(task) && !["pausing", "stopping", "cancelling"].includes(task.state)) available.push({ key: "pause", label: "暂停", icon: "player-pause" });
   if (["failed", "cancelled", "interrupted", "partial"].includes(task.state) && !task.resume_requirement) available.push({ key: "retry", label: "重试", icon: "refresh" });
-  if (isActive(task) || task.state === "paused") available.push({ key: "cancel", label: "取消", icon: "x" });
+  // Matches the states the native host accepts for cancellation.
+  if (["queued", "starting", "running", "retrying", "pausing", "paused"].includes(task.state)) available.push({ key: "cancel", label: "取消", icon: "x" });
   const primary = available.find(action => action.key !== "cancel") || null;
   return { primary, menu: [...available.filter(action => action !== primary), { key: "delete", label: "删除任务…", icon: "trash", danger: true }] };
 }

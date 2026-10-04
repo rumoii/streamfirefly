@@ -10,6 +10,8 @@ describe("download task display", () => {
     expect(keys(task({ state: "queued" }))).toEqual({ primary: "pause", menu: ["cancel", "delete"] });
     expect(keys(task({ state: "pausing" }))).toEqual({ primary: null, menu: ["cancel", "delete"] });
     expect(keys(task({ state: "paused" }))).toEqual({ primary: "resume", menu: ["cancel", "delete"] });
+    expect(keys(task({ state: "cancelling" }))).toEqual({ primary: null, menu: ["delete"] });
+    expect(keys(task({ live_recording: true, state: "stopping" }))).toEqual({ primary: null, menu: ["delete"] });
     expect(keys(task({ state: "failed" }))).toEqual({ primary: "retry", menu: ["delete"] });
     expect(keys(task({ state: "cancelled" }))).toEqual({ primary: "retry", menu: ["delete"] });
     expect(keys(task({ state: "succeeded", progress: 100 }))).toEqual({ primary: null, menu: ["delete"] });

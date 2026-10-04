@@ -144,7 +144,8 @@ function schedulePersist(state) {
 
 function canonicalize(rawUrl) { try { const url = new URL(rawUrl); url.hash = ""; return url.href; } catch (_) { return rawUrl; } }
 
-function updateBadge(state) { api.action.setBadgeText({ tabId: state.tabId, text: state.paused ? "Ⅱ" : state.candidates.size ? String(state.candidates.size) : "" }).catch?.(() => {}); }
+// Segments stay out of the resource list, so the badge counts only listed resources.
+function updateBadge(state) { const count = [...state.candidates.values()].filter(item => item.type !== "segment").length; api.action.setBadgeText({ tabId: state.tabId, text: state.paused ? "Ⅱ" : count ? String(count) : "" }).catch?.(() => {}); }
 
 const namespaceMediaLeaf = /^(?:[a-z_][a-z0-9_]*\.){4,}(?:m3u8?|mpd|mp4|webm|mov|mkv|flv|f4v|m4v|mpeg|mpg|avi|wmv|asf|ogv|3gp|mp3|m4a|aac|wav|flac|ogg|opus|wma|weba|ts|m4s|key)$/;
 
