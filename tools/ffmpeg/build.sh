@@ -23,6 +23,7 @@ esac
 work=/tmp/streamfirefly-ffmpeg
 downloads=${STREAMFIREFLY_FFMPEG_DOWNLOADS:-$work/downloads}
 mkdir -p "$downloads" "$out"
+out=$(cd "$out" && pwd)
 
 fetch() { # url sha256 file
   local file="$downloads/$3"
