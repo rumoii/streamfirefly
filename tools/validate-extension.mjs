@@ -16,7 +16,7 @@ if (!manifest.background?.service_worker) throw new Error('background service wo
 if (!manifest.permissions?.includes('nativeMessaging')) throw new Error('nativeMessaging permission missing');
 if (!manifest.permissions?.includes('declarativeNetRequest')) throw new Error('declarativeNetRequest permission missing');
 if (!manifest.permissions?.includes('webNavigation')) throw new Error('webNavigation permission missing');
-if (manifest.version !== '0.10.0') throw new Error(`unexpected extension version: ${manifest.version}`);
+if (manifest.version !== JSON.parse(fs.readFileSync(path.join(root, '..', 'package.json'), 'utf8')).version) throw new Error(`unexpected extension version: ${manifest.version}`);
 if (!manifest.permissions?.includes('sidePanel')) throw new Error('Chrome sidePanel permission missing');
 if (manifest.side_panel?.default_path !== 'dist/app.html?surface=sidebar#/resources') throw new Error('Chrome side panel entry missing');
 if (manifest.options_ui?.page !== 'dist/app.html?surface=options#/settings') throw new Error('Vue settings entry missing');

@@ -16,7 +16,7 @@
 
 流萤由浏览器扩展和 Windows 本地助手两部分组成。扩展在网页里发现视频、音频、图片和 HLS/DASH 清单；本地助手用 Rust 编写，负责下载、排队、断点恢复和 FFmpeg 合并。任务和设置只保存在本机。
 
-项目目前处于 0.10.0 内测阶段，只通过受邀渠道分发。流萤不绕过 DRM，请只下载你拥有版权或已获授权的内容。
+当前版本为 1.0.0。流萤不绕过 DRM，请只下载你拥有版权或已获授权的内容。
 
 ## 功能
 
@@ -69,9 +69,9 @@
 
 ## 安装
 
-### 内测包
+### 完整发布包
 
-受邀测试者请按[内测包安装指南](README-INTERNAL.md)操作。扩展和本地助手必须来自同一批次。
+请按[安装指南](INSTALL.md)操作。扩展和本地助手必须来自同一批次。
 
 ### 从源码构建
 
@@ -176,13 +176,13 @@ npm run test:native
 ```powershell
 .\tools\package-extension.ps1        # Chrome Web Store 上传包
 npm run package:firefox              # Firefox 测试用 XPI（未签名）
-.\tools\package-internal-test.ps1    # x64 / ARM64 内测包
+.\tools\package-release.ps1 -SignedFirefoxXpi '<已签名 XPI 路径>'
 .\tools\build-installer.ps1 -Architecture x64
 .\tools\build-installer.ps1 -Architecture arm64
 .\tools\prepare-release.ps1 -ChromeExtensionId '<商店分配的扩展 ID>'
 ```
 
-- 内测包默认要求工作区没有未提交的改动。本地验收时可以加 `-AllowDirtySource`，但这样打出的包不能用于正式发布。
+- 正式打包必须使用干净提交和与其运行时代码一致的 Firefox 签名包。内测工具只用于历史版本，不用于正式发布。
 - 安装包构建需要 Inno Setup 6。FFmpeg 在构建时按固定地址和 SHA-256 下载，不提交到仓库。
 - 本地开发用的扩展 ID 是 `gimoeapmpoeogpabfdplccplmmohklff`，不要用它构建对外发布的安装包。Firefox 固定使用 `streamfirefly@example.invalid`。
 - 商店提交材料在 `store-assets/`。
@@ -197,7 +197,7 @@ npm run package:firefox              # Firefox 测试用 XPI（未签名）
 
 ## 文档
 
-- [内测包安装指南](README-INTERNAL.md)
+- [安装指南](INSTALL.md)
 - [隐私政策](PRIVACY.md)
 - [DASH 点播开发说明](docs/development/dash-vod.md)
 - [模块化发现与工具集成](docs/development/modular-discovery.md)

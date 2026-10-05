@@ -1,0 +1,96 @@
+name: Verify release source
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_commit:
+        description: Full main source SHA to verify
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: release-source
+  cancel-in-progress: false
+jobs:
+  source:
+    runs-on: windows-2025
+    timeout-minutes: 90
+    env:
+      EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+    steps:
+      - name: Check out the requested source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.expected_commit }}
+      - name: Verify source identity
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -ne 'refs/heads/main' -or $env:EXPECTED_COMMIT -notmatch '^[a-f0-9]{40}$') { throw 'Dispatch from main with a full source SHA' }
+          if ((git rev-parse HEAD).Trim() -ne $env:EXPECTED_COMMIT -or @(git status --porcelain).Count) { throw 'Source identity mismatch or dirty checkout' }
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Set up Rust targets
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.98.0-x86_64-pc-windows-msvc --profile minimal
+          rustup default 1.98.0-x86_64-pc-windows-msvc
+          rustup target add x86_64-pc-windows-msvc aarch64-pc-windows-msvc
+          cargo --version
+          rustc --version
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Prepare pinned media test dependencies
+        shell: pwsh
+        run: |
+          .\tools\download-ffmpeg.ps1 -Architecture x64
+          $ffmpeg = (Get-ChildItem -LiteralPath 'tools\ffmpeg-cache\x64-extracted' -Recurse -File -Filter ffmpeg.exe).FullName
+          $ffprobe = (Get-ChildItem -LiteralPath 'tools\ffmpeg-cache\x64-extracted' -Recurse -File -Filter ffprobe.exe).FullName
+          "STREAMFIREFLY_FFMPEG_EXE=$ffmpeg" >> $env:GITHUB_ENV
+          "STREAMFIREFLY_FFPROBE_EXE=$ffprobe" >> $env:GITHUB_ENV
+      - name: Verify source behavior
+        shell: pwsh
+        run: |
+          npm run verify:release:source
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run validate:extension
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --test tools/test-release-packaging.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run typecheck
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:unit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:capture:runtime:windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:packaging:windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:ui:browser
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:browsers
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:discovery
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run lint:firefox
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --manifest-path native-host/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          npm run test:native
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:discovery:native
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build both native architectures
+        shell: pwsh
+        run: |
+          foreach ($target in @('x86_64-pc-windows-msvc','aarch64-pc-windows-msvc')) {
+            cargo build --locked --release --target $target --manifest-path native-host/Cargo.toml
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }

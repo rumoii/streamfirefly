@@ -32,3 +32,7 @@ test-results/
 *.swp
 Thumbs.db
 .DS_Store
+
+# Local signing inputs and signed output
+*.env
+*.xpi

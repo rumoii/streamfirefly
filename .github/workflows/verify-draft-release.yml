@@ -1,44 +1,41 @@
-name: Package internal test bundles
+name: Verify draft release
 
 on:
   workflow_dispatch:
     inputs:
-      bundle_version:
-        description: Internal bundle version
+      release_id:
+        description: Numeric draft release ID containing final attachments
         required: true
-        default: 0.10.0-beta.6
         type: string
       expected_commit:
-        description: Exact main commit to package
+        description: Full main source SHA to verify
         required: true
         type: string
 permissions:
   contents: read
-
+concurrency:
+  group: release-draft
+  cancel-in-progress: false
 jobs:
-  package:
+  source:
     runs-on: windows-2025
-    timeout-minutes: 180
+    timeout-minutes: 90
     env:
-      BUNDLE_VERSION: ${{ inputs.bundle_version }}
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_ID: ${{ inputs.release_id }}
+      BUNDLE_VERSION: '1.0.0'
       EXPECTED_COMMIT: ${{ inputs.expected_commit }}
     steps:
       - name: Check out the requested source
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
-
+          ref: ${{ inputs.expected_commit }}
       - name: Verify source identity
         shell: pwsh
         run: |
-          if ($env:GITHUB_REF -ne 'refs/heads/main') { throw "Internal packages must be dispatched from main, got $env:GITHUB_REF" }
-          $actual = (git rev-parse HEAD).Trim()
-          if ($actual -ne $env:EXPECTED_COMMIT) { throw "Checked out $actual, expected $env:EXPECTED_COMMIT" }
-          git merge-base --is-ancestor 2e2e1121e6f82116c9a94397fdd743dc2cf913f4 HEAD
-          if ($LASTEXITCODE -ne 0) { throw 'The package source does not contain the Beta 6 network and workspace fixes' }
-          $status = @(git status --porcelain)
-          if ($status.Count) { throw "Checkout is dirty: $($status -join '; ')" }
-
+          if ($env:GITHUB_REF -ne 'refs/heads/main' -or $env:EXPECTED_COMMIT -notmatch '^[a-f0-9]{40}$') { throw 'Dispatch from main with a full source SHA' }
+          if ((git rev-parse HEAD).Trim() -ne $env:EXPECTED_COMMIT -or @(git status --porcelain).Count) { throw 'Source identity mismatch or dirty checkout' }
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -57,45 +54,38 @@ jobs:
       - name: Install JavaScript dependencies
         run: npm ci
 
-      - name: Verify source behavior
+      - name: Download exact draft attachments
         shell: pwsh
         run: |
-          npm run validate:extension
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm run typecheck
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm run test:unit
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm run test:capture:runtime:windows
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm run test:packaging:windows
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm run test:ui:browser
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm run test:browsers
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm run test:discovery
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm run lint:firefox
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --manifest-path native-host/Cargo.toml
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Build and audit both architectures
+          if ($env:RELEASE_ID -notmatch '^\d+$') { throw 'Invalid release ID' }
+          $release = gh api "repos/$env:GITHUB_REPOSITORY/releases/$env:RELEASE_ID" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or -not $release.draft -or $release.prerelease -or $release.tag_name -ne "v$env:BUNDLE_VERSION" -or $release.target_commitish -ne $env:EXPECTED_COMMIT) { throw 'Draft release identity mismatch' }
+          New-Item -ItemType Directory -Path release | Out-Null
+          foreach ($asset in $release.assets) {
+            if ($asset.name -notmatch '^(StreamFirefly-[A-Za-z0-9.-]+\.(zip|xpi)|SHA256SUMS\.txt)$') { throw 'Unsafe asset name' }
+            $data = Invoke-WebRequest -Headers @{Authorization="Bearer $env:GH_TOKEN";Accept='application/octet-stream'} -Uri $asset.url -OutFile (Join-Path 'release' $asset.name)
+          }
+          .\tools\verify-release-assets.ps1 -Directory release -ExpectedSourceCommit $env:EXPECTED_COMMIT
+      - name: Prepare test inspection tools
         shell: pwsh
         run: |
-          .\tools\package-internal-test.ps1 -BundleVersion $env:BUNDLE_VERSION
-
+          .\tools\download-ffmpeg.ps1 -Architecture x64
+          $driverZip = Join-Path $env:RUNNER_TEMP 'geckodriver.zip'
+          Invoke-WebRequest -Uri 'https://github.com/mozilla/geckodriver/releases/download/v0.37.1/geckodriver-v0.37.1-win64.zip' -OutFile $driverZip
+          if ((Get-FileHash -LiteralPath $driverZip -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'dfed9315abe8d2fbc1b6161a2ee8002452e79cf05ee92fdc653a4e26bc35edd8') { throw 'Geckodriver checksum mismatch' }
+          $driverDir = Join-Path $env:RUNNER_TEMP 'geckodriver'
+          Expand-Archive -LiteralPath $driverZip -DestinationPath $driverDir
+          "GECKODRIVER_BINARY=$(Join-Path $driverDir 'geckodriver.exe')" >> $env:GITHUB_ENV
       - name: Smoke test the packaged x64 install
         shell: pwsh
         run: |
           $extract = Join-Path $env:RUNNER_TEMP 'streamfirefly-x64-install-smoke'
           $installDir = Join-Path $env:RUNNER_TEMP 'streamfirefly-x64-installed'
-          Expand-Archive -LiteralPath ".\release\StreamFirefly-$env:BUNDLE_VERSION-internal-x64.zip" -DestinationPath $extract
+          Expand-Archive -LiteralPath ".\release\StreamFirefly-$env:BUNDLE_VERSION-windows-x64.zip" -DestinationPath $extract
           $bundle = Get-ChildItem -LiteralPath $extract -Directory | Select-Object -First 1
           if (-not $bundle) { throw 'The x64 bundle root was not found' }
-          $installScript = Join-Path $bundle.FullName 'tools\install-internal-test.ps1'
-          $uninstallScript = Join-Path $bundle.FullName 'tools\uninstall-internal-test.ps1'
+          $installScript = Join-Path $bundle.FullName 'tools\install.ps1'
+          $uninstallScript = Join-Path $bundle.FullName 'tools\uninstall.ps1'
           $registryPaths = @(
             'HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.streamfirefly.native',
             'HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\com.streamfirefly.native',
@@ -120,6 +110,8 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Chrome capture transport test failed' }
             npm run test:capture:installed
             if ($LASTEXITCODE -ne 0) { throw 'Installed browser capture chain failed' }
+            node tools/test-signed-firefox.mjs (Join-Path $bundle.FullName "StreamFirefly-firefox-$env:BUNDLE_VERSION-signed.xpi")
+            if ($LASTEXITCODE -ne 0) { throw 'Signed Firefox permanent installation, restart or Native Messaging failed' }
             $ffmpegVersion = @(& (Join-Path $installDir 'ffmpeg.exe') -version)
             $ffmpegExitCode = $LASTEXITCODE
             if ($ffmpegExitCode -ne 0) { throw "Packaged FFmpeg version check failed with exit code $ffmpegExitCode" }
@@ -130,38 +122,3 @@ jobs:
           }
           foreach ($path in $registryPaths) { if (Test-Path -LiteralPath $path) { throw "Native Messaging registration was not removed: $path" } }
           if (Test-Path -LiteralPath $installDir) { throw "Temporary install directory was not removed: $installDir" }
-
-      - name: Upload audited internal bundles
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: StreamFirefly-${{ inputs.bundle_version }}-internal
-          path: |
-            release/StreamFirefly-${{ inputs.bundle_version }}-internal-x64.zip
-            release/StreamFirefly-${{ inputs.bundle_version }}-internal-arm64.zip
-            release/INTERNAL-SHA256SUMS.txt
-          if-no-files-found: error
-          retention-days: 14
-          compression-level: 0
-
-      - name: Upload capture test evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: Capture-evidence-${{ github.run_id }}
-          path: test-results/capture/**
-          if-no-files-found: warn
-          retention-days: 14
-
-      - name: Upload discovery download evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: Discovery-evidence-${{ github.run_id }}
-          path: |
-            test-results/generated-hls-browser.json
-            test-results/generated-hls-native.json
-            test-results/generated-dash-browser.json
-            test-results/native-dash.json
-            test-results/native-dash-browser.json
-          if-no-files-found: warn
-          retention-days: 14

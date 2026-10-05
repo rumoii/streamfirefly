@@ -20,7 +20,7 @@ if (!manifest.permissions?.includes('webNavigation')) throw new Error('Firefox w
 if (gecko?.id !== 'streamfirefly@example.invalid') throw new Error(`Unexpected Firefox extension ID: ${gecko?.id}`);
 if (Number.parseFloat(gecko?.strict_min_version) < 142) throw new Error('Firefox strict_min_version must be at least 142');
 if (JSON.stringify(gecko?.data_collection_permissions?.required) !== JSON.stringify(['none'])) throw new Error('Firefox data collection declaration must be required: ["none"]');
-if (manifest.version !== '0.10.0') throw new Error(`Unexpected Firefox extension version: ${manifest.version}`);
+if (manifest.version !== JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'package.json'), 'utf8')).version) throw new Error(`Unexpected Firefox extension version: ${manifest.version}`);
 if (manifest.sidebar_action?.default_panel !== 'dist/app.html?surface=sidebar#/resources') throw new Error('Firefox sidebar entry missing');
 if (manifest.options_ui?.page !== 'dist/app.html?surface=options#/settings') throw new Error('Firefox Vue settings entry missing');
 if (/\btabs\.create\s*\(/.test(readBackgroundSource(['background.js', 'workspace.js']))) throw new Error('Firefox toolbar entry must not create an application tab');

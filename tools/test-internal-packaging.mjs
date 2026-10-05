@@ -55,7 +55,7 @@ requireText(nativeHlsTest, 'process.env.STREAMFIREFLY_NATIVE_EXE', 'Native HLS t
 requireText(nativeHlsTest, 'process.env.STREAMFIREFLY_FFMPEG_EXE', 'Native HLS FFmpeg fixture');
 function checkGuideVersion(text) {
   const guideVersion = text.match(/^# StreamFirefly (\S+) 测试包指南$/m)?.[1];
-  if (!guideVersion || !validBundleVersion.test(guideVersion) || guideVersion.replace(/-beta\.\d+$/, '') !== version) {
+  if (!guideVersion || !validBundleVersion.test(guideVersion) || guideVersion.replace(/-beta\.\d+$/, '') !== '0.10.0') {
     throw new Error('README-INTERNAL.md: invalid guide version or software version mismatch');
   }
   for (const architecture of ['x64', 'arm64']) {
@@ -81,7 +81,7 @@ for (const expected of [
   'fetch-depth: 0',
   '49933ea5288caeca8642d1e84afbd3f7d6820020',
   'ea165f8d65b6e75b540449e92b4886f43607fa02',
-  '8d0071bb973b701cfed73062a1bb6e7f6a2c72f1',
+  '2e2e1121e6f82116c9a94397fdd743dc2cf913f4',
   `default: ${bundleVersion}`,
   'rustup target add x86_64-pc-windows-msvc aarch64-pc-windows-msvc',
   '.\\tools\\package-internal-test.ps1 -BundleVersion $env:BUNDLE_VERSION',

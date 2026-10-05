@@ -16,7 +16,7 @@ Local-first media discovery and download for the web
 
 StreamFirefly has two parts: a browser extension and a native helper for Windows. The extension finds video, audio, images and HLS/DASH manifests on web pages. The helper, written in Rust, handles downloading, queueing, recovery and FFmpeg merging. Tasks and settings stay on your machine.
 
-The project is in 0.10.0 private beta and is distributed to invited testers only. The interface is currently in Simplified Chinese. StreamFirefly does not circumvent DRM; only download content you own or are authorized to download.
+The current version is 1.0.0. The interface is currently in Simplified Chinese. StreamFirefly does not circumvent DRM; only download content you own or are authorized to download.
 
 ## Features
 
@@ -71,7 +71,7 @@ Screenshots come from the automated UI tests and show test data.
 
 ### Beta package
 
-Invited testers should follow the [beta installation guide](README-INTERNAL.md) (in Chinese). The extension and the native helper must come from the same build.
+Follow the [installation guide](INSTALL.md) (in Chinese). The extension and the native helper must come from the same build.
 
 ### Build from source
 
@@ -176,13 +176,13 @@ npm run test:native
 ```powershell
 .\tools\package-extension.ps1        # Chrome Web Store upload package
 npm run package:firefox              # unsigned Firefox XPI for testing
-.\tools\package-internal-test.ps1    # x64 / ARM64 beta packages
+.\tools\package-release.ps1 -SignedFirefoxXpi '<signed XPI path>'
 .\tools\build-installer.ps1 -Architecture x64
 .\tools\build-installer.ps1 -Architecture arm64
 .\tools\prepare-release.ps1 -ChromeExtensionId '<extension ID assigned by the store>'
 ```
 
-- Beta packages require a working tree without uncommitted changes. For local checks you can pass `-AllowDirtySource`, but such a package must not be released.
+- Release packages require a clean source commit and its matching signed Firefox XPI. Legacy beta tools are not the release entry point.
 - Building the installer needs Inno Setup 6. FFmpeg is downloaded at build time from a fixed URL and checked against a fixed SHA-256; it is not committed to the repository.
 - The local development extension ID is `gimoeapmpoeogpabfdplccplmmohklff`; do not use it for installers you hand out. Firefox always uses `streamfirefly@example.invalid`.
 - Store submission material is in `store-assets/`.
@@ -199,7 +199,7 @@ npm run package:firefox              # unsigned Firefox XPI for testing
 
 Most documents are in Chinese.
 
-- [Beta installation guide](README-INTERNAL.md)
+- [Installation guide](INSTALL.md)
 - [Privacy policy](PRIVACY.md)
 - [DASH on-demand notes](docs/development/dash-vod.md)
 - [Modular discovery and tool integration](docs/development/modular-discovery.md)
