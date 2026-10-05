@@ -1,0 +1,22 @@
+{
+  "format": 1,
+  "license": "LGPL-2.1-or-later",
+  "source": {
+    "version": "8.1.3",
+    "file": "ffmpeg-8.1.3.tar.xz",
+    "url": "https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz",
+    "sha256": "7138d28c96d9d3e3af4ee3d8cad72741f8ffb40da90c1112235dea3ecd3178a3",
+    "signingKey": "FCF986EA15E6E293A5644F10B4322F04D67658D8"
+  },
+  "toolchain": {
+    "name": "llvm-mingw 20260922 (UCRT, Ubuntu 22.04 x86_64 host)",
+    "file": "llvm-mingw-20260922-ucrt-ubuntu-22.04-x86_64.tar.xz",
+    "url": "https://github.com/mstorsjo/llvm-mingw/releases/download/20260922/llvm-mingw-20260922-ucrt-ubuntu-22.04-x86_64.tar.xz",
+    "sha256": "bb7bb7654b33d5aa8712acb837c963b2e0c56352560c76105270a3268c665c21"
+  },
+  "binaries": {
+    "release": "ffmpeg-lgpl-8.1.3-r1",
+    "x64": "",
+    "arm64": ""
+  }
+}

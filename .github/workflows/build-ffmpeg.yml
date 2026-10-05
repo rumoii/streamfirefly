@@ -1,0 +1,48 @@
+name: Build minimal FFmpeg
+
+on:
+  push:
+    branches-ignore: [main]
+    paths: ['tools/ffmpeg/**', '.github/workflows/build-ffmpeg.yml']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Upload the pinned binaries to the tool release named in ffmpeg-lgpl.json
+        type: boolean
+        default: false
+permissions:
+  contents: write # Publishing uploads to the tool release.
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Build both architectures
+        run: |
+          set -euo pipefail
+          for arch in x64 arm64; do bash tools/ffmpeg/build.sh "$arch" out; done
+          ls -l out
+      - name: Compare with pinned hashes
+        run: bash tools/ffmpeg/check-pins.sh out
+      - name: Keep build outputs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ffmpeg-lgpl
+          path: out/
+          retention-days: 14
+      - name: Publish the pinned tool release
+        if: ${{ inputs.publish }}
+        run: |
+          set -euo pipefail
+          bash tools/ffmpeg/check-pins.sh out --require
+          tag=$(python3 -c 'import json; print(json.load(open("tools/ffmpeg/ffmpeg-lgpl.json"))["binaries"]["release"])')
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --prerelease --target "$GITHUB_SHA" --title "$tag" --notes "StreamFirefly 本地助手使用的精简 LGPL FFmpeg 构建产物。构建方法见 tools/ffmpeg/。"
+          fi
+          gh release upload "$tag" out/ffmpeg-x64.exe out/ffmpeg-arm64.exe out/ffmpeg-license.txt --clobber
