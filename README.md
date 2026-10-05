@@ -10,10 +10,6 @@
 
 </div>
 
-<p align="center">
-  <img src="docs/images/workspace.png" width="820" alt="流萤工作区：资源列表与详情">
-</p>
-
 流萤由浏览器扩展和 Windows 本地助手两部分组成。扩展在网页里发现视频、音频、图片和 HLS/DASH 清单；本地助手用 Rust 编写，负责下载、排队、断点恢复和 FFmpeg 合并。任务和设置只保存在本机。
 
 当前版本为 1.0.0。流萤不绕过 DRM，请只下载你拥有版权或已获授权的内容。
@@ -31,15 +27,21 @@
 
 ## 截图
 
-<table>
-  <tr>
-    <td align="center"><img src="docs/images/panel-resources.png" width="280" alt="悬浮面板：资源"><br>悬浮面板 · 资源</td>
-    <td align="center"><img src="docs/images/panel-downloads.png" width="280" alt="悬浮面板：下载"><br>悬浮面板 · 下载</td>
-  </tr>
-  <tr>
-    <td align="center" colspan="2"><img src="docs/images/hls-parser.png" width="680" alt="HLS 解析页"><br>HLS 解析页</td>
-  </tr>
-</table>
+<p align="center">
+  <img src="store-assets/screenshot-popup.png" width="820" alt="资源列表"><br>资源列表
+</p>
+
+<p align="center">
+  <img src="store-assets/screenshot-downloads.png" width="820" alt="下载任务"><br>下载任务
+</p>
+
+<p align="center">
+  <img src="store-assets/screenshot-workspace.png" width="820" alt="悬浮工作区"><br>悬浮工作区
+</p>
+
+<p align="center">
+  <img src="store-assets/screenshot-hls.png" width="820" alt="HLS 解析"><br>HLS 解析
+</p>
 
 截图来自自动化界面测试，资源为测试数据。
 

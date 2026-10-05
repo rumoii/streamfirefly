@@ -10,10 +10,6 @@ Local-first media discovery and download for the web
 
 </div>
 
-<p align="center">
-  <img src="docs/images/workspace.png" width="820" alt="StreamFirefly workspace with the resource list and details">
-</p>
-
 StreamFirefly has two parts: a browser extension and a native helper for Windows. The extension finds video, audio, images and HLS/DASH manifests on web pages. The helper, written in Rust, handles downloading, queueing, recovery and FFmpeg merging. Tasks and settings stay on your machine.
 
 The current version is 1.0.0. The interface is currently in Simplified Chinese. StreamFirefly does not circumvent DRM; only download content you own or are authorized to download.
@@ -31,15 +27,21 @@ The current version is 1.0.0. The interface is currently in Simplified Chinese. 
 
 ## Screenshots
 
-<table>
-  <tr>
-    <td align="center"><img src="docs/images/panel-resources.png" width="280" alt="Floating panel: resources"><br>Panel · Resources</td>
-    <td align="center"><img src="docs/images/panel-downloads.png" width="280" alt="Floating panel: downloads"><br>Panel · Downloads</td>
-  </tr>
-  <tr>
-    <td align="center" colspan="2"><img src="docs/images/hls-parser.png" width="680" alt="HLS parser"><br>HLS parser</td>
-  </tr>
-</table>
+<p align="center">
+  <img src="store-assets/screenshot-popup.png" width="820" alt="Resource list"><br>Resource list
+</p>
+
+<p align="center">
+  <img src="store-assets/screenshot-downloads.png" width="820" alt="Download tasks"><br>Download tasks
+</p>
+
+<p align="center">
+  <img src="store-assets/screenshot-workspace.png" width="820" alt="Floating workspace"><br>Floating workspace
+</p>
+
+<p align="center">
+  <img src="store-assets/screenshot-hls.png" width="820" alt="HLS parser"><br>HLS parser
+</p>
 
 Screenshots come from the automated UI tests and show test data.
 
