@@ -125,7 +125,7 @@ port = server.address().port;
 function startHost() {
   const child = spawn(exe, [], {
     stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true,
-    env: { ...process.env, LOCALAPPDATA: temp, PATH: `${ffmpegDir};${process.env.PATH || ''}` }
+    env: { ...process.env, LOCALAPPDATA: temp, PATH: `${path.dirname(ffmpeg)};${process.env.PATH || ''}` }
   });
   let buffer = Buffer.alloc(0);
   let sequence = 0;
