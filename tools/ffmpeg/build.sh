@@ -2,6 +2,7 @@
 # Builds the minimal LGPL ffmpeg.exe bundled with the StreamFirefly native helper.
 # Usage: build.sh <x64|arm64> <output-dir>
 # Inputs are pinned in ffmpeg-lgpl.json next to this script; downloads are verified by SHA-256.
+# Requires Linux x86_64 with make, gcc (configure builds host tools), curl, xz and python3.
 # Fixed work paths keep the binary byte-for-byte reproducible for the same inputs.
 set -euo pipefail
 

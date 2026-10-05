@@ -33,7 +33,7 @@ function readme(){
   `  ${pins.toolchain.url}`,
   `  SHA-256 ${pins.toolchain.sha256}`,
   '',
-  'Rebuild on Linux x86_64 with make, curl, xz and python3, from the directory holding this file:',
+  'Rebuild on Linux x86_64 with make, a host C compiler (gcc), curl, xz and python3, from the directory holding this file:',
   '  STREAMFIREFLY_FFMPEG_DOWNLOADS="$PWD" bash recipe/build.sh x64 out',
   '  STREAMFIREFLY_FFMPEG_DOWNLOADS="$PWD" bash recipe/build.sh arm64 out',
   '  bash recipe/check-pins.sh out --require',
