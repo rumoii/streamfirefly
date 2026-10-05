@@ -34,7 +34,7 @@ function native(type){
  const value=JSON.parse(result.stdout.subarray(4));assert.equal(value.ok,true,JSON.stringify(value));return value;
 }
 function dataCheck(){assert.deepEqual(preserved.map(hash),originalHashes);const list=native('task.list');assert.equal(list.tasks.length,1);assert.equal(list.tasks[0].id,'release-upgrade-fixture');assert.equal(list.tasks[0].state,'succeeded');assert.equal(list.tasks[0].output,download);}
-const report={passed:false,previousVersion:'0.10.0',nextVersion:'1.0.0',baseline:'22bb9080e521a76e3bf680a99830b33a82324a18',fixture:'v1 completed task, configuration marker and downloaded file'};
+const report={passed:false,previousVersion:'0.10.0',nextVersion:'1.0.0',baseline:'44b296ba36b84ad74358a90524d1ad83dfe5687b',fixture:'v1 completed task, configuration marker and downloaded file'};
 let registered=false;
 try{
  fs.copyFileSync(previous,host);fs.copyFileSync(previous,path.join(backup,'streamfirefly-native.exe'));

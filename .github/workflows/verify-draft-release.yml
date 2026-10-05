@@ -83,7 +83,7 @@ jobs:
           $baselineRoot = Join-Path $env:RUNNER_TEMP 'streamfirefly-rollback-source'
           $baselineTar = Join-Path $env:RUNNER_TEMP 'streamfirefly-rollback-source.tar'
           New-Item -ItemType Directory -Path $baselineRoot | Out-Null
-          git archive --format=tar --output=$baselineTar 22bb9080e521a76e3bf680a99830b33a82324a18 native-host
+          git archive --format=tar --output=$baselineTar 44b296ba36b84ad74358a90524d1ad83dfe5687b native-host
           if ($LASTEXITCODE -ne 0) { throw 'Rollback baseline archive failed' }
           tar -xf $baselineTar -C $baselineRoot
           if ($LASTEXITCODE -ne 0) { throw 'Rollback baseline extraction failed' }
