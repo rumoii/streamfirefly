@@ -3,45 +3,24 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=1280, initial-scale=1">
-  <title>流萤界面截图</title>
-  <style>
-    * { box-sizing: border-box; }
-    html, body { width: 1280px; height: 800px; margin: 0; overflow: hidden; }
-    body { font-family: "Microsoft YaHei", system-ui, sans-serif; color: #17364b; background: radial-gradient(circle at 78% 18%, rgba(126, 236, 206, .32), transparent 25%), linear-gradient(145deg, #f6fffc, #eaf3ff); }
-    main { height: 100%; padding: 46px 74px; display: grid; grid-template-columns: 520px 1fr; align-items: center; gap: 78px; }
-    .browser { width: 476px; padding: 18px; border: 1px solid rgba(87, 130, 151, .22); border-radius: 28px; background: rgba(255,255,255,.86); box-shadow: 0 28px 70px rgba(42, 91, 112, .18); }
-    .bar { height: 24px; display: flex; align-items: flex-start; gap: 7px; padding-left: 4px; }
-    .bar span { width: 9px; height: 9px; border-radius: 50%; background: #dce7ed; }
-    iframe { display: block; width: 440px; height: 664px; border: 0; border-radius: 16px; background: white; }
-    .mark { display: inline-flex; align-items: center; gap: 10px; color: #238a76; font-size: 15px; font-weight: 700; letter-spacing: 2px; }
-    .mark img { width: 52px; height: 52px; border-radius: 13px; }
-    h1 { margin: 24px 0 16px; font-size: 52px; line-height: 1.14; letter-spacing: 2px; }
-    .lead { margin: 0 0 18px; color: #647f91; font-size: 19px; line-height: 1.8; }
-    .scope { margin: 0 0 28px; color: #238a76; font-size: 16px; font-weight: 700; letter-spacing: 1px; }
-    ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 17px; }
-    li { display: flex; gap: 12px; align-items: center; color: #36566b; font-size: 17px; }
-    li::before { content: "✓"; display: grid; place-items: center; width: 25px; height: 25px; border-radius: 50%; color: white; background: #35a78f; font-weight: 800; }
-    .beta { margin-top: 34px; color: #7590a1; font-size: 13px; letter-spacing: 1px; }
-  </style>
+  <title>流萤商店截图</title>
+  <link rel="stylesheet" href="screenshot.css">
 </head>
 <body>
-  <main>
-    <section class="browser">
-      <div class="bar"><span></span><span></span><span></span></div>
-      <iframe src="../extension/popup.html" title="流萤扩展界面"></iframe>
-    </section>
+  <main class="narrow">
+    <section class="shot"><img src="../docs/images/panel-resources.png" alt="流萤扩展界面"></section>
     <section>
       <div class="mark"><img src="../extension/icon128.png" alt="">流萤 STREAMFIREFLY</div>
       <h1>网页媒体资源<br>一眼发现，轻松下载</h1>
-      <p class="lead">自动识别网页媒体<br>支持封面预览，点击即可播放</p>
-      <p class="scope">视频 · 音频 · 图片 · 流媒体</p>
+      <p class="lead">打开侧栏即可识别当前网页<br>加载的媒体资源</p>
+      <p class="scope">视频 · 音频 · 图片 · HLS · DASH</p>
       <ul>
         <li>识别视频、音频、图片与流媒体</li>
         <li>查看封面、大小、分辨率与时长</li>
-        <li>自定义文件名、保存路径与下载并发</li>
-        <li>任务记录与本地文件分别管理</li>
+        <li>按类型、名称和地址筛选资源</li>
+        <li>单个下载或批量下载</li>
       </ul>
-      <div class="beta">本地优先 · 隐私可控 · 开源透明</div>
+      <div class="foot">本地优先 · 需配合 Windows 本地助手</div>
     </section>
   </main>
 </body>

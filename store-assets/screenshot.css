@@ -1,0 +1,20 @@
+* { box-sizing: border-box; }
+html, body { width: 1280px; height: 800px; margin: 0; overflow: hidden; }
+body { font-family: "Microsoft YaHei", system-ui, sans-serif; color: #17364b; background: radial-gradient(circle at 78% 18%, rgba(126, 236, 206, .32), transparent 25%), linear-gradient(145deg, #f6fffc, #eaf3ff); }
+main { height: 100%; display: grid; align-items: center; }
+main.narrow { padding: 46px 74px; grid-template-columns: 520px 1fr; gap: 78px; }
+main.wide { padding: 46px 56px; grid-template-columns: 1fr 320px; gap: 44px; }
+.shot { justify-self: center; padding: 14px; border: 1px solid rgba(87, 130, 151, .22); border-radius: 24px; background: rgba(255,255,255,.86); box-shadow: 0 28px 70px rgba(42, 91, 112, .18); }
+.shot img { display: block; border-radius: 12px; }
+.narrow .shot img { width: 424px; height: 644px; }
+.wide .shot img { max-width: 760px; max-height: 680px; }
+.mark { display: inline-flex; align-items: center; gap: 10px; color: #238a76; font-size: 15px; font-weight: 700; letter-spacing: 2px; }
+.mark img { width: 52px; height: 52px; border-radius: 13px; }
+h1 { margin: 24px 0 16px; font-size: 52px; line-height: 1.14; letter-spacing: 2px; }
+.wide h1 { font-size: 40px; }
+.lead { margin: 0 0 18px; color: #647f91; font-size: 19px; line-height: 1.8; }
+.scope { margin: 0 0 28px; color: #238a76; font-size: 16px; font-weight: 700; letter-spacing: 1px; }
+ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 17px; }
+li { display: flex; gap: 12px; align-items: center; color: #36566b; font-size: 17px; }
+li::before { content: "✓"; flex: none; display: grid; place-items: center; width: 25px; height: 25px; border-radius: 50%; color: white; background: #35a78f; font-weight: 800; }
+.foot { margin-top: 34px; color: #7590a1; font-size: 13px; letter-spacing: 1px; }
