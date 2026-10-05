@@ -62,7 +62,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run validate:extension
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node --test tools/test-release-packaging.mjs
+          node --test tools/test-release-packaging.mjs tools/test-ffmpeg-source.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run typecheck
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

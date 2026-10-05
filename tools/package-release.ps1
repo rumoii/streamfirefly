@@ -2,6 +2,7 @@ param(
   [ValidatePattern('^\d+\.\d+\.\d+(-beta\.\d+)?$')]
   [string]$BundleVersion = '1.0.0',
   [Parameter(Mandatory=$true)][string]$SignedFirefoxXpi,
+  [Parameter(Mandatory=$true)][string]$FfmpegSourceDirectory,
   [string]$OutputDir = (Join-Path (Split-Path -Parent $PSScriptRoot) 'release')
 )
 $ErrorActionPreference = 'Stop'
@@ -19,6 +20,8 @@ if (-not (Test-Path -LiteralPath $rustc -PathType Leaf)) { throw 'Rust compiler 
 $node = Get-Command node -ErrorAction SilentlyContinue
 if (-not $node) { throw 'Node.js was not found' }
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
+& $node.Source (Join-Path $PSScriptRoot 'ffmpeg-source.mjs') package $FfmpegSourceDirectory $OutputDir $sourceCommit
+if ($LASTEXITCODE -ne 0) { throw 'FFmpeg corresponding source packaging failed' }
 & $PSScriptRoot\package-extension.ps1 -OutputDir $OutputDir
 if ($LASTEXITCODE -ne 0) { throw 'Chromium extension packaging failed' }
 & $PSScriptRoot\verify-signed-firefox.ps1 -Archive $SignedFirefoxXpi
@@ -95,6 +98,9 @@ foreach ($architecture in @('x64', 'arm64')) {
   }
 }
 $archives += @($extensionZip, $firefoxXpi)
+$sourceManifest = Get-Content -Raw -LiteralPath (Join-Path $OutputDir 'FFMPEG-SOURCE-MANIFEST.json') | ConvertFrom-Json
+$archives += @(Join-Path $OutputDir 'FFMPEG-SOURCE-MANIFEST.json')
+$archives += @($sourceManifest.parts | ForEach-Object { Join-Path $OutputDir $_.name })
 $outerChecksums = foreach ($archive in $archives) {
   "$((Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant())  $([System.IO.Path]::GetFileName($archive))"
 }

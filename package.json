@@ -30,7 +30,7 @@
     "test:discovery": "node tools/test-browser-extension.mjs --browser chrome --discovery && node tools/test-browser-extension.mjs --browser edge --discovery && node tools/test-browser-extension.mjs --browser firefox --discovery",
     "test:discovery:native": "node tools/test-generated-hls-native.mjs && npm run test:dash:discovery",
     "verify:release:source": "node tools/verify-release-source.mjs",
-    "test:release:packaging": "npm run validate:extension && node --test tools/test-release-packaging.mjs"
+    "test:release:packaging": "npm run validate:extension && node --test tools/test-release-packaging.mjs tools/test-ffmpeg-source.mjs"
   },
   "devDependencies": {
     "esbuild": "0.28.2",

@@ -1,6 +1,6 @@
 # StreamFirefly 1.0.0 安装指南
 
-下载同一 Release 的完整包，并先核对 `SHA256SUMS.txt`：
+从 [v1.0.0 Release](https://github.com/rumoii/streamfirefly/releases/tag/v1.0.0) 下载完整包，并先核对同一 Release 的 `SHA256SUMS.txt`：
 
 - Windows x64：`StreamFirefly-1.0.0-windows-x64.zip`
 - Windows ARM64：`StreamFirefly-1.0.0-windows-arm64.zip`
@@ -47,3 +47,5 @@
 Release 的 Windows x64 验证使用隔离环境和该 Release 的实际附件。ARM64 包构建并核验 PE 架构及文件完整性；真实 ARM64 设备、真实网站覆盖及 7200 秒持续捕捉不属于该验证，不能由构建成功推断。
 
 项目代码采用 MIT；捆绑依赖各自的许可证见 `LICENSE`、`extension/THIRD_PARTY_NOTICES.md`、`native-host/THIRD_PARTY_NOTICES.md` 和 `native-host/FFMPEG-LICENSE.txt`。
+
+FFmpeg 对应源码、依赖与构建说明在同一 Release 的源码分片中提供，下载和校验方法见包内 `native-host/FFMPEG-SOURCE.txt`。日常安装使用 Windows 完整包。

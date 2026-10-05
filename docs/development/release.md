@@ -11,13 +11,13 @@ Chrome 与 Edge 上传草稿及商店扩展 ID 的配置见[商店草稿准备](
 5. 在干净提交执行：
 
    ```powershell
-   .\tools\package-release.ps1 -SignedFirefoxXpi '<匹配当前提交的签名 XPI>'
+   .\tools\package-release.ps1 -SignedFirefoxXpi '<匹配当前提交的签名 XPI>' -FfmpegSourceDirectory '<已审计的对应源码目录>'
    ```
 
-6. 校验 FFmpeg 对应源码和构建资料可取得，按其独立许可证要求交付；许可证链接不代表对应源码已经核验齐全。项目 MIT 不覆盖 FFmpeg。
-7. 创建指向该完整 SHA 的 `v1.0.0` 草稿 Release，上传两个 Windows ZIP、独立 Chromium ZIP、签名 XPI 和 `SHA256SUMS.txt`。不上传测试用 XPI、EXE 安装器或不同提交的附件。
+6. FFmpeg 对应源码目录须包含源码快照、匹配的构建配方和补丁、依赖源码与许可、目标覆盖清单和 Rust vendor 校验。`SOURCE-CLOSURE.json` 记录逐文件哈希；打包工具校验实际输入后生成 512 MiB 源码分片及 `FFMPEG-SOURCE-MANIFEST.json`。完整性声明须有对应材料支持，不能只填写通过标记。项目 MIT 不覆盖 FFmpeg；通用构建工具的可复现边界在源码说明中单独记录。
+7. 创建指向该完整 SHA 的 `v1.0.0` 草稿 Release，上传两个 Windows ZIP、独立 Chromium ZIP、签名 XPI、全部源码分片、源码清单和 `SHA256SUMS.txt`。不上传测试用 XPI、EXE 安装器或不同提交的附件。
 8. 运行 **Verify draft release**，传入草稿的数字 ID 和完整源 SHA。此工作流重新下载草稿附件，核对完整资产集合、内外哈希、两种 PE 架构及来源元数据，再从实际包安装 x64 助手，验证 HTTP/HLS/DASH、队列、发现下载、捕捉、卸载。Firefox 在独立持久配置中以正常签名要求永久安装，重启后再次验证扩展和 Native Messaging；临时安装不能替代该验证。
 9. 完成旧版本到新版本的升级、回滚和数据保留验证。真实 ARM64 硬件、真实网站覆盖和 7200 秒捕捉另行记录，不作为已通过事实。
-10. 所有必需证据齐全后，发布稳定 Release。公开仓库由维护者另行决定。任何包内文件改变后，重新打包、审计、上传和运行附件验证。
+10. 所有必需证据齐全后，将仓库设为公开并发布稳定 Release，标签指向同一最终提交。检查未登录访问的仓库、隐私政策和附件下载。任何包内文件改变后，重新打包、审计、上传和运行附件验证。
 
-`tools/package-release.ps1` 没有允许脏工作区或未签名替代包的开关。`tools/verify-release-assets.ps1` 核对五个正式附件，`tools/audit-release.ps1` 审计包结构和内部哈希。Mozilla 签名元数据检查只能证明文件存在；真实签名接受性由 Firefox 的永久安装验证证明。
+`tools/package-release.ps1` 没有允许脏工作区或未签名替代包的开关。`tools/verify-release-assets.ps1` 核对完整附件集合、源码分片及合并哈希；`tools/audit-release.ps1` 审计运行包结构和内部哈希。Mozilla 签名元数据检查只能证明文件存在；真实签名接受性由 Firefox 的永久安装验证证明。

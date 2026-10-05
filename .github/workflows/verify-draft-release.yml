@@ -12,7 +12,7 @@ on:
         required: true
         type: string
 permissions:
-  contents: read
+  contents: write # GitHub requires push access to read an unpublished draft.
 concurrency:
   group: release-draft
   cancel-in-progress: false
@@ -31,6 +31,7 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ inputs.expected_commit }}
+          persist-credentials: false
       - name: Verify source identity
         shell: pwsh
         run: |
@@ -62,7 +63,7 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or -not $release.draft -or $release.prerelease -or $release.tag_name -ne "v$env:BUNDLE_VERSION" -or $release.target_commitish -ne $env:EXPECTED_COMMIT) { throw 'Draft release identity mismatch' }
           New-Item -ItemType Directory -Path release | Out-Null
           foreach ($asset in $release.assets) {
-            if ($asset.name -notmatch '^(StreamFirefly-[A-Za-z0-9.-]+\.(zip|xpi)|SHA256SUMS\.txt)$') { throw 'Unsafe asset name' }
+            if ($asset.name -notmatch '^(StreamFirefly-[A-Za-z0-9.-]+\.(zip|xpi)|StreamFirefly-ffmpeg-source-1\.0\.0\.tar\.gz\.part[0-9]{3}|FFMPEG-SOURCE-MANIFEST\.json|SHA256SUMS\.txt)$') { throw 'Unsafe asset name' }
             $data = Invoke-WebRequest -Headers @{Authorization="Bearer $env:GH_TOKEN";Accept='application/octet-stream'} -Uri $asset.url -OutFile (Join-Path 'release' $asset.name)
           }
           .\tools\verify-release-assets.ps1 -Directory release -ExpectedSourceCommit $env:EXPECTED_COMMIT

@@ -4,7 +4,11 @@ param(
   [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '1.0.0'
 )
 $ErrorActionPreference='Stop'
+& node (Join-Path $PSScriptRoot 'ffmpeg-source.mjs') verify $Directory $ExpectedSourceCommit
+if ($LASTEXITCODE -ne 0) { throw 'FFmpeg source attachment verification failed' }
+$sourceManifest=Get-Content -Raw -LiteralPath (Join-Path $Directory 'FFMPEG-SOURCE-MANIFEST.json') | ConvertFrom-Json
 $expected=@("StreamFirefly-$Version-windows-x64.zip","StreamFirefly-$Version-windows-arm64.zip","StreamFirefly-extension-$Version.zip","StreamFirefly-firefox-$Version-signed.xpi")
+$expected+=@('FFMPEG-SOURCE-MANIFEST.json')+@($sourceManifest.parts | ForEach-Object name)
 $actual=@(Get-ChildItem -LiteralPath $Directory -File | ForEach-Object Name | Sort-Object)
 if (($actual -join '|') -ne (@($expected + 'SHA256SUMS.txt' | Sort-Object) -join '|')) { throw 'Release attachments differ from the required asset set' }
 $seen=@{}
