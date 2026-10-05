@@ -62,8 +62,9 @@ jobs:
           $release = gh api "repos/$env:GITHUB_REPOSITORY/releases/$env:RELEASE_ID" | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or -not $release.draft -or $release.prerelease -or $release.tag_name -ne "v$env:BUNDLE_VERSION" -or $release.target_commitish -ne $env:EXPECTED_COMMIT) { throw 'Draft release identity mismatch' }
           New-Item -ItemType Directory -Path release | Out-Null
+          $assetNamePattern = '^(StreamFirefly-[A-Za-z0-9.-]+\.(zip|xpi)|StreamFirefly-ffmpeg-source-' + [regex]::Escape($env:BUNDLE_VERSION) + '\.tar\.gz\.part[0-9]{3}|FFMPEG-SOURCE-MANIFEST\.json|SHA256SUMS\.txt)$'
           foreach ($asset in $release.assets) {
-            if ($asset.name -notmatch '^(StreamFirefly-[A-Za-z0-9.-]+\.(zip|xpi)|StreamFirefly-ffmpeg-source-1\.0\.0\.tar\.gz\.part[0-9]{3}|FFMPEG-SOURCE-MANIFEST\.json|SHA256SUMS\.txt)$') { throw 'Unsafe asset name' }
+            if ($asset.name -notmatch $assetNamePattern) { throw 'Unsafe asset name' }
             $data = Invoke-WebRequest -Headers @{Authorization="Bearer $env:GH_TOKEN";Accept='application/octet-stream'} -Uri $asset.url -OutFile (Join-Path 'release' $asset.name)
           }
           .\tools\verify-release-assets.ps1 -Directory release -ExpectedSourceCommit $env:EXPECTED_COMMIT

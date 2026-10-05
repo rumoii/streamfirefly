@@ -11,6 +11,32 @@ const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const runtime=JSON.parse(fs.readFileSync(path.join(root,'tools/extension-package-files.json'),'utf8'));
 const manifest=JSON.parse(fs.readFileSync(path.join(root,'extension/manifest.firefox.json'),'utf8'));
 assert.equal(process.platform,'win32','Release archive validation tests require Windows');
+test('draft workflow accepts current source parts and rejects other versions and unsafe names',()=>{
+ const workflow=fs.readFileSync(path.join(root,'.github/workflows/verify-draft-release.yml'),'utf8');
+ const declaration=workflow.match(/^\s*(\$assetNamePattern = .+)$/m)?.[1];
+ const guard=workflow.match(/^\s*(if \(\$asset\.name -notmatch \$assetNamePattern\).+)$/m)?.[1];
+ assert.ok(declaration&&guard,'Draft attachment validation must exist in the workflow');
+ const version=JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8')).version;
+ const names=[
+  [`StreamFirefly-${version}-windows-x64.zip`,true],
+  [`StreamFirefly-${version}-windows-arm64.zip`,true],
+  [`StreamFirefly-extension-${version}.zip`,true],
+  [`StreamFirefly-firefox-${version}-signed.xpi`,true],
+  [`StreamFirefly-ffmpeg-source-${version}.tar.gz.part001`,true],
+  [`StreamFirefly-ffmpeg-source-${version}.tar.gz.part999`,true],
+  ['FFMPEG-SOURCE-MANIFEST.json',true],['SHA256SUMS.txt',true],
+  ['StreamFirefly-ffmpeg-source-0.0.0.tar.gz.part001',false],
+  [`StreamFirefly-ffmpeg-source-${version.replaceAll('.','x')}.tar.gz.part001`,false],
+  [`StreamFirefly-ffmpeg-source-${version}.tar.gz.part001.exe`,false],
+  ['../SHA256SUMS.txt',false],['C:/SHA256SUMS.txt',false],['unknown.txt',false]
+ ];
+ const script=[declaration,...names.flatMap(([name,accepted])=>[
+  `$asset = [pscustomobject]@{name='${name}'}`,
+  accepted?guard:`try { ${guard}; throw 'Invalid attachment was accepted' } catch { if ($_.Exception.Message -ne 'Unsafe asset name') { throw } }`
+ ]),'exit 0'].join('\n');
+ const result=spawnSync('pwsh.exe',['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{windowsHide:true,encoding:'utf8',timeout:30000,env:{...process.env,BUNDLE_VERSION:version}});
+ assert.ifError(result.error);assert.equal(result.status,0,result.stderr||result.stdout);
+});
 async function fixture(transform, signed=true){
  const zip=new JSZip();
  zip.file('manifest.json',fs.readFileSync(path.join(root,'extension/manifest.firefox.json')));

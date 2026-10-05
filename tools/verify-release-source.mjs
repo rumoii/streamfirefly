@@ -21,4 +21,6 @@ assert.equal(json('extension/manifest.firefox.json').browser_specific_settings.g
 assert.ok(read('tools/package-release.ps1').includes('[Parameter(Mandatory=$true)][string]$SignedFirefoxXpi'));
 assert.ok(!read('tools/package-release.ps1').includes('AllowDirtySource'));
 assert.ok(!read('tools/package-release.ps1').includes('-test.xpi'));
+const draftWorkflow=read('.github/workflows/verify-draft-release.yml');
+assert.equal(draftWorkflow.match(/^\s+BUNDLE_VERSION: '([^']+)'$/m)?.[1],version,'Draft workflow bundle version must match package.json');
 console.log(`Release ${version} source versions, licenses and signed-package prerequisites agree`);
