@@ -12,9 +12,12 @@
 
 流萤由浏览器扩展和 Windows 本地助手两部分组成。扩展在网页里发现视频、音频、图片和 HLS/DASH 清单；本地助手用 Rust 编写，负责下载、排队、断点恢复和 FFmpeg 合并。任务和设置只保存在本机。
 
-当前版本为 1.0.1。流萤不绕过 DRM，请只下载你拥有版权或已获授权的内容。当前发行包不识别和下载 YouTube 内容。项目开源，自行构建时可调整 `extension/src/platform.js` 中的 `BLOCKED_SITES` 站点名单，并运行 `npm run build:extension` 重新构建；设置页不能修改该名单，调整名单也不代表已验证对应网站的下载能力。
+当前版本为 1.0.2。流萤不绕过 DRM，请只下载你拥有版权或已获授权的内容。
 
-后续计划分别提供通过 Chrome 应用商店分发的商店版，以及通过 GitHub 等渠道独立分发的通用版。商店版保留 YouTube 站点限制；通用版的站点策略和支持范围以实际发行说明及验证结果为准。目前 1.0.1 尚未区分这两种发行版。
+流萤分为两个发行版，源码相同：
+
+- **通用版**：不限制网站，通过 GitHub Release 分发，包含 Chrome/Edge 扩展、签名 Firefox 扩展和 Windows 本地助手。能否识别和下载仍取决于网站本身。
+- **Chrome 应用商店版**：根据 Chrome 应用商店政策，不识别和下载 YouTube 内容。
 
 ## 功能
 
@@ -73,9 +76,15 @@
 
 ## 安装
 
-### 完整发布包
+### 一键安装（推荐）
 
-从 [v1.0.1 Release](https://github.com/rumoii/streamfirefly/releases/tag/v1.0.1) 下载适合架构的 Windows 完整包，再按[安装指南](INSTALL.md)操作。扩展和本地助手必须来自同一批次。
+1. 安装扩展：Chrome 用户从 Chrome 应用商店安装；其他浏览器或通用版见[安装指南](INSTALL.md)。
+2. 安装后会自动打开设置页。点击“复制安装命令”，按 <kbd>Win</kbd> + <kbd>R</kbd>，粘贴并回车。
+3. 命令会下载与扩展同版本的本地助手，校验 SHA-256 后安装到当前用户目录，无需管理员权限。完成后扩展自动连接。
+
+### 手动安装完整包
+
+从 [Releases](https://github.com/rumoii/streamfirefly/releases/latest) 下载适合架构的 Windows 完整包，再按[安装指南](INSTALL.md)操作。
 
 ### 从源码构建
 
@@ -178,7 +187,8 @@ npm run test:native
 <summary>打包与发布</summary>
 
 ```powershell
-.\tools\package-extension.ps1        # Chrome Web Store 上传包
+.\tools\package-extension.ps1 -Edition chrome-store   # Chrome 应用商店上传包
+.\tools\package-extension.ps1 -Edition general        # 通用版 Chromium 扩展
 npm run package:firefox              # Firefox 测试用 XPI（未签名）
 .\tools\package-release.ps1 -SignedFirefoxXpi '<已签名 XPI 路径>'
 .\tools\build-installer.ps1 -Architecture x64
@@ -207,7 +217,7 @@ npm run package:firefox              # Firefox 测试用 XPI（未签名）
 - [模块化发现与工具集成](docs/development/modular-discovery.md)
 - [外部工具与 URL 提取](docs/development/tools-and-extraction.md)
 - [设计决策](docs/decisions/README.md)
-- [版本说明](docs/releases/1.0.1.md)
+- [版本说明](docs/releases/1.0.2.md)
 
 ## 隐私
 

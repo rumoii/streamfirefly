@@ -19,7 +19,7 @@ if (-not (Test-Path -LiteralPath $rustc -PathType Leaf)) { throw 'Rust compiler 
 $node = Get-Command node -ErrorAction SilentlyContinue
 if (-not $node) { throw 'Node.js was not found' }
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
-& $PSScriptRoot\package-extension.ps1 -OutputDir $OutputDir
+& $PSScriptRoot\package-extension.ps1 -Edition general -OutputDir $OutputDir
 & $PSScriptRoot\package-firefox-extension.ps1 -OutputDir $OutputDir
 $extensionVersion = (Get-Content -Raw -LiteralPath (Join-Path $root 'extension\manifest.json') | ConvertFrom-Json).version
 $extensionZip = Join-Path $OutputDir "StreamFirefly-extension-$extensionVersion.zip"

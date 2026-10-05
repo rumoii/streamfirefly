@@ -1,13 +1,13 @@
 param(
   [Parameter(Mandatory=$true)][string]$Directory,
   [Parameter(Mandatory=$true)][ValidatePattern('^[a-f0-9]{40}$')][string]$ExpectedSourceCommit,
-  [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '1.0.1'
+  [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '1.0.2'
 )
 $ErrorActionPreference='Stop'
 & node (Join-Path $PSScriptRoot 'ffmpeg-source.mjs') verify $Directory $ExpectedSourceCommit
 if ($LASTEXITCODE -ne 0) { throw 'FFmpeg source attachment verification failed' }
 $sourceManifest=Get-Content -Raw -LiteralPath (Join-Path $Directory 'FFMPEG-SOURCE-MANIFEST.json') | ConvertFrom-Json
-$expected=@("StreamFirefly-$Version-windows-x64.zip","StreamFirefly-$Version-windows-arm64.zip","StreamFirefly-extension-$Version.zip","StreamFirefly-firefox-$Version-signed.xpi")
+$expected=@("StreamFirefly-$Version-windows-x64.zip","StreamFirefly-$Version-windows-arm64.zip","StreamFirefly-extension-$Version.zip","StreamFirefly-firefox-$Version-signed.xpi",'StreamFirefly-install.ps1')
 $expected+=@('FFMPEG-SOURCE-MANIFEST.json')+@($sourceManifest.parts | ForEach-Object name)
 $actual=@(Get-ChildItem -LiteralPath $Directory -File | ForEach-Object Name | Sort-Object)
 if (($actual -join '|') -ne (@($expected + 'SHA256SUMS.txt' | Sort-Object) -join '|')) { throw 'Release attachments differ from the required asset set' }
@@ -33,5 +33,11 @@ foreach($architecture in @('x64','arm64')) {
       if($hash -ne (Get-FileHash -LiteralPath (Join-Path $Directory $name) -Algorithm SHA256).Hash) { throw "Embedded and standalone attachments differ: $name" }
     }
   } finally { $zip.Dispose() }
+}
+$installer=[System.IO.File]::ReadAllText((Join-Path $Directory 'StreamFirefly-install.ps1'),[System.Text.Encoding]::UTF8)
+if($installer.Contains('__STREAMFIREFLY_') -or -not $installer.Contains("`$version = '$Version'")) { throw 'Online installer version is not filled in' }
+foreach($architecture in @('x64','arm64')) {
+  $hash=(Get-FileHash -LiteralPath (Join-Path $Directory "StreamFirefly-$Version-windows-$architecture.zip") -Algorithm SHA256).Hash.ToLowerInvariant()
+  if(-not $installer.Contains("$architecture = '$hash'")) { throw "Online installer hash does not match the $architecture bundle" }
 }
 Write-Host 'Release attachment identities, checksums and both architectures passed'

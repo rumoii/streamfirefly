@@ -1,3 +1,5 @@
+const MISSING_HOST = /native messaging host not found|native messaging host is forbidden|no such native application|permission to use native application/i;
+
 export function createNative(api, notifyWorkspaceMessage) {
 const native = { port: null, pending: new Map(), seq: 0, capabilities: new Set(), infoPromise: null };
 
@@ -10,10 +12,13 @@ function ensureNative() {
       const pending = native.pending.get(message.id);
       if (pending) { clearTimeout(pending.timer); native.pending.delete(message.id); pending.resolve(message); }
     });
-    native.port.onDisconnect.addListener(() => {
-      for (const pending of native.pending.values()) { clearTimeout(pending.timer); pending.resolve({ ok: false, error: "native_host_disconnected" }); }
+    native.port.onDisconnect.addListener(port => {
+      // Chrome/Edge report a missing or unregistered host through lastError; Firefox through port.error.
+      const reason = String(api.runtime.lastError?.message || port?.error?.message || "");
+      const error = MISSING_HOST.test(reason) ? "native_host_missing" : "native_host_disconnected";
+      for (const pending of native.pending.values()) { clearTimeout(pending.timer); pending.resolve({ ok: false, error }); }
       native.pending.clear(); native.port = null; native.capabilities.clear(); native.infoPromise = null;
-      const message = { type: "native.disconnected", error: "native_host_disconnected" };
+      const message = { type: "native.disconnected", error };
       api.runtime.sendMessage(message).catch?.(() => {});
       notifyWorkspaceMessage(message);
     });

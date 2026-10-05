@@ -1,11 +1,12 @@
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import { resolve } from "node:path";
+import { editionDefine } from "./tools/edition.mjs";
 
 export default defineConfig({
   root: "extension-ui",
   base: "./",
-  define: { "process.env.NODE_ENV": JSON.stringify("production") },
+  define: { "process.env.NODE_ENV": JSON.stringify("production"), ...editionDefine() },
   plugins: [vue()],
   build: {
     outDir: "../extension/dist",

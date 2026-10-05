@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { buildSync } from 'esbuild';
+import { editionDefine } from './edition.mjs';
 const listeners = new Map(), posted = [];
 class SourceBuffer {
   appendBuffer(data) { if (this.reject) throw Error('player rejected'); this.last = data; }
@@ -48,7 +49,7 @@ control({ type: 'ack', id: 'session-five', track: 1, sequence: 0 });
 documentListeners.get('seeking')(); assert.equal(posted.pop().generation, 2);
 first.appendBuffer(new Uint8Array([9])); assert.equal(posted.pop().generation, 2);
 control({ type: 'abort', id: 'session-five' }); assert.equal(posted.pop().type, 'failed');
-const code = buildSync({ entryPoints: [new URL('../extension/src/capture-coordinator.js', import.meta.url).pathname.replace(/^\/(\w:)/, '$1')], bundle: true, format: 'iife', globalName: 'Capture', write: false }).outputFiles[0].text;
+const code = buildSync({ entryPoints: [new URL('../extension/src/capture-coordinator.js', import.meta.url).pathname.replace(/^\/(\w:)/, '$1')], bundle: true, format: 'iife', globalName: 'Capture', write: false, define: editionDefine('chrome-store') }).outputFiles[0].text;
 const scope = { Worker: undefined, setTimeout, clearTimeout }; vm.runInNewContext(code, scope);
 const actions = [];
 const api = {

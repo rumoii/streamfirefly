@@ -1,12 +1,17 @@
 param(
+  [Parameter(Mandatory=$true)][ValidateSet('general','chrome-store')][string]$Edition,
   [string]$OutputDir = (Join-Path (Split-Path -Parent $PSScriptRoot) 'release')
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $extension = Join-Path $root 'extension'
 $manifest = Get-Content -Raw -LiteralPath (Join-Path $extension 'manifest.json') | ConvertFrom-Json
-& npm --prefix $root run build:extension
+$previousEdition = $env:STREAMFIREFLY_EDITION
+$env:STREAMFIREFLY_EDITION = $Edition
+try { & npm --prefix $root run build:extension } finally { $env:STREAMFIREFLY_EDITION = $previousEdition }
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$builtEdition = [regex]::Match((Get-Content -Raw -LiteralPath (Join-Path $extension 'dist\background.js')), 'EDITION = (?:true \? )?"([a-z-]+)"').Groups[1].Value
+if ($builtEdition -ne $Edition) { throw "Built extension edition '$builtEdition' does not match '$Edition'" }
 [string[]]$runtimeFiles = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'extension-package-files.json') | ConvertFrom-Json
 $files = @('manifest.json') + $runtimeFiles
 foreach ($relative in $files) {
@@ -17,7 +22,7 @@ foreach ($relative in $files) {
 & node (Join-Path $PSScriptRoot 'validate-extension.mjs')
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
-$output = Join-Path $OutputDir "StreamFirefly-extension-$($manifest.version).zip"
+$output = Join-Path $OutputDir $(if ($Edition -eq 'chrome-store') { "StreamFirefly-chrome-store-$($manifest.version).zip" } else { "StreamFirefly-extension-$($manifest.version).zip" })
 $stage = Join-Path ([System.IO.Path]::GetTempPath()) "streamfirefly-extension-$([Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Path $stage | Out-Null
 try {

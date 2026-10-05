@@ -14,7 +14,7 @@ if ($ChromeExtensionId -eq $developmentChromeExtensionId) {
 $manifest = Get-Content -Raw -LiteralPath (Join-Path $root 'extension\manifest.json') | ConvertFrom-Json
 $release = Join-Path $root 'release'
 New-Item -ItemType Directory -Force -Path $release | Out-Null
-& $PSScriptRoot\package-extension.ps1 -OutputDir $release
+& $PSScriptRoot\package-extension.ps1 -Edition general -OutputDir $release
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $PSScriptRoot\package-firefox-extension.ps1 -OutputDir $release
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

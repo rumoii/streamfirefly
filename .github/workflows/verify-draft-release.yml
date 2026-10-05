@@ -23,7 +23,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_ID: ${{ inputs.release_id }}
-      BUNDLE_VERSION: '1.0.1'
+      BUNDLE_VERSION: '1.0.2'
       EXPECTED_COMMIT: ${{ inputs.expected_commit }}
     steps:
       - name: Check out the requested source
@@ -56,13 +56,14 @@ jobs:
         run: npm ci
 
       - name: Download exact draft attachments
+        id: assets
         shell: pwsh
         run: |
           if ($env:RELEASE_ID -notmatch '^\d+$') { throw 'Invalid release ID' }
           $release = gh api "repos/$env:GITHUB_REPOSITORY/releases/$env:RELEASE_ID" | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or -not $release.draft -or $release.prerelease -or $release.tag_name -ne "v$env:BUNDLE_VERSION" -or $release.target_commitish -ne $env:EXPECTED_COMMIT) { throw 'Draft release identity mismatch' }
           New-Item -ItemType Directory -Path release | Out-Null
-          $assetNamePattern = '^(StreamFirefly-[A-Za-z0-9.-]+\.(zip|xpi)|StreamFirefly-ffmpeg-source-' + [regex]::Escape($env:BUNDLE_VERSION) + '\.tar\.gz\.part[0-9]{3}|FFMPEG-SOURCE-MANIFEST\.json|SHA256SUMS\.txt)$'
+          $assetNamePattern = '^(StreamFirefly-install[.]ps1|StreamFirefly-[A-Za-z0-9.-]+\.(zip|xpi)|StreamFirefly-ffmpeg-source-' + [regex]::Escape($env:BUNDLE_VERSION) + '\.tar\.gz\.part[0-9]{3}|FFMPEG-SOURCE-MANIFEST\.json|SHA256SUMS\.txt)$'
           foreach ($asset in $release.assets) {
             if ($asset.name -notmatch $assetNamePattern) { throw 'Unsafe asset name' }
             $data = Invoke-WebRequest -Headers @{Authorization="Bearer $env:GH_TOKEN";Accept='application/octet-stream'} -Uri $asset.url -OutFile (Join-Path 'release' $asset.name)
@@ -78,7 +79,33 @@ jobs:
           $driverDir = Join-Path $env:RUNNER_TEMP 'geckodriver'
           Expand-Archive -LiteralPath $driverZip -DestinationPath $driverDir
           "GECKODRIVER_BINARY=$(Join-Path $driverDir 'geckodriver.exe')" >> $env:GITHUB_ENV
+      - name: Verify the one-click installer with the final bundle
+        if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $installDir = Join-Path $env:RUNNER_TEMP 'streamfirefly-online-installed'
+          $packageDir = Join-Path $env:LOCALAPPDATA "StreamFirefly/package/$env:BUNDLE_VERSION"
+          $bundleZip = Join-Path $PWD "release/StreamFirefly-$env:BUNDLE_VERSION-windows-x64.zip"
+          $edgeKey = 'HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\com.streamfirefly.native'
+          $firefoxKey = 'HKCU:\Software\Mozilla\NativeMessagingHosts\com.streamfirefly.native'
+          $damaged = Join-Path $env:RUNNER_TEMP 'damaged-bundle.zip'
+          Copy-Item -LiteralPath $bundleZip -Destination $damaged
+          [System.IO.File]::AppendAllText($damaged, 'x')
+          & ./release/StreamFirefly-install.ps1 edge ('c' * 32) -PackagePath $damaged -InstallDir $installDir -NoPause
+          if ($LASTEXITCODE -ne 1 -or (Test-Path -LiteralPath $installDir) -or (Test-Path -LiteralPath $edgeKey)) { throw 'A damaged bundle was not rejected before installation' }
+          try {
+            & ./release/StreamFirefly-install.ps1 edge ('c' * 32) -PackagePath $bundleZip -InstallDir $installDir -NoPause
+            if ($LASTEXITCODE -ne 0) { throw 'One-click installer failed' }
+            foreach ($key in @($edgeKey, $firefoxKey)) { if (-not (Test-Path -LiteralPath $key)) { throw "Native Messaging registration is missing: $key" } }
+            $edgeManifest = Get-Content -Raw -LiteralPath (Get-Item -LiteralPath $edgeKey).GetValue('') | ConvertFrom-Json
+            if ((@($edgeManifest.allowed_origins) -join ',') -ne "chrome-extension://$('c' * 32)/") { throw 'Edge registration does not name the copied extension ID' }
+            if (-not (Test-Path -LiteralPath (Join-Path $installDir 'streamfirefly-native.exe'))) { throw 'Native host was not installed' }
+          } finally {
+            if (Test-Path -LiteralPath $packageDir) { & (Join-Path $packageDir 'tools/uninstall.ps1') -InstallDir $installDir; Remove-Item -LiteralPath $packageDir -Recurse -Force }
+          }
+          foreach ($key in @($edgeKey, $firefoxKey)) { if (Test-Path -LiteralPath $key) { throw "Native Messaging registration was not removed: $key" } }
       - name: Verify native upgrade and rollback from the final bundle
+        if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
         shell: pwsh
         run: |
           $baselineRoot = Join-Path $env:RUNNER_TEMP 'streamfirefly-rollback-source'
@@ -97,6 +124,7 @@ jobs:
           node tools/test-release-upgrade.mjs $bundle (Join-Path $baselineRoot 'native-host\target\x86_64-pc-windows-msvc\release\streamfirefly-native.exe')
           if ($LASTEXITCODE -ne 0) { throw 'Final bundle native upgrade or rollback failed' }
       - name: Smoke test the packaged x64 install
+        if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
         shell: pwsh
         run: |
           $extract = Join-Path $env:RUNNER_TEMP 'streamfirefly-x64-install-smoke'
@@ -122,16 +150,19 @@ jobs:
             if (-not $env:STREAMFIREFLY_FFPROBE_EXE) { throw 'Capture output inspection requires FFprobe' }
             $env:STREAMFIREFLY_EXTENSION_DIR = Join-Path $bundle.FullName 'extension'
             $env:STREAMFIREFLY_ISOLATED_INSTALL_TEST = '1'
-            npm run test:native
-            if ($LASTEXITCODE -ne 0) { throw 'Packaged Native Host protocol test failed' }
-            npm run test:discovery:native
-            if ($LASTEXITCODE -ne 0) { throw 'Generated HLS/DASH discovery and packaged Native download failed' }
-            npm run test:capture:browser
-            if ($LASTEXITCODE -ne 0) { throw 'Chrome capture transport test failed' }
-            npm run test:capture:installed
-            if ($LASTEXITCODE -ne 0) { throw 'Installed browser capture chain failed' }
-            node tools/test-signed-firefox.mjs (Join-Path $bundle.FullName "StreamFirefly-firefox-$env:BUNDLE_VERSION-signed.xpi")
-            if ($LASTEXITCODE -ne 0) { throw 'Signed Firefox permanent installation, restart or Native Messaging failed' }
+            $failures = [System.Collections.Generic.List[string]]::new()
+            function Invoke-Check([string]$name, [scriptblock]$check) {
+              $global:LASTEXITCODE = 0
+              & $check
+              if ($LASTEXITCODE -ne 0) { $failures.Add($name); Write-Host "::error::$name failed" }
+            }
+            # Cheap checks run first; every check runs so one attempt reports all failures.
+            Invoke-Check 'Signed Firefox permanent installation, restart or Native Messaging' { node tools/test-signed-firefox.mjs (Join-Path $bundle.FullName "StreamFirefly-firefox-$env:BUNDLE_VERSION-signed.xpi") }
+            Invoke-Check 'Packaged Native Host protocol' { npm run test:native }
+            Invoke-Check 'Generated HLS/DASH discovery and packaged Native download' { npm run test:discovery:native }
+            Invoke-Check 'Chrome capture transport' { npm run test:capture:browser }
+            Invoke-Check 'Installed browser capture chain' { npm run test:capture:installed }
+            if ($failures.Count) { throw "Failed checks: $($failures -join '; ')" }
             $ffmpegVersion = @(& (Join-Path $installDir 'ffmpeg.exe') -version)
             $ffmpegExitCode = $LASTEXITCODE
             if ($ffmpegExitCode -ne 0) { throw "Packaged FFmpeg version check failed with exit code $ffmpegExitCode" }

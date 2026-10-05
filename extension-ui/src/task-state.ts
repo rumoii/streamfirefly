@@ -1,7 +1,7 @@
 import { ref } from "vue";
 import type { DownloadTask } from "./types";
 
-export type ConnectionState = "connecting" | "ready" | "disconnected" | "timeout" | "incompatible" | "error";
+export type ConnectionState = "connecting" | "ready" | "disconnected" | "missing" | "timeout" | "incompatible" | "error";
 export interface HostResponse { ok: boolean; error?: string; tasks?: DownloadTask[]; capabilities?: string[] }
 export type HostRequest = (message: { type: "native.connect" | "task.list" }) => Promise<HostResponse>;
 
@@ -30,7 +30,7 @@ export function createTaskState(request: HostRequest) {
 
   function fail(error: string) {
     connectionError.value = error;
-    connection.value = error.startsWith("task_store_") || error === "native_host_invalid_response" ? "error" : error === "native_host_incompatible" ? "incompatible" : error === "native_host_timeout" ? "timeout" : "disconnected";
+    connection.value = error.startsWith("task_store_") || error === "native_host_invalid_response" ? "error" : error === "native_host_missing" ? "missing" : error === "native_host_incompatible" ? "incompatible" : error === "native_host_timeout" ? "timeout" : "disconnected";
   }
 
   async function synchronize() {

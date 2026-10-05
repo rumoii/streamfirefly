@@ -20,7 +20,7 @@ test('source packaging verifies inputs and rejects incomplete, changed, missing 
   fs.writeFileSync(path.join(input,'SOURCE-CLOSURE.json'),JSON.stringify(closure));
   const cli=['tools/ffmpeg-source.mjs','package',input,output,commit];
   execFileSync(process.execPath,cli,{stdio:'pipe'});
-  const expected=['FFMPEG-SOURCE-MANIFEST.json','StreamFirefly-ffmpeg-source-1.0.1.tar.gz.part001'];
+  const expected=['FFMPEG-SOURCE-MANIFEST.json','StreamFirefly-ffmpeg-source-1.0.2.tar.gz.part001'];
   assert.deepEqual(verifySourceParts(output,commit),expected);
   assert.throws(()=>verifySourceParts(output,'b'.repeat(40)),/identity/);
   const filename=path.join(output,expected[0]),original=fs.readFileSync(filename,'utf8');

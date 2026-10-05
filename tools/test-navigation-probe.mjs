@@ -4,8 +4,9 @@ import { buildSync } from 'esbuild';
 import vm from 'node:vm';
 import { webcrypto } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { editionDefine } from './edition.mjs';
 
-const source = buildSync({ entryPoints: [fileURLToPath(new URL('../extension/src/background.js', import.meta.url))], bundle: true, format: 'iife', globalName: 'Background', write: false }).outputFiles[0].text;
+const source = buildSync({ entryPoints: [fileURLToPath(new URL('../extension/src/background.js', import.meta.url))], bundle: true, format: 'iife', globalName: 'Background', write: false, define: editionDefine() }).outputFiles[0].text;
 const deferred = () => {
   let resolve, reject;
   const promise = new Promise((yes, no) => { resolve = yes; reject = no; });

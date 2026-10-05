@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { buildSync } from 'esbuild';
+import { buildSync } from 'esbuild';
+import { editionDefine } from './edition.mjs';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
-const source = buildSync({ entryPoints: [fileURLToPath(new URL('../extension/src/sniffing.js', import.meta.url))], bundle: true, format: 'iife', globalName: 'Module', write: false }).outputFiles[0].text;
+const source = buildSync({ entryPoints: [fileURLToPath(new URL('../extension/src/sniffing.js', import.meta.url))], bundle: true, format: 'iife', globalName: 'Module', write: false , define: editionDefine('chrome-store') }).outputFiles[0].text;
 const scope = {};
 vm.runInNewContext(source, scope);
 const { createSniffing } = scope.Module;

@@ -3,7 +3,7 @@ import { flushPromises, mount } from "@vue/test-utils";
 import SettingsView from "./SettingsView.vue";
 import { defaultDiscovery } from "../../../shared/discovery";
 const { send, surface } = vi.hoisted(() => ({ send: vi.fn(), surface: vi.fn(() => "options") }));
-vi.mock("../api", () => ({ sendMessage: send, surfaceFromUrl: surface }));
+vi.mock("../api", () => ({ sendMessage: send, surfaceFromUrl: surface, extensionApi: () => ({ runtime: { id: "a".repeat(32), getManifest: () => ({ version: "1.0.2" }), getURL: (path: string) => `chrome-extension://${"a".repeat(32)}/${path}` } }) }));
 const settings = { saveDir: "", downloadThreads: 6, detectImages: false, advancedDeepSearch: false, sniffMode: "on_open" as const, candidateSort: "detected" as const, proxyMode: "system" as const, proxyUrl: "" };
 beforeEach(() => { surface.mockReturnValue("options"); send.mockReset(); send.mockImplementation(async () => ({ ok: true, value: { config: defaultDiscovery(), disabled: {}, error: "" } })); });
 async function choose(wrapper: ReturnType<typeof mount>, label: string, option: string) {
@@ -26,13 +26,23 @@ describe("unified settings navigation", () => {
     expect(send.mock.calls.filter(([message]) => message.type === "discovery.get")).toHaveLength(1);
     expect(send.mock.calls.some(([message]) => message.type === "discovery.save")).toBe(false); wrapper.unmount();
   });
-  it("explains where the blocked site list lives", () => {
+  it("shows the general edition without site restriction or build instructions", () => {
     const wrapper = mount(SettingsView, { props: { settings } });
-    const notice = wrapper.get('[aria-labelledby="settings-blocked-title"]');
-    expect(notice.text()).toContain("YouTube");
-    expect(notice.text()).toContain("extension/src/platform.js");
-    expect(notice.text()).toContain("BLOCKED_SITES");
-    expect(notice.find("input").exists()).toBe(false);
+    const notice = wrapper.get('[aria-labelledby="settings-edition-title"]');
+    expect(notice.text()).toContain("通用版 1.0.2");
+    expect(notice.text()).not.toContain("YouTube");
+    expect(notice.text()).not.toContain("build:extension");
+    wrapper.unmount();
+  });
+  it("guides the one-click helper installation when the helper is missing", async () => {
+    send.mockImplementation(async (message: any) => message.type === "native.connect" ? { ok: false, error: "native_host_missing" } : { ok: true, value: { config: defaultDiscovery(), disabled: {}, error: "" } });
+    const wrapper = mount(SettingsView, { props: { settings } }); await flushPromises();
+    const card = wrapper.get('[aria-labelledby="settings-native-title"]');
+    expect(card.text()).toContain("一键安装本地下载助手");
+    expect((card.get('input[aria-label="安装命令"]').element as HTMLInputElement).value).toContain(`chrome ${"a".repeat(32)}`);
+    send.mockImplementation(async () => ({ ok: true, value: { config: defaultDiscovery(), disabled: {}, error: "" } }));
+    window.dispatchEvent(new Event("focus")); await flushPromises();
+    expect(card.text()).toContain("已连接");
     wrapper.unmount();
   });
   it("validates a custom proxy before saving", async () => {

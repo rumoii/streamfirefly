@@ -1,20 +1,34 @@
-# StreamFirefly 1.0.1 安装指南
+# StreamFirefly 1.0.2 安装指南
 
-从 [v1.0.1 Release](https://github.com/rumoii/streamfirefly/releases/tag/v1.0.1) 下载完整包，并先核对同一 Release 的 `SHA256SUMS.txt`：
+需要 Windows 11、自带 curl、Windows PowerShell 5.1 或 PowerShell 7，以及 Chrome/Edge 141+ 或 Firefox 142+。
 
-- Windows x64：`StreamFirefly-1.0.1-windows-x64.zip`
-- Windows ARM64：`StreamFirefly-1.0.1-windows-arm64.zip`
-- 独立 Chromium 扩展：`StreamFirefly-extension-1.0.1.zip`
-- Firefox 签名扩展：`StreamFirefly-firefox-1.0.1-signed.xpi`
+流萤有两个发行版：Chrome 应用商店版不识别和下载 YouTube 内容；通用版不限制网站，通过 GitHub Release 分发。两者共用同一个本地助手，同一浏览器里只装其中一个。
 
-需要 Windows 11、自带 curl、Windows PowerShell 5.1 或 PowerShell 7，以及 Chrome/Edge 141+ 或 Firefox 142+。完整包包含本地助手和对应架构的 FFmpeg，安装时无需下载依赖。浏览器安装扩展由用户操作。
+## 一键安装（推荐）
 
-## 安装
+1. 安装扩展：
+   - Chrome：从 Chrome 应用商店安装流萤（商店版）。
+   - Chrome/Edge 通用版：从 [Releases](https://github.com/rumoii/streamfirefly/releases/latest) 下载 `StreamFirefly-extension-<版本>.zip` 并解压到固定目录；打开 `chrome://extensions` 或 `edge://extensions`，启用开发者模式，选择“加载已解压的扩展程序”，选择解压后的目录。
+   - Firefox：从 Releases 下载 `StreamFirefly-firefox-<版本>-signed.xpi`，在 `about:addons` 的齿轮菜单中选择“从文件安装附加组件”。
+2. 安装后会自动打开流萤设置页；也可以随时从设置页或侧栏的提示进入。点击“复制安装命令”。
+3. 按 <kbd>Win</kbd> + <kbd>R</kbd> 打开“运行”窗口，按 <kbd>Ctrl</kbd> + <kbd>V</kbd> 粘贴，再按回车。
+
+命令会从同一版本的 Release 下载 `StreamFirefly-install.ps1` 和对应架构的完整包，按脚本内记录的 SHA-256 校验后安装，并只为当前浏览器注册本地助手；完整包保留在 `%LOCALAPPDATA%\StreamFirefly\package\<版本>`。安装完成后回到浏览器，流萤会自动连接。在另一个浏览器里使用流萤时，从那个浏览器再复制一次命令即可。
+
+## 手动安装完整包
+
+从 [Releases](https://github.com/rumoii/streamfirefly/releases/latest) 下载完整包，并先核对同一 Release 的 `SHA256SUMS.txt`：
+
+- Windows x64：`StreamFirefly-<版本>-windows-x64.zip`
+- Windows ARM64：`StreamFirefly-<版本>-windows-arm64.zip`
+- 通用版 Chromium 扩展：`StreamFirefly-extension-<版本>.zip`
+- Firefox 签名扩展：`StreamFirefly-firefox-<版本>-signed.xpi`
+
+完整包包含本地助手和对应架构的 FFmpeg，安装时无需下载依赖。
 
 1. 解压完整包到固定目录，保留整个目录结构。
-2. Chrome 用户在商店上架后，从 Chrome Web Store 安装流萤，商店扩展 ID 固定为 `ooblmahffkiimlflhdnfojjemlibmhhj`；上架前使用离线加载方式。Edge 和离线安装：Chrome 打开 `chrome://extensions`，Edge 打开 `edge://extensions`，启用开发者模式，选择“加载已解压的扩展程序”，选择包里的 `extension` 文件夹，记录各浏览器实际显示的扩展 ID。Edge 商店 ID 尚未取得。
-3. Firefox 打开 `about:addons`，齿轮菜单选择“从文件安装附加组件”，选择包里的签名 XPI。正式包不提供未签名替代品。
-4. 在包根目录安装本地助手。通过 Chrome Web Store 安装流萤时运行：
+2. 按上一节第 1 步安装扩展；包里的 `extension` 文件夹和签名 XPI 都是通用版。记录 Chrome/Edge 扩展管理页显示的扩展 ID。Chrome 应用商店版的扩展 ID 固定为 `ooblmahffkiimlflhdnfojjemlibmhhj`。
+3. 在包根目录安装本地助手。通过 Chrome 应用商店安装流萤时运行：
 
    ```powershell
    .\tools\install.ps1 -ChromeExtensionId 'ooblmahffkiimlflhdnfojjemlibmhhj'
@@ -26,7 +40,7 @@
    .\tools\install.ps1 -ChromeExtensionId '<Chrome ID>' -EdgeExtensionId '<Edge ID>'
    ```
 
-5. 重新启动浏览器，打开普通网页并点击流萤图标。在设置中确认本地助手已连接，尝试下载你有权限保存的媒体。
+4. 重新启动浏览器，打开普通网页并点击流萤图标。在设置中确认本地助手已连接，尝试下载你有权限保存的媒体。
 
 本地助手默认安装到 `%LOCALAPPDATA%\StreamFirefly\bin`，只注册当前用户的 Native Messaging，不需要管理员权限。不支持的架构会被拒绝。`PACKAGE-INFO.json` 记录版本、架构、构建工具和源提交；内部 `SHA256SUMS.txt` 覆盖包内文件。
 
@@ -40,7 +54,7 @@
 
 ## 卸载
 
-先关闭浏览器，然后在完整包根目录执行：
+先关闭浏览器，然后在完整包根目录执行（一键安装的完整包位于 `%LOCALAPPDATA%\StreamFirefly\package\<版本>`）：
 
 ```powershell
 .\tools\uninstall.ps1

@@ -2,10 +2,11 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildSync } from 'esbuild';
+import { buildSync } from 'esbuild';
+import { editionDefine } from './edition.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const extension = path.join(root, 'extension');
-const script = buildSync({ entryPoints: [path.join(root, 'tools/feature-ui-fixture.ts')], bundle: true, format: 'iife', write: false }).outputFiles[0].text;
+const script = buildSync({ entryPoints: [path.join(root, 'tools/feature-ui-fixture.ts')], bundle: true, format: 'iife', write: false , define: editionDefine('chrome-store') }).outputFiles[0].text;
 const server = http.createServer((request, response) => {
   const pathname = new URL(request.url, 'http://localhost').pathname;
   if (pathname === '/favicon.ico') { response.writeHead(204); response.end(); return; }

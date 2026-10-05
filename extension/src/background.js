@@ -28,6 +28,8 @@ const workspace = createWorkspace(api, preview.clearPreviewHeadersForTab, sniffi
 const { openWorkspace, closeWorkspace, unmountWorkspace } = workspace;
 const native = createNative(api, workspace.notifyWorkspaceMessage);
 const { nativeRequestPromise, nativeInfo } = native;
+// A fresh install opens the settings page, which guides the one-click helper installation.
+api.runtime.onInstalled?.addListener(details => { if (details?.reason === "install") api.runtime.openOptionsPage()?.catch?.(() => {}); });
 const integrations = createIntegrations(api, resources, nativeRequestPromise, evaluation.run);
 resources.subscribeCandidates((tabId, candidateId) => sniffing.allowed(tabId) ? integrations.autoSend(tabId, candidateId) : undefined);
 const dispatchIntents = createDispatchIntents(api, resources);

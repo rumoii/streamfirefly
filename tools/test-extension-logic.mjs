@@ -4,6 +4,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { webcrypto } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { editionDefine } from './edition.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const listeners = {};
@@ -22,6 +23,7 @@ let sidePanelBehavior = null;
 const sidePanelCalls = [];
 let rejectSidePanelOpen = false, rejectSidePanelClose = false;
 let nativeInfoError = null;
+let nativeSilent = false;
 let nextTabId = 100;
 const tabsById = new Map([
   [7, { id: 7, active: true, url: 'https://media.example/page', title: '流萤 · 流萤 · 媒体页面 A', lastAccessed: 2, windowId: 1 }],
@@ -65,7 +67,7 @@ const api = {
     connectNative: () => ({
       onMessage: { addListener: listener => { nativeListeners.message = listener; } },
       onDisconnect: { addListener: listener => { nativeListeners.disconnect = listener; } },
-      postMessage: message => { nativePosted.push(structuredClone(message)); queueMicrotask(() => nativeListeners.message(nativeInfoError && message.type === 'host.info' ? { id: message.id, ok: false, error: nativeInfoError } : { version: 1, id: message.id, ok: true, protocolVersion: 3, supportedProtocolVersions: [3], capabilities: ['inline-hls-v1', 'task-control-v1', 'hls-selection-v1', 'task-output-group-v1', 'hls-segment-engine-v1', 'hls-live-engine-v1', 'task-queue-v1', 'task-idempotency-v1', 'integration-program-v1', 'capture-stream-v1', 'network-policy-v1'] })); }
+      postMessage: message => { nativePosted.push(structuredClone(message)); if (nativeSilent) return; queueMicrotask(() => nativeListeners.message(nativeInfoError && message.type === 'host.info' ? { id: message.id, ok: false, error: nativeInfoError } : { version: 1, id: message.id, ok: true, protocolVersion: 3, supportedProtocolVersions: [3], capabilities: ['inline-hls-v1', 'task-control-v1', 'hls-selection-v1', 'task-output-group-v1', 'hls-segment-engine-v1', 'hls-live-engine-v1', 'task-queue-v1', 'task-idempotency-v1', 'integration-program-v1', 'capture-stream-v1', 'network-policy-v1'] })); }
     })
   },
   tabs: {
@@ -92,7 +94,7 @@ const api = {
   },
   windows: { update: async (id, properties) => { windowUpdates.push({ id, properties: { ...properties } }); } }
 };
-const source = buildSync({ entryPoints: [path.join(root, 'extension/src/background.js')], bundle: true, format: 'iife', write: false }).outputFiles[0].text;
+const source = buildSync({ entryPoints: [path.join(root, 'extension/src/background.js')], bundle: true, format: 'iife', write: false, define: editionDefine('chrome-store') }).outputFiles[0].text;
 const evaluationSource = buildSync({ entryPoints: [path.join(root, 'extension/src/evaluation-worker.ts')], bundle: true, format: 'iife', write: false }).outputFiles[0].text;
 class FixtureWorker {
   constructor() { this.stopped = false; this.scope = { URL, structuredClone, self: { postMessage: result => { if (!this.stopped) this.onmessage?.({ data: result }); } } }; vm.runInNewContext(evaluationSource, this.scope); }
@@ -337,6 +339,17 @@ const timedOutConnection = await send({ type: 'native.connect' });
 if (timedOutConnection.ok || timedOutConnection.error !== 'native_host_timeout') throw new Error('Failed handshake was not reported');
 nativeInfoError = null;
 if (!(await send({ type: 'native.connect' })).ok) throw new Error('Failed handshake was cached and prevented reconnection');
+nativeListeners.disconnect();
+nativeSilent = true;
+const missingConnection = send({ type: 'native.connect' });
+await settle();
+api.runtime.lastError = { message: 'Specified native messaging host not found.' };
+nativeListeners.disconnect();
+delete api.runtime.lastError;
+const missing = await missingConnection;
+if (missing.ok || missing.error !== 'native_host_missing') throw new Error(`Missing native host was not distinguished: ${JSON.stringify(missing)}`);
+nativeSilent = false;
+if (!(await send({ type: 'native.connect' })).ok) throw new Error('Reconnection after installing the native host failed');
 console.log('Extension candidate state, UI context, workspace lifecycle, and native reconnection tests passed');
 
 const trustedSettings = { url: api.runtime.getURL('dist/app.html?surface=options') };

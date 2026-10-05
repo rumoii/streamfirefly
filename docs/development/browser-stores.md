@@ -7,10 +7,12 @@
 在依赖已按锁文件安装的仓库根目录运行：
 
 ```powershell
-.\tools\package-extension.ps1
+.\tools\package-extension.ps1 -Edition chrome-store
 ```
 
-产物为 `release\StreamFirefly-extension-1.0.1.zip`，ZIP 根目录包含 Chromium 的 `manifest.json` 和批准的运行时文件。Chrome 和 Edge 使用这个 ZIP；Firefox 使用单独的 Mozilla 签名 XPI。
+产物为 `release\StreamFirefly-chrome-store-<版本>.zip`，ZIP 根目录包含 Chromium 的 `manifest.json` 和批准的运行时文件，构建时启用 YouTube 站点限制；打包脚本会核对构建产物的发行版，不一致时失败。商店版 ZIP 只上传到商店，不放进 GitHub Release。GitHub Release 中的 `StreamFirefly-extension-<版本>.zip` 和 Firefox 签名 XPI 都是通用版（`-Edition general`）。
+
+商店版内的一键安装命令指向同版本的 GitHub Release 附件，因此须先公开发布对应版本的 Release，再提交商店审核。
 
 当前 Chromium 清单没有 `update_url`，名称和描述无需浏览器品牌替换。使用的 `sidePanel`、`offscreen`、`scripting`、`declarativeNetRequest` 等 API 在 Microsoft 的[支持列表](https://learn.microsoft.com/en-us/microsoft-edge/extensions/developer-guide/api-support)中；实际浏览器行为仍须通过项目测试。最低浏览器版本为 Chrome／Edge 141。
 

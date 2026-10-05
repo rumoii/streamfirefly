@@ -12,9 +12,12 @@ Local-first media discovery and download for the web
 
 StreamFirefly has two parts: a browser extension and a native helper for Windows. The extension finds video, audio, images and HLS/DASH manifests on web pages. The helper, written in Rust, handles downloading, queueing, recovery and FFmpeg merging. Tasks and settings stay on your machine.
 
-The current version is 1.0.1. The interface is currently in Simplified Chinese. StreamFirefly does not circumvent DRM; only download content you own or are authorized to download. Current release packages do not detect or download YouTube content. The project is open source: for a custom build, you can adjust the `BLOCKED_SITES` list in `extension/src/platform.js` and rebuild with `npm run build:extension`. The settings page cannot change this list, and changing it does not establish that downloads from a particular website work.
+The current version is 1.0.2. The interface is currently in Simplified Chinese. StreamFirefly does not circumvent DRM; only download content you own or are authorized to download.
 
-We plan to offer a Chrome Web Store edition and a general edition distributed independently through GitHub and other channels. The store edition will retain the YouTube site restriction. The general edition's site policy and supported features will be documented in its release notes and verification results. Version 1.0.1 does not yet provide these separate editions.
+StreamFirefly ships in two editions built from the same source:
+
+- **General edition**: no site restrictions. Distributed through GitHub Releases with the Chrome/Edge extension, the signed Firefox add-on and the Windows native helper. Whether a site can be detected and downloaded still depends on the site.
+- **Chrome Web Store edition**: following Chrome Web Store policy, it does not detect or download YouTube content.
 
 ## Features
 
@@ -73,9 +76,15 @@ Screenshots come from the automated UI tests and show test data.
 
 ## Installation
 
-### Beta package
+### One-click install (recommended)
 
-Download the Windows bundle for your architecture from the [v1.0.1 Release](https://github.com/rumoii/streamfirefly/releases/tag/v1.0.1), then follow the [installation guide](INSTALL.md) (in Chinese). The extension and the native helper must come from the same build.
+1. Install the extension: Chrome users install it from the Chrome Web Store; for other browsers or the general edition, see the [installation guide](INSTALL.md) (in Chinese).
+2. The settings page opens after installation. Click **复制安装命令** (copy install command), press <kbd>Win</kbd> + <kbd>R</kbd>, paste and press Enter.
+3. The command downloads the native helper matching the extension version, verifies its SHA-256 and installs it for the current user without administrator rights. The extension then connects automatically.
+
+### Manual install
+
+Download the Windows bundle for your architecture from [Releases](https://github.com/rumoii/streamfirefly/releases/latest), then follow the [installation guide](INSTALL.md) (in Chinese).
 
 ### Build from source
 
@@ -178,7 +187,8 @@ npm run test:native
 <summary>Packaging and release</summary>
 
 ```powershell
-.\tools\package-extension.ps1        # Chrome Web Store upload package
+.\tools\package-extension.ps1 -Edition chrome-store   # Chrome Web Store upload package
+.\tools\package-extension.ps1 -Edition general        # General-edition Chromium extension
 npm run package:firefox              # unsigned Firefox XPI for testing
 .\tools\package-release.ps1 -SignedFirefoxXpi '<signed XPI path>'
 .\tools\build-installer.ps1 -Architecture x64
@@ -209,7 +219,7 @@ Most documents are in Chinese.
 - [Modular discovery and tool integration](docs/development/modular-discovery.md)
 - [External tools and URL extraction](docs/development/tools-and-extraction.md)
 - [Design decisions](docs/decisions/README.md)
-- [Release notes](docs/releases/1.0.1.md)
+- [Release notes](docs/releases/1.0.2.md)
 
 ## Privacy
 

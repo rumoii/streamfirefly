@@ -4,6 +4,8 @@
 
 Chrome 与 Edge 上传草稿及商店扩展 ID 的配置见[商店草稿准备](browser-stores.md)。
 
+GitHub Release、Windows 完整包和 Firefox 签名 XPI 一律使用通用版（`STREAMFIREFLY_EDITION=general`，也是未设置时的默认值）；Firefox 签名前构建的运行时也必须是通用版。Chrome 应用商店版由 `package-extension.ps1 -Edition chrome-store` 单独打包，不进入 Release。
+
 1. 运行 `npm ci`、`npm run verify:release:source`、`npm run validate:extension`、`npm run typecheck`、`npm run test:unit`。Windows 打包验证使用 `npm run test:release:packaging`。
 2. 对该提交运行 Actions 的 **Verify release source**，要求所有步骤通过，包括三个浏览器的基础与发现测试、Native 下载链路、Windows 子进程测试和两个架构的构建。
 3. 检查 Firefox 固定 ID `streamfirefly@example.invalid` 的版本占用，再用 `web-ext sign --channel unlisted --upload-source-code <可读源码 ZIP>` 提交构建运行时。凭据仅由本地受保护输入传入环境变量，不进入 Git、日志、包或 GitHub Secrets。可读源码 ZIP 只包含 Git 跟踪的扩展、界面、共享代码、构建工具和依赖锁文件，不包含本地状态、凭据和 Native 二进制。
@@ -15,9 +17,11 @@ Chrome 与 Edge 上传草稿及商店扩展 ID 的配置见[商店草稿准备](
    ```
 
 6. FFmpeg 对应源码目录须包含源码快照、匹配的构建配方和补丁、依赖源码与许可、目标覆盖清单和 Rust vendor 校验。`SOURCE-CLOSURE.json` 记录逐文件哈希；打包工具校验实际输入后生成 512 MiB 源码分片及 `FFMPEG-SOURCE-MANIFEST.json`。完整性声明须有对应材料支持，不能只填写通过标记。项目 MIT 不覆盖 FFmpeg；通用构建工具的可复现边界在源码说明中单独记录。
-7. 创建指向该完整 SHA 的 `v1.0.1` 草稿 Release，上传两个 Windows ZIP、独立 Chromium ZIP、签名 XPI、全部源码分片、源码清单和 `SHA256SUMS.txt`。不上传测试用 XPI、EXE 安装器或不同提交的附件。
-8. 运行 **Verify draft release**，传入草稿的数字 ID 和完整源 SHA。此工作流重新下载草稿附件，核对完整资产集合、内外哈希、两种 PE 架构及来源元数据，再从实际包安装 x64 助手，验证 HTTP/HLS/DASH、队列、发现下载、捕捉、卸载。Firefox 在独立持久配置中以正常签名要求永久安装，重启后再次验证扩展和 Native Messaging；临时安装不能替代该验证。
+7. 创建指向该完整 SHA 的 `v<版本>` 草稿 Release，上传两个 Windows ZIP、通用版 Chromium ZIP、签名 XPI、一键安装脚本 `StreamFirefly-install.ps1`、全部源码分片、源码清单和 `SHA256SUMS.txt`。不上传测试用 XPI、EXE 安装器或不同提交的附件。
+8. 运行 **Verify draft release**，传入草稿的数字 ID 和完整源 SHA。此工作流重新下载草稿附件，核对完整资产集合、内外哈希、两种 PE 架构及来源元数据，再从实际包安装 x64 助手，验证 HTTP/HLS/DASH、队列、发现下载、捕捉、卸载。Firefox 在独立持久配置中以正常签名要求永久安装，重启后再次验证扩展和 Native Messaging；临时安装不能替代该验证。一键安装脚本用实际附件验证损坏包被拒绝、注册正确及卸载干净。安装冒烟检查会全部跑完再汇总失败，一次运行即可暴露所有问题。
 9. 完成旧版本到新版本的升级、回滚和数据保留验证。真实 ARM64 硬件、真实网站覆盖和 7200 秒捕捉另行记录，不作为已通过事实。
+草稿验收不依赖源码工作流的结果，两者可以并行运行；发布前两者都须通过。更新草稿附件时按哈希复用未变化的附件，只上传变化的文件；修改草稿目标提交时须同时传入 `tag_name`，否则 GitHub 会把草稿改成 `untagged-…`。
+
 10. 所有必需证据齐全后，将仓库设为公开并发布稳定 Release，标签指向同一最终提交。检查未登录访问的仓库、隐私政策和附件下载。任何包内文件改变后，重新打包、审计、上传和运行附件验证。
 
 `tools/package-release.ps1` 没有允许脏工作区或未签名替代包的开关。`tools/verify-release-assets.ps1` 核对完整附件集合、源码分片及合并哈希；`tools/audit-release.ps1` 审计运行包结构和内部哈希。Mozilla 签名元数据检查只能证明文件存在；真实签名接受性由 Firefox 的永久安装验证证明。

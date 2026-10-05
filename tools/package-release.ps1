@@ -1,6 +1,6 @@
 param(
   [ValidatePattern('^\d+\.\d+\.\d+(-beta\.\d+)?$')]
-  [string]$BundleVersion = '1.0.1',
+  [string]$BundleVersion = '1.0.2',
   [Parameter(Mandatory=$true)][string]$SignedFirefoxXpi,
   [Parameter(Mandatory=$true)][string]$FfmpegSourceDirectory,
   [string]$OutputDir = (Join-Path (Split-Path -Parent $PSScriptRoot) 'release')
@@ -22,7 +22,7 @@ if (-not $node) { throw 'Node.js was not found' }
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 & $node.Source (Join-Path $PSScriptRoot 'ffmpeg-source.mjs') package $FfmpegSourceDirectory $OutputDir $sourceCommit
 if ($LASTEXITCODE -ne 0) { throw 'FFmpeg corresponding source packaging failed' }
-& $PSScriptRoot\package-extension.ps1 -OutputDir $OutputDir
+& $PSScriptRoot\package-extension.ps1 -Edition general -OutputDir $OutputDir
 if ($LASTEXITCODE -ne 0) { throw 'Chromium extension packaging failed' }
 & $PSScriptRoot\verify-signed-firefox.ps1 -Archive $SignedFirefoxXpi
 $extensionVersion = (Get-Content -Raw -LiteralPath (Join-Path $root 'extension\manifest.json') | ConvertFrom-Json).version
@@ -97,7 +97,15 @@ foreach ($architecture in @('x64', 'arm64')) {
     if (Test-Path -LiteralPath $tempBase) { Remove-Item -LiteralPath $tempBase -Recurse -Force }
   }
 }
-$archives += @($extensionZip, $firefoxXpi)
+$installerText = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot 'install-online.ps1'), [System.Text.Encoding]::UTF8).Replace('__STREAMFIREFLY_VERSION__', $BundleVersion)
+foreach ($architecture in @('x64', 'arm64')) {
+  $bundleHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $OutputDir "StreamFirefly-$BundleVersion-windows-$architecture.zip")).Hash.ToLowerInvariant()
+  $installerText = $installerText.Replace("__STREAMFIREFLY_SHA256_$($architecture.ToUpperInvariant())__", $bundleHash)
+}
+if ($installerText.Contains('__STREAMFIREFLY_')) { throw 'Online installer placeholders were not filled' }
+$onlineInstaller = Join-Path $OutputDir 'StreamFirefly-install.ps1'
+[System.IO.File]::WriteAllText($onlineInstaller, $installerText, [System.Text.UTF8Encoding]::new($true))
+$archives += @($extensionZip, $firefoxXpi, $onlineInstaller)
 $sourceManifest = Get-Content -Raw -LiteralPath (Join-Path $OutputDir 'FFMPEG-SOURCE-MANIFEST.json') | ConvertFrom-Json
 $archives += @(Join-Path $OutputDir 'FFMPEG-SOURCE-MANIFEST.json')
 $archives += @($sourceManifest.parts | ForEach-Object { Join-Path $OutputDir $_.name })

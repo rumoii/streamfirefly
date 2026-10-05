@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
-import { buildSync } from 'esbuild';
+import { buildSync } from 'esbuild';
+import { editionDefine } from './edition.mjs';
 import vm from 'node:vm';
 import { webcrypto } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../', import.meta.url));
-function load(entry, globals = {}) { const code = buildSync({ entryPoints: [root + entry], bundle: true, format: 'iife', globalName: 'Module', write: false }).outputFiles[0].text; const scope = { Error, URL, crypto: webcrypto, TextEncoder, TextDecoder, Uint8Array, structuredClone, AbortSignal, setTimeout, clearTimeout, console, ...globals }; vm.runInNewContext(code, scope); return scope.Module; }
+function load(entry, globals = {}) { const code = buildSync({ entryPoints: [root + entry], bundle: true, format: 'iife', globalName: 'Module', write: false , define: editionDefine('chrome-store') }).outputFiles[0].text; const scope = { Error, URL, crypto: webcrypto, TextEncoder, TextDecoder, Uint8Array, structuredClone, AbortSignal, setTimeout, clearTimeout, console, ...globals }; vm.runInNewContext(code, scope); return scope.Module; }
 const { renderTemplate } = load('shared/templates.ts', { btoa, atob });
 const { createIntegrations } = load('extension/src/integrations.js', { fetch: async () => { throw new TypeError('network disconnected'); }, btoa, atob });
 const { createIntegrationAdapters } = load('extension/src/integration-adapters.js', { fetch: async (_url, request) => { assert.equal(request.redirect, 'error'); assert.equal(request.credentials, 'omit'); const body = JSON.parse(request.body); if (body.method === 'aria2.getVersion') return new Response(JSON.stringify({ id: body.id, result: { version: 'test' } })); return new Response(JSON.stringify({ id: body.id, result: '0123456789abcdef' })); } });

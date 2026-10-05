@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { buildSync } from 'esbuild';
+import { buildSync } from 'esbuild';
+import { editionDefine } from './edition.mjs';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 function load(entry, globals = {}) {
-  const code = buildSync({ entryPoints: [fileURLToPath(new URL(entry, import.meta.url))], bundle: true, format: 'iife', globalName: 'Module', write: false }).outputFiles[0].text;
+  const code = buildSync({ entryPoints: [fileURLToPath(new URL(entry, import.meta.url))], bundle: true, format: 'iife', globalName: 'Module', write: false , define: editionDefine('chrome-store') }).outputFiles[0].text;
   const scope = { URL, TextEncoder, TextDecoder, Uint8Array, atob, setTimeout, clearTimeout, setInterval, clearInterval, ...globals };
   vm.runInNewContext(code, scope); return scope.Module;
 }
