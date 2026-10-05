@@ -35,6 +35,43 @@ const deepSearch = createDeepSearch(api, settings);
 const capture = createCaptureCoordinator(api, nativeRequestPromise, evaluation, resources);
 const outputTemplates = createOutputTemplates(api, evaluation.run);
 const requestHeadersById = new Map();
+const navigationCleanups = new Map();
+function beginNavigationCleanup(tabId, pageUrl, sameDocument = false) {
+  const previous = navigationCleanups.get(tabId);
+  const entry = { previous, cancelled: false };
+  entry.promise = Promise.resolve(previous?.promise).catch(() => {}).then(async () => {
+    if (entry.cancelled) return;
+    if (sameDocument) {
+      const state = await loadTabState(tabId);
+      if (entry.cancelled || state.pageUrl && pageKey(state.pageUrl) === pageKey(pageUrl)) return;
+      void capture.interrupted(tabId);
+    }
+    await unmountWorkspace(tabId);
+    if (entry.cancelled) return;
+    await clearTab(tabId, pageUrl);
+    if (entry.cancelled) return;
+    // Drain the refresh queued by clearTab before the initial script scan can emit candidates.
+    await sniffing.refresh();
+    if (entry.cancelled) return;
+    if (sameDocument) await api.tabs.sendMessage?.(tabId, { type: "media.rescan" })?.catch?.(() => {});
+  });
+  navigationCleanups.set(tabId, entry);
+  void entry.promise.then(() => {
+    if (navigationCleanups.get(tabId) !== entry) return;
+    navigationCleanups.delete(tabId);
+    notifyUiContext(tabId);
+  }, error => {
+    if (!entry.cancelled) console.error("StreamFirefly navigation cleanup failed", tabId, error.message);
+  });
+}
+async function waitForNavigationCleanup(tabId) {
+  let entry;
+  while ((entry = navigationCleanups.get(tabId))) {
+    await entry.promise;
+    if (entry.cancelled) throw new Error("page_probe_unavailable");
+    if (navigationCleanups.get(tabId) === entry) return;
+  }
+}
 sniffing.onChange((tabId, active) => {
   if (!active) for (const [requestId, entry] of requestHeadersById) if (entry.tabId === tabId) requestHeadersById.delete(requestId);
   notifyUiContext(tabId);
@@ -94,27 +131,27 @@ api.webRequest.onErrorOccurred.addListener(details => requestHeadersById.delete(
 
 api.webNavigation?.onBeforeNavigate?.addListener(details => {
   if (details.frameId !== 0) { deepSearch.clear(details.tabId, details.frameId); void capture.interrupted(details.tabId, details.frameId); return; }
-  if (details.frameId !== 0) return;
   deepSearch.clear(details.tabId);
   void capture.interrupted(details.tabId);
-  void unmountWorkspace(details.tabId).then(() => clearTab(details.tabId, details.url)).then(() => notifyUiContext(details.tabId));
+  beginNavigationCleanup(details.tabId, details.url);
 });
 api.webNavigation?.onHistoryStateUpdated?.addListener(details => {
   if (details.frameId !== 0) { void capture.interrupted(details.tabId, details.frameId); return; }
-  void loadTabState(details.tabId).then(state => {
-    // replaceState and fragment updates that keep the page address leave the page, its resources and the panel intact.
-    if (state.pageUrl && pageKey(state.pageUrl) === pageKey(details.url)) return;
-    void capture.interrupted(details.tabId);
-    return unmountWorkspace(details.tabId).then(() => clearTab(details.tabId, details.url)).then(() => api.tabs.sendMessage?.(details.tabId, { type: "media.rescan" })?.catch?.(() => {})).then(() => notifyUiContext(details.tabId));
-  });
+  beginNavigationCleanup(details.tabId, details.url, true);
 });
 
 api.tabs.onRemoved.addListener(tabId => {
+  const pending = navigationCleanups.get(tabId);
+  for (let entry = pending; entry; entry = entry.previous) entry.cancelled = true;
+  navigationCleanups.delete(tabId);
   sniffing.forget(tabId);
   void sniffing.refresh();
   deepSearch.clear(tabId);
   void capture.interrupted(tabId);
-  void unmountWorkspace(tabId).then(() => clearTab(tabId, "", true)).then(() => notifyUiContext(tabId));
+  void Promise.resolve(pending?.promise).catch(() => {}).then(() => unmountWorkspace(tabId)).then(() => clearTab(tabId, "", true)).then(() => {
+    sniffing.forget(tabId);
+    notifyUiContext(tabId);
+  }).catch(error => console.error("StreamFirefly closed-tab cleanup failed", tabId, error.message));
 });
 api.tabs.onUpdated?.addListener((tabId, changeInfo, tab) => {
   if (!changeInfo.title && !changeInfo.url && !changeInfo.favIconUrl) return;
@@ -278,6 +315,8 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       await settings.ready;
       if (!api.scripting?.executeScript || !Number.isInteger(sender.tab?.id)) return { ok: false, error: "page_probe_unavailable" };
+      await waitForNavigationCleanup(sender.tab.id);
+      await api.tabs.get(sender.tab.id);
       if (!sniffing.allowed(sender.tab.id)) return { ok: true, active: false };
       const target = { tabId: sender.tab.id, ...(sender.documentId ? { documentIds: [sender.documentId] } : { frameIds: [sender.frameId ?? 0] }) };
       const advanced = await deepSearch.install(sender, message.documentToken);
