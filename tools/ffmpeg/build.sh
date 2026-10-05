@@ -56,7 +56,7 @@ cd "$work/$arch/build"
   --enable-muxer=mp4,ipod,matroska,webm,webvtt \
   --enable-parser=h264,hevc,aac,aac_latm,ac3,mpegaudio,av1,vp9,vp8,opus,vorbis,flac \
   --enable-bsf=aac_adtstoasc,extract_extradata,vp9_superframe \
-  --enable-decoder=webvtt --enable-encoder=webvtt \
+  --enable-decoder=webvtt,h264,hevc --enable-encoder=webvtt \
   --extra-ldflags='-static -s -Wl,--no-insert-timestamp'
 make -j"$(nproc)" ffmpeg.exe
 
