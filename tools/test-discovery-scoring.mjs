@@ -15,4 +15,4 @@ assert.equal(scoreDiscoveryCase(spec, { ...evidence, candidates: [candidate, { u
 const negative = discoveryCases.find(item => item.id === 'ordinary-text');
 assert.equal(scoreDiscoveryCase(negative, { ...evidence, id: negative.id }).passed, true);
 assert.equal(scoreDiscoveryCase(negative, { ...evidence, id: negative.id, candidates: [candidate] }).passed, false);
-console.log('Discovery comparison scoring tests passed');
+console.log('Discovery scoring tests passed');
