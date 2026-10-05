@@ -1,7 +1,7 @@
 param(
   [Parameter(Mandatory=$true)][string]$Directory,
   [Parameter(Mandatory=$true)][ValidatePattern('^[a-f0-9]{40}$')][string]$ExpectedSourceCommit,
-  [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '1.0.0'
+  [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '1.0.1'
 )
 $ErrorActionPreference='Stop'
 & node (Join-Path $PSScriptRoot 'ffmpeg-source.mjs') verify $Directory $ExpectedSourceCommit

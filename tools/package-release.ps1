@@ -1,6 +1,6 @@
 param(
   [ValidatePattern('^\d+\.\d+\.\d+(-beta\.\d+)?$')]
-  [string]$BundleVersion = '1.0.0',
+  [string]$BundleVersion = '1.0.1',
   [Parameter(Mandatory=$true)][string]$SignedFirefoxXpi,
   [Parameter(Mandatory=$true)][string]$FfmpegSourceDirectory,
   [string]$OutputDir = (Join-Path (Split-Path -Parent $PSScriptRoot) 'release')

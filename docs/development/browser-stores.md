@@ -10,7 +10,7 @@
 .\tools\package-extension.ps1
 ```
 
-产物为 `release\StreamFirefly-extension-1.0.0.zip`，ZIP 根目录包含 Chromium 的 `manifest.json` 和批准的运行时文件。Chrome 和 Edge 使用这个 ZIP；Firefox 使用单独的 Mozilla 签名 XPI。
+产物为 `release\StreamFirefly-extension-1.0.1.zip`，ZIP 根目录包含 Chromium 的 `manifest.json` 和批准的运行时文件。Chrome 和 Edge 使用这个 ZIP；Firefox 使用单独的 Mozilla 签名 XPI。
 
 当前 Chromium 清单没有 `update_url`，名称和描述无需浏览器品牌替换。使用的 `sidePanel`、`offscreen`、`scripting`、`declarativeNetRequest` 等 API 在 Microsoft 的[支持列表](https://learn.microsoft.com/en-us/microsoft-edge/extensions/developer-guide/api-support)中；实际浏览器行为仍须通过项目测试。最低浏览器版本为 Chrome／Edge 141。
 

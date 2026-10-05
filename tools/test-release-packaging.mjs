@@ -41,7 +41,7 @@ for(const [name,change] of [
  ['permissions',m=>m.permissions.push('cookies')],
  ['permission order',m=>m.permissions.reverse()],
  ['Firefox ID',m=>m.browser_specific_settings.gecko.id='other@example.invalid'],
- ['version',m=>m.version='1.0.1'],
+ ['version',m=>m.version=m.version.replace(/\d+$/,patch=>String(Number(patch)+1))],
  ['field type',m=>m.manifest_version='3'],
  ['boolean type',m=>m.sidebar_action.open_at_install='false'],
  ['extra field',m=>m.extra=null],

@@ -12,7 +12,7 @@ Local-first media discovery and download for the web
 
 StreamFirefly has two parts: a browser extension and a native helper for Windows. The extension finds video, audio, images and HLS/DASH manifests on web pages. The helper, written in Rust, handles downloading, queueing, recovery and FFmpeg merging. Tasks and settings stay on your machine.
 
-The current version is 1.0.0. The interface is currently in Simplified Chinese. StreamFirefly does not circumvent DRM; only download content you own or are authorized to download. Per Chrome Web Store policy, StreamFirefly does not detect or download YouTube content; the site list is `BLOCKED_SITES` in `extension/src/platform.js`.
+The current version is 1.0.1. The interface is currently in Simplified Chinese. StreamFirefly does not circumvent DRM; only download content you own or are authorized to download. Per Chrome Web Store policy, StreamFirefly does not detect or download YouTube content; the site list is `BLOCKED_SITES` in `extension/src/platform.js`.
 
 ## Features
 
@@ -73,7 +73,7 @@ Screenshots come from the automated UI tests and show test data.
 
 ### Beta package
 
-Download the Windows bundle for your architecture from the [v1.0.0 Release](https://github.com/rumoii/streamfirefly/releases/tag/v1.0.0), then follow the [installation guide](INSTALL.md) (in Chinese). The extension and the native helper must come from the same build.
+Download the Windows bundle for your architecture from the [v1.0.1 Release](https://github.com/rumoii/streamfirefly/releases/tag/v1.0.1), then follow the [installation guide](INSTALL.md) (in Chinese). The extension and the native helper must come from the same build.
 
 ### Build from source
 
@@ -207,7 +207,7 @@ Most documents are in Chinese.
 - [Modular discovery and tool integration](docs/development/modular-discovery.md)
 - [External tools and URL extraction](docs/development/tools-and-extraction.md)
 - [Design decisions](docs/decisions/README.md)
-- [Release notes](docs/releases/1.0.0.md)
+- [Release notes](docs/releases/1.0.1.md)
 
 ## Privacy
 

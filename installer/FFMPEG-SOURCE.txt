@@ -11,9 +11,9 @@ Exact FFmpeg build script revision:
 https://github.com/BtbN/FFmpeg-Builds/tree/e88e49f624457c455700b058f0a84ca87d499cc2
 
 Corresponding source delivery (same Release as these binaries):
-https://github.com/rumoii/streamfirefly/releases/tag/v1.0.0
+https://github.com/rumoii/streamfirefly/releases/tag/v1.0.1
 Download FFMPEG-SOURCE-MANIFEST.json and every
-StreamFirefly-ffmpeg-source-1.0.0.tar.gz.partNNN attachment.
+StreamFirefly-ffmpeg-source-1.0.1.tar.gz.partNNN attachment.
 Concatenate parts in numeric order, verify the archive SHA-256 from the
 manifest, and extract the archive. Its README.md contains build instructions,
 source provenance, licenses and the build-tool reproducibility boundary.

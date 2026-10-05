@@ -1,6 +1,6 @@
 # Chrome Web Store 商店资料
 
-条目：流萤 StreamFirefly，扩展 ID `ooblmahffkiimlflhdnfojjemlibmhhj`，上传包 `release/StreamFirefly-extension-1.0.0.zip`。公开范围为公开。上传草稿的步骤见 [商店草稿准备](../docs/development/browser-stores.md)。
+条目：流萤 StreamFirefly，扩展 ID `ooblmahffkiimlflhdnfojjemlibmhhj`，上传包 `release/StreamFirefly-extension-1.0.1.zip`。公开范围为公开。上传草稿的步骤见 [商店草稿准备](../docs/development/browser-stores.md)。
 
 ## 商品详情
 
@@ -87,7 +87,7 @@
 
 ```text
 无需账号。下载功能需要 Windows 本地助手。
-1. 在 Windows 11 上，从 https://github.com/rumoii/streamfirefly/releases/tag/v1.0.0 下载 StreamFirefly-1.0.0-windows-x64.zip 并解压。
+1. 在 Windows 11 上，从 https://github.com/rumoii/streamfirefly/releases/tag/v1.0.1 下载 StreamFirefly-1.0.1-windows-x64.zip 并解压。
 2. 在解压目录运行 PowerShell：
 .\tools\install.ps1 -ChromeExtensionId 'ooblmahffkiimlflhdnfojjemlibmhhj'
 3. 重启 Chrome，打开 https://developer.mozilla.org/en-US/docs/Web/HTML/Element/video
@@ -99,5 +99,5 @@
 
 ## 提交审核前
 
-- 仓库公开、v1.0.0 Release 发布后，用无痕窗口确认隐私政策、首页、支持、Release 四个地址都能公开访问，然后再提交审核。
+- 仓库公开、v1.0.1 Release 发布后，用无痕窗口确认隐私政策、首页、支持、Release 四个地址都能公开访问，然后再提交审核。
 - 宣传图上的“开源透明”在仓库公开后才成立，届时复核。

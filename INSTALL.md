@@ -1,11 +1,11 @@
-# StreamFirefly 1.0.0 安装指南
+# StreamFirefly 1.0.1 安装指南
 
-从 [v1.0.0 Release](https://github.com/rumoii/streamfirefly/releases/tag/v1.0.0) 下载完整包，并先核对同一 Release 的 `SHA256SUMS.txt`：
+从 [v1.0.1 Release](https://github.com/rumoii/streamfirefly/releases/tag/v1.0.1) 下载完整包，并先核对同一 Release 的 `SHA256SUMS.txt`：
 
-- Windows x64：`StreamFirefly-1.0.0-windows-x64.zip`
-- Windows ARM64：`StreamFirefly-1.0.0-windows-arm64.zip`
-- 独立 Chromium 扩展：`StreamFirefly-extension-1.0.0.zip`
-- Firefox 签名扩展：`StreamFirefly-firefox-1.0.0-signed.xpi`
+- Windows x64：`StreamFirefly-1.0.1-windows-x64.zip`
+- Windows ARM64：`StreamFirefly-1.0.1-windows-arm64.zip`
+- 独立 Chromium 扩展：`StreamFirefly-extension-1.0.1.zip`
+- Firefox 签名扩展：`StreamFirefly-firefox-1.0.1-signed.xpi`
 
 需要 Windows 11、自带 curl、Windows PowerShell 5.1 或 PowerShell 7，以及 Chrome/Edge 141+ 或 Firefox 142+。完整包包含本地助手和对应架构的 FFmpeg，安装时无需下载依赖。浏览器安装扩展由用户操作。
 

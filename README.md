@@ -12,7 +12,7 @@
 
 流萤由浏览器扩展和 Windows 本地助手两部分组成。扩展在网页里发现视频、音频、图片和 HLS/DASH 清单；本地助手用 Rust 编写，负责下载、排队、断点恢复和 FFmpeg 合并。任务和设置只保存在本机。
 
-当前版本为 1.0.0。流萤不绕过 DRM，请只下载你拥有版权或已获授权的内容。根据 Chrome 应用商店政策，流萤不识别和下载 YouTube 内容；站点名单见 `extension/src/platform.js` 的 `BLOCKED_SITES`。
+当前版本为 1.0.1。流萤不绕过 DRM，请只下载你拥有版权或已获授权的内容。根据 Chrome 应用商店政策，流萤不识别和下载 YouTube 内容；站点名单见 `extension/src/platform.js` 的 `BLOCKED_SITES`。
 
 ## 功能
 
@@ -73,7 +73,7 @@
 
 ### 完整发布包
 
-从 [v1.0.0 Release](https://github.com/rumoii/streamfirefly/releases/tag/v1.0.0) 下载适合架构的 Windows 完整包，再按[安装指南](INSTALL.md)操作。扩展和本地助手必须来自同一批次。
+从 [v1.0.1 Release](https://github.com/rumoii/streamfirefly/releases/tag/v1.0.1) 下载适合架构的 Windows 完整包，再按[安装指南](INSTALL.md)操作。扩展和本地助手必须来自同一批次。
 
 ### 从源码构建
 
@@ -205,7 +205,7 @@ npm run package:firefox              # Firefox 测试用 XPI（未签名）
 - [模块化发现与工具集成](docs/development/modular-discovery.md)
 - [外部工具与 URL 提取](docs/development/tools-and-extraction.md)
 - [设计决策](docs/decisions/README.md)
-- [版本说明](docs/releases/1.0.0.md)
+- [版本说明](docs/releases/1.0.1.md)
 
 ## 隐私
 
