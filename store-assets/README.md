@@ -86,16 +86,16 @@
 ## 测试说明
 
 ```text
-本扩展需要配合 Windows 本地下载助手使用。
-
+无需账号。下载功能需要 Windows 本地助手。
 1. 在 Windows 11 上，从 <助手下载地址> 下载 StreamFirefly-1.0.0-windows-x64.zip 并解压。
 2. 在解压目录运行 PowerShell：
-   .\tools\install.ps1 -ChromeExtensionId 'ooblmahffkiimlflhdnfojjemlibmhhj'
-3. 重启 Chrome，打开任意包含视频或图片的网页，例如 https://developer.mozilla.org/en-US/docs/Web/HTML/Element/video
-4. 点击工具栏中的流萤图标打开侧栏，资源列表会显示页面中的媒体；点击“下载”后，可在“下载”页查看任务进度。
-
-不安装助手时，扩展仍可识别和预览媒体，但无法下载。
+.\tools\install.ps1 -ChromeExtensionId 'ooblmahffkiimlflhdnfojjemlibmhhj'
+3. 重启 Chrome，打开 https://developer.mozilla.org/en-US/docs/Web/HTML/Element/video
+4. 点击流萤图标打开侧栏，资源列表显示页面媒体；点“下载”后在“下载”页查看进度。
+未安装助手时仍可识别和预览媒体，但无法下载。
 ```
+
+后台“其他说明”限 500 字。用户名和密码留空；仓库公开后把占位符换成 Release 地址，替换后仍须不超过 500 字。
 
 ## 提交审核前
 
