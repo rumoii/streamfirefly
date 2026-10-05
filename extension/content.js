@@ -102,7 +102,7 @@
     const current = ++revision;
     if (!next) { active = false; installing = false; pending = []; observer.disconnect(); return; }
     installing = true;
-    pending = [];
+    // Concurrent installation requests share this document's buffered discoveries.
     const result = await api.runtime.sendMessage({ type: "probe.install", documentToken }).catch(() => null);
     if (current !== revision) return;
     if (!result?.ok || !result.active) { installing = false; pending = []; return; }

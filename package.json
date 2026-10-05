@@ -8,7 +8,7 @@
     "test:ui": "vitest run",
     "test:ui:browser": "node tools/test-ui-playwright.mjs",
     "validate:extension": "npm run build:extension && node tools/validate-extension.mjs && node tools/validate-firefox-extension.mjs",
-    "test:unit": "npm run test:ui && node tools/check-module-boundaries.mjs && node tools/test-discovery-integrations.mjs && node tools/test-capture-probe.mjs && node tools/test-capture-sessions.mjs && npm run test:capture:runtime && node tools/test-sniffing.mjs && node tools/test-extension-logic.mjs && node tools/test-page-probe.mjs && node tools/test-discovery-scoring.mjs && node tools/test-firefox-integration.mjs && node tools/test-internal-packaging.mjs && npm run verify:release:source",
+    "test:unit": "npm run test:ui && node tools/check-module-boundaries.mjs && node tools/test-discovery-integrations.mjs && node --test tools/test-content-probe.mjs && node tools/test-capture-probe.mjs && node tools/test-capture-sessions.mjs && npm run test:capture:runtime && node tools/test-sniffing.mjs && node tools/test-extension-logic.mjs && node tools/test-page-probe.mjs && node tools/test-discovery-scoring.mjs && node tools/test-firefox-integration.mjs && node tools/test-internal-packaging.mjs && npm run verify:release:source",
     "test:capture:runtime": "node --test tools/test-capture-runtime.mjs tools/test-capture-finalization.mjs tools/test-capture-evidence.mjs",
     "test:capture:runtime:windows": "node --test tools/test-capture-runtime-windows.mjs",
     "test:packaging:windows": "node --test tools/test-internal-packaging-windows.mjs",
