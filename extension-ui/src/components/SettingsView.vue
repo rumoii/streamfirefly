@@ -54,6 +54,10 @@ defineExpose({ hasUnsavedChanges });
             <label class="toggle-row"><span><strong>高级深度搜索</strong><small>额外观察页面解码和 Worker；可能影响少数复杂网站。</small></span><input v-model="form.advancedDeepSearch" type="checkbox"><i></i></label>
           </div>
         </section>
+        <section class="settings-card" aria-labelledby="settings-blocked-title">
+          <header><h4 id="settings-blocked-title">不支持的网站</h4><p>根据 Chrome 应用商店政策，流萤不识别和下载 YouTube 内容。</p></header>
+          <p class="settings-note">站点名单写在源码 <code>extension/src/platform.js</code> 的 <code>BLOCKED_SITES</code> 中，设置页不能修改。自行构建的版本可编辑该名单，运行 <code>npm run build:extension</code> 后以开发者模式加载 <code>extension</code> 目录。</p>
+        </section>
         <footer class="settings-footer"><span class="save-state" :class="{ dirty: hasUnsavedChanges }" role="status">{{ hasUnsavedChanges ? '有未保存的修改' : '已保存' }}</span><button class="button" type="button" @click="emit('reset')">恢复默认</button><button class="button primary" type="button" :disabled="Boolean(proxyError)" @click="emit('save', { ...form })">验证并保存</button></footer>
       </section>
       <KeepAlive><component :is="currentPanel" v-if="trusted && currentPanel" :key="section" /></KeepAlive>

@@ -44,6 +44,8 @@ export interface UiContext {
   pageTitle: string;
   favIconUrl: string;
   supported: boolean;
+  /** Set when the page is on a site excluded by BLOCKED_SITES. */
+  blocked?: boolean;
   paused: boolean;
   sniffingActive: boolean;
   candidates: MediaCandidate[];

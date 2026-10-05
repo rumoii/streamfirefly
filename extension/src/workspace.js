@@ -1,4 +1,4 @@
-import { supportedPage, newId } from './platform.js';
+import { supportedPage, blockedSite, newId } from './platform.js';
 
 export function createWorkspace(api, clearPreviewHeadersForTab, onUnmount) {
   const workspaceTabsByWindow = new Map();
@@ -23,7 +23,7 @@ export function createWorkspace(api, clearPreviewHeadersForTab, onUnmount) {
   }
 
   function openWorkspace(tab, view = "resources", candidateId = "", displayMode = "workspace", closeSidebar = false) {
-    if (!Number.isInteger(tab?.id) || !supportedPage(tab.url)) return Promise.resolve({ ok: false, error: "workspace_page_unsupported" });
+    if (!Number.isInteger(tab?.id) || !supportedPage(tab.url) || blockedSite(tab.url)) return Promise.resolve({ ok: false, error: "workspace_page_unsupported" });
     const previous = windowQueues.get(tab.windowId) || Promise.resolve();
     const operation = previous.catch(() => {}).then(() => mountWorkspace(tab, view, candidateId, displayMode, closeSidebar));
     windowQueues.set(tab.windowId, operation);

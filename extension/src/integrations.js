@@ -1,6 +1,7 @@
 import { integrationDefaults, validateIntegrations } from "../../shared/integrations.ts";
 import { hostMatches } from "../../shared/discovery.ts";
 import { createIntegrationAdapters } from "./integration-adapters.js";
+import { assertSiteAllowed } from "./platform.js";
 import { prepareIntegrationRequest } from "./integration-request.js";
 import { toolError } from "../../shared/tool-options.ts";
 export function createIntegrations(api, resources, nativeRequest, evaluate) {
@@ -20,6 +21,7 @@ export function createIntegrations(api, resources, nativeRequest, evaluate) {
     if (state.sourceContextId !== payload.sourceContextId) throw new Error("来源页面已变化，请重新选择资源");
     const candidate = await resources.candidateFor(payload.tabId, payload.candidateId);
     if (!candidate || !/^https?:\/\//i.test(candidate.url) || candidate.inlineManifest) throw new Error("该资源没有可直接交接的 HTTP 地址，请使用内置下载");
+    assertSiteAllowed(candidate.url, candidate.pageUrl, state.pageUrl);
     const headers = Object.fromEntries(Object.entries(candidate.requestHeaders || {}).map(([key, value]) => [key.toLowerCase(), value]));
     const values = { url: candidate.url, pageUrl: candidate.pageUrl || "", title: candidate.pageTitle || "媒体", fileName: candidate.pageTitle || "媒体", ext: new URL(candidate.url).pathname.split(".").at(-1) || "", mime: candidate.mime || "", size: candidate.size == null ? "" : String(candidate.size), now: new Date().toISOString().replace(/[:.]/g, "-") };
     values.token = secrets.get(profile.id) || "";

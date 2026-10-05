@@ -109,6 +109,17 @@ describe("sidebar surface", () => {
     wrapper.unmount();
   });
 
+  it("explains why blocked sites are not sniffed", async () => {
+    currentContext = { sourceTabId: 11, sourceContextId: "", pageUrl: "https://www.youtube.com/watch?v=blocked", pageTitle: "YouTube", favIconUrl: "", supported: false, blocked: true, paused: false, sniffingActive: false, resourceViewState: { pattern: "", type: "all", minMb: "", maxMb: "", minDuration: "", maxDuration: "", sortMode: "detected", expandedId: "", revision: 0 }, candidates: [] };
+    const wrapper = mount(App, { global: { plugins: [createPinia()] } });
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("不识别和下载 YouTube 内容");
+    expect(wrapper.text()).not.toContain("当前页面不支持嗅探");
+    expect(button(wrapper, "展开工作区").attributes("disabled")).toBeDefined();
+    wrapper.unmount();
+  });
+
   it("renders the resource empty state without inventing a session", async () => {
     currentContext = { sourceTabId: 7, sourceContextId: "context-empty", pageUrl: "https://media.example/empty", pageTitle: "空页面", favIconUrl: "", supported: true, paused: false, sniffingActive: true, resourceViewState: { pattern: "", type: "all", minMb: "", maxMb: "", minDuration: "", maxDuration: "", sortMode: "detected", expandedId: "", revision: 0 }, candidates: [] };
     const wrapper = mount(App, { global: { plugins: [createPinia()] } });

@@ -1,4 +1,4 @@
-import { INLINE_MANIFEST_MAX_BYTES, newId, supportedPage, cleanPageTitle, pageTitleFor, normalizeSortMode, pageKey } from './platform.js';
+import { INLINE_MANIFEST_MAX_BYTES, newId, supportedPage, blockedSite, cleanPageTitle, pageTitleFor, normalizeSortMode, pageKey } from './platform.js';
 export function createResources(api, settings, sniffing, notifyWorkspaceMessage, detect, extract) {
 const candidateListeners = new Set();
 const STATE_VERSION = 2;
@@ -58,9 +58,10 @@ async function loadTabState(tabId) {
 async function uiContextForTab(tab) {
   const sourceTabId = Number.isInteger(tab?.id) ? tab.id : -1;
   const pageUrl = tab?.url || "";
-  const supported = sourceTabId >= 0 && supportedPage(pageUrl);
+  const blocked = blockedSite(pageUrl);
+  const supported = sourceTabId >= 0 && supportedPage(pageUrl) && !blocked;
   if (!supported) {
-    return { sourceTabId, sourceContextId: "", pageUrl, pageTitle: pageTitleFor(tab), favIconUrl: tab?.favIconUrl || "", supported: false, paused: false, sniffingActive: false, resourceViewState: defaultResourceViewState(), candidates: [] };
+    return { sourceTabId, sourceContextId: "", pageUrl, pageTitle: pageTitleFor(tab), favIconUrl: tab?.favIconUrl || "", supported: false, blocked, paused: false, sniffingActive: false, resourceViewState: defaultResourceViewState(), candidates: [] };
   }
   await settings.ready;
   let state = await loadTabState(sourceTabId);
@@ -214,6 +215,7 @@ async function hashInlineManifest(inlineManifest) {
 async function addCandidate(tabId, item) {
   if (!Number.isInteger(tabId) || tabId < 0 || !item?.url) return false;
   if (isHeuristicNamespaceCandidate(item)) return false;
+  if (blockedSite(item.url) || blockedSite(item.pageUrl)) return false;
   await settings.ready;
   if (!sniffing.allowed(tabId)) return false;
   const revision = sniffing.revision(tabId);
@@ -231,6 +233,7 @@ async function addCandidate(tabId, item) {
     const context = item.inlineManifest ? requestContextFor(tabId, item) : null;
     const inlineHeaders = context ? Object.fromEntries(Object.entries(context.requestHeaders || {}).filter(([name]) => !["cookie", "authorization"].includes(name.toLowerCase()))) : null;
     const sourceUrl = state.pageUrl || (await api.tabs.get(tabId)).url || "";
+    if (blockedSite(sourceUrl)) return false;
     const normalizedItem = { ...item, pageTitle: item.pageTitle ? cleanPageTitle(item.pageTitle) : item.pageTitle, pageUrl: sourceUrl };
     const enriched = context ? { ...normalizedItem, requestHeaders: normalizedItem.requestHeaders && Object.keys(normalizedItem.requestHeaders).length ? normalizedItem.requestHeaders : inlineHeaders, referer: normalizedItem.referer || context.referer, contentDisposition: normalizedItem.contentDisposition || context.contentDisposition } : normalizedItem;
     const merged = mergeCandidate(existing, { ...enriched, canonicalUrl });
@@ -249,7 +252,7 @@ async function addCandidate(tabId, item) {
     await collect(merged, id, existing, existing?.extraction?.kind);
     if (!item.inlineManifest) {
       const result = await extract(normalizedItem);
-      if (result.url) {
+      if (result.url && !blockedSite(result.url)) {
         const extractedId = canonicalize(result.url);
         if (!draft.candidates.has(extractedId)) {
           await collect({ url: result.url, canonicalUrl: extractedId, pageUrl: sourceUrl, pageTitle: normalizedItem.pageTitle, source: "rule", extraction: { ruleId: result.ruleId, originalUrl: item.url, observed: false, kind: result.kind } }, extractedId, null, result.kind);
@@ -406,6 +409,7 @@ async function fetchMediaText(tabId, id, requestedUrl) {
   try { url = new URL(requestedUrl || owner.url); }
   catch (_) { return { ok: false, error: "media_url_invalid" }; }
   if (!/^https?:$/.test(url.protocol)) return { ok: false, error: "media_url_unsupported" };
+  if (blockedSite(url.href) || blockedSite(owner.pageUrl)) return { ok: false, error: "site_blocked" };
   const headers = new Headers();
   const pageHeaders = {};
   for (const [name, value] of Object.entries(owner.requestHeaders || {})) {

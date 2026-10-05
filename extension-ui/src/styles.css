@@ -322,6 +322,8 @@ html:has(.settings-layout) { scrollbar-gutter: stable; }
 .settings-card, .feature-card { padding: 16px; display: grid; gap: 14px; border: 1px solid var(--sf-border); border-radius: var(--sf-radius-lg); background: var(--sf-surface); }
 .settings-card > header h4, .feature-card h4, .feature-subsection h4 { margin: 0; font-size: var(--sf-text-md); font-weight: 600; }
 .settings-card > header p { margin: 3px 0 0; color: var(--sf-text-3); font-size: var(--sf-text-sm); line-height: 1.6; }
+.settings-note { margin: 0; color: var(--sf-text-2); font-size: var(--sf-text-sm); line-height: 1.7; }
+.settings-note code { font-size: 0.95em; }
 .settings-fields { display: grid; gap: 14px; }
 .settings-field-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .field .sf-select { width: 100%; }

@@ -1,4 +1,5 @@
 import { createCaptureTransport } from "./capture-transport.js";
+import { assertSiteAllowed } from "./platform.js";
 export function createCaptureCoordinator(api, nativeRequest, evaluation, resources) {
   const local = typeof Worker === "function" ? createCaptureTransport(api) : null;
   const sessions = new Map(), opening = new Map(), history = new Map();
@@ -76,7 +77,7 @@ export function createCaptureCoordinator(api, nativeRequest, evaluation, resourc
     opening.set(payload.tabId, operation);
     let session;
     try {
-      const check = async () => { const current = await resources.loadTabState(payload.tabId); if (operation.cancelled || current.sourceContextId !== payload.sourceContextId) throw new Error("capture_document_changed"); };
+      const check = async () => { const current = await resources.loadTabState(payload.tabId); if (operation.cancelled || current.sourceContextId !== payload.sourceContextId) throw new Error("capture_document_changed"); assertSiteAllowed(current.pageUrl); };
       await check();
       const found = (await sources(payload.tabId)).sources.find(source => source.id === selected.id && source.frameId === selected.frameId && source.documentToken === selected.documentToken);
       if (!found) throw new Error("capture_source_unavailable");

@@ -26,6 +26,15 @@ describe("unified settings navigation", () => {
     expect(send.mock.calls.filter(([message]) => message.type === "discovery.get")).toHaveLength(1);
     expect(send.mock.calls.some(([message]) => message.type === "discovery.save")).toBe(false); wrapper.unmount();
   });
+  it("explains where the blocked site list lives", () => {
+    const wrapper = mount(SettingsView, { props: { settings } });
+    const notice = wrapper.get('[aria-labelledby="settings-blocked-title"]');
+    expect(notice.text()).toContain("YouTube");
+    expect(notice.text()).toContain("extension/src/platform.js");
+    expect(notice.text()).toContain("BLOCKED_SITES");
+    expect(notice.find("input").exists()).toBe(false);
+    wrapper.unmount();
+  });
   it("validates a custom proxy before saving", async () => {
     const wrapper = mount(SettingsView, { props: { settings }, attachTo: document.body });
     await choose(wrapper, "下载代理", "自定义代理");

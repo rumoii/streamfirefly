@@ -1,3 +1,4 @@
+import { assertSiteAllowed } from "./platform.js";
 export function createDispatchIntents(api, resources) {
   const intents = new Map();
   function prune() { for (const [id, intent] of intents) if (intent.expiresAt < Date.now()) intents.delete(id); }
@@ -12,6 +13,7 @@ export function createDispatchIntents(api, resources) {
       const candidate = await resources.candidateFor(tabId, id);
       if (!candidate) throw new Error("资源已移除");
       if (candidate.url.startsWith("blob:")) throw new Error("blob_resource_requires_capture");
+      assertSiteAllowed(candidate.url, candidate.pageUrl, state.pageUrl);
       candidates.push({ id: candidate.id, url: candidate.url, title: candidate.pageTitle || "媒体", inline: Boolean(candidate.inlineManifest) });
     }
     const id = crypto.randomUUID();

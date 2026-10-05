@@ -241,6 +241,7 @@ export function humanError(value: string): string {
     workspace_sidebar_close_failed: "工作区已撤销，因为浏览器侧栏未能关闭。",
     workspace_sidebar_open_failed: "浏览器侧栏未能恢复，工作区仍保持打开。",
     blob_resource_requires_capture: "Blob 是来源页面内的临时媒体，请使用缓存捕捉。",
+    site_blocked: "根据 Chrome 应用商店政策，流萤不识别和下载 YouTube 内容。",
     workspace_close_failed: "工作区未能正常收起，请刷新页面后重试。",
     native_host_unavailable: "未连接到本地助手，请安装或重新启动流萤本地助手。",
     native_host_incompatible: "请同时更新扩展与本地助手，不支持旧版混用。",

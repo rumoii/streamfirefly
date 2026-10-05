@@ -50,6 +50,9 @@ onBeforeUnmount(() => { store.dispose(); clearTimeout(toastTimer); });
     <main class="sidebar-content">
       <ConnectionBanner :state="store.connection" :error="store.connectionError" @retry="store.refresh" />
       <div v-if="store.error" class="status-banner error">{{ store.error }}</div>
+      <div v-else-if="store.context?.blocked" class="restricted-state">
+        <span><SfIcon name="plug-connected-x" :size="22" /></span><h2>不支持此网站</h2><p>根据 Chrome 应用商店政策，流萤不识别和下载 YouTube 内容。</p>
+      </div>
       <div v-else-if="store.context && !store.context.supported" class="restricted-state">
         <span><SfIcon name="plug-connected-x" :size="22" /></span><h2>当前页面不支持嗅探</h2><p>浏览器内部页面、扩展页面和本地受限页面不能读取媒体请求，也不能展开工作区。</p>
       </div>

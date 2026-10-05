@@ -12,7 +12,7 @@ import { createResources } from './resources.js';
 import { createPreview } from './preview.js';
 import { createWorkspace } from './workspace.js';
 import { createSniffing } from './sniffing.js';
-import { supportedPage, pageKey } from './platform.js';
+import { supportedPage, blockedSite, assertSiteAllowed, pageKey } from './platform.js';
 const api = globalThis.browser ?? globalThis.chrome;
 const settings = createSettings(api);
 const sniffing = createSniffing(api, settings);
@@ -91,7 +91,7 @@ function openFallback(tab) {
 function handleToolbarClick(tab) {
   if (!Number.isInteger(tab?.id)) return;
   // Firefox's sidebar APIs require the original toolbar gesture, before any await.
-  if (!supportedPage(tab.url) || fallbackTabs.has(tab.id)) {
+  if (!supportedPage(tab.url) || blockedSite(tab.url) || fallbackTabs.has(tab.id)) {
     return openFallback(tab).then(() => { fallbackTabs.delete(tab.id); fallbackWindows.add(tab.windowId); api.action.setBadgeText({ tabId: tab.id, text: "" }); return { ok: true }; }).catch(() => ({ ok: false, error: "workspace_sidebar_open_failed" }));
   }
   Promise.resolve(api.sidebarAction?.close?.()).catch(() => {});
@@ -206,7 +206,7 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!Number.isInteger(message.payload?.tabId)) throw new Error("source_tab_unavailable");
       let tab;
       try { tab = await api.tabs.get(message.payload.tabId); } catch (_) { throw new Error("source_tab_unavailable"); }
-      if (!Number.isInteger(tab?.id) || !Number.isInteger(tab?.windowId) || !supportedPage(tab.url)) throw new Error("source_tab_unavailable");
+      if (!Number.isInteger(tab?.id) || !Number.isInteger(tab?.windowId) || !supportedPage(tab.url) || blockedSite(tab.url)) throw new Error("source_tab_unavailable");
       try { await api.tabs.update(tab.id, { active: true }); await api.windows?.update?.(tab.windowId, { focused: true }); }
       catch (_) { throw new Error("source_tab_unavailable"); }
       if (message.payload.closeCurrent && Number.isInteger(sender.tab?.id) && sender.tab.id !== tab.id) {
@@ -316,8 +316,8 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
       await settings.ready;
       if (!api.scripting?.executeScript || !Number.isInteger(sender.tab?.id)) return { ok: false, error: "page_probe_unavailable" };
       await waitForNavigationCleanup(sender.tab.id);
-      await api.tabs.get(sender.tab.id);
-      if (!sniffing.allowed(sender.tab.id)) return { ok: true, active: false };
+      const tab = await api.tabs.get(sender.tab.id);
+      if (!sniffing.allowed(sender.tab.id) || blockedSite(tab?.url) || blockedSite(sender.url)) return { ok: true, active: false };
       const target = { tabId: sender.tab.id, ...(sender.documentId ? { documentIds: [sender.documentId] } : { frameIds: [sender.frameId ?? 0] }) };
       const advanced = await deepSearch.install(sender, message.documentToken);
       try { await api.scripting.executeScript({ target, world: "MAIN", files: ["page-probe.js", "capture-probe.js"] }); await deepSearch.activate(sender, message.documentToken); }
@@ -329,6 +329,7 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "native.connect") { ensureNativeConfigured().then(sendResponse); return true; }
   if (["task.create", "task.prepare"].includes(message?.type)) {
     taskPayloadForSender(message.payload || {}, sender).then(async payload => {
+      assertSiteAllowed(payload.url, payload.referer, sender.tab?.url);
       const info = message.type === "task.create" ? await ensureNativeConfigured() : await nativeInfo();
       if (!info.ok) return info;
       if (payload.dashPlan && !info.capabilities.includes("dash-selection-v1")) return { ok: false, error: "dash_native_upgrade_required" };

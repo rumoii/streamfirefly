@@ -121,6 +121,26 @@ const nativeBeforeBlob = nativePosted.length;
 const rejectedBlobTask = await send({ type: 'task.create', payload: { url: 'blob:https://media.example/source' } });
 if (rejectedBlobTask.ok || rejectedBlobTask.error !== 'blob_resource_requires_capture' || nativePosted.length !== nativeBeforeBlob) throw new Error(`Blob media reached Native download: ${JSON.stringify(rejectedBlobTask)}`);
 
+tabsById.set(11, { id: 11, active: false, url: 'https://www.youtube.com/watch?v=blocked', title: 'YouTube', lastAccessed: 0, windowId: 3 });
+const nativeBeforeBlockedSite = nativePosted.length;
+for (const [payload, sender] of [[{ url: 'https://rr1---sn-blocked.googlevideo.com/videoplayback?id=1' }, {}], [{ url: 'https://media.example/a.mp4', referer: 'https://m.youtube.com/watch?v=blocked' }, {}], [{ url: 'https://media.example/a.mp4' }, { tab: { ...tabsById.get(11) } }]]) {
+  for (const type of ['task.create', 'task.prepare']) {
+    const blocked = await send({ type, payload }, sender);
+    if (blocked.ok || blocked.error !== 'site_blocked') throw new Error(`Blocked site reached ${type}: ${JSON.stringify(blocked)}`);
+  }
+}
+if (nativePosted.length !== nativeBeforeBlockedSite) throw new Error('Blocked site request reached Native');
+listeners.beforeHeaders({ tabId: 11, url: 'https://media.example/blocked-page.mp4', requestId: 'blocked-1', requestHeaders: [] });
+listeners.headers({ tabId: 11, url: 'https://media.example/blocked-page.mp4', requestId: 'blocked-1', statusCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'video/mp4' }] });
+await settle();
+const blockedDom = await send({ type: 'media.add', candidate: { url: 'https://media.example/blocked-dom.mp4', mime: 'video/mp4', source: 'dom' } }, { tab: { id: 11 } });
+if (blockedDom?.ok || (await send({ type: 'media.candidates', tabId: 11 })).length) throw new Error('Media on a blocked page was retained');
+const blockedView = await send({ type: 'ui.context.get', scope: 'sender' }, { tab: { ...tabsById.get(11) } });
+if (!blockedView.ok || blockedView.context.supported || !blockedView.context.blocked || blockedView.context.candidates.length) throw new Error(`Blocked page context was not restricted: ${JSON.stringify(blockedView)}`);
+const scriptsBeforeBlockedProbe = executedScripts.length;
+const blockedProbe = await send({ type: 'probe.install', documentToken: 'blocked-document' }, { tab: { id: 11 }, frameId: 0, url: tabsById.get(11).url });
+if (!blockedProbe.ok || blockedProbe.active || executedScripts.length !== scriptsBeforeBlockedProbe) throw new Error(`Probe was installed on a blocked page: ${JSON.stringify(blockedProbe)}`);
+
 listeners.beforeHeaders({ tabId: 7, url: 'https://media.example/a.mp4#fragment', requestId: '1', requestHeaders: [{ name: 'Referer', value: 'https://media.example/page' }, { name: 'Authorization', value: 'Bearer preview' }, { name: 'X-Secret', value: 'must-not-leak' }] });
 listeners.headers({ tabId: 7, url: 'https://media.example/a.mp4#fragment', requestId: '1', statusCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'video/mp4' }, { name: 'Content-Length', value: '1024' }, { name: 'Content-Disposition', value: 'attachment; filename=movie.mp4' }] });
 listeners.headers({ tabId: 7, url: 'https://media.example/a.mp4', requestId: '2', statusCode: 206, responseHeaders: [{ name: 'Content-Type', value: 'video/mp4' }, { name: 'Content-Length', value: '512' }, { name: 'Content-Range', value: 'bytes 0-511/8192' }] });
@@ -136,6 +156,10 @@ const namespaceAccepted = await send({ type: 'media.add', candidate: { url: 'htt
 if (namespaceAccepted?.ok) throw new Error('Namespace-like script candidate was accepted');
 const relativeAccepted = await send({ type: 'media.add', candidate: { url: 'https://media.example/watch/clip.ogv', mime: '', source: 'inline-script' } }, { tab: { id: 7 } });
 if (!relativeAccepted?.ok) throw new Error('Ordinary relative media filename was rejected');
+listeners.headers({ tabId: 7, url: 'https://rr2---sn-blocked.googlevideo.com/videoplayback?mime=video%2Fmp4', requestId: 'blocked-2', statusCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'video/mp4' }] });
+await settle();
+const blockedHost = await send({ type: 'media.add', candidate: { url: 'https://rr3---sn-blocked.googlevideo.com/videoplayback?id=2', mime: 'video/mp4', source: 'dom' } }, { tab: { id: 7 } });
+if (blockedHost?.ok) throw new Error('Blocked media host was accepted on an ordinary page');
 
 let candidates = await send({ type: 'media.candidates', tabId: 7 });
 if (candidates.length !== 4) throw new Error(`Expected two videos, segment, and inline manifest, got ${candidates.length}`);
