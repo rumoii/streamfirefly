@@ -52,7 +52,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-StreamFirefly source is MIT licensed. The following upstream licenses apply to bundled JavaScript and icons. FFmpeg is a separate executable with its own GPL license and source information.
+StreamFirefly source is MIT licensed. The following upstream licenses apply to bundled JavaScript and icons. FFmpeg is a separate executable with its own LGPL license and source information.
 
 ## vue 3.5.21
 

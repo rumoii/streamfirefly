@@ -134,7 +134,7 @@ jobs:
           $installDir = Join-Path $env:RUNNER_TEMP 'streamfirefly-diagnostic-installed'
           npm ci
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          .\tools\download-ffmpeg.ps1 -Architecture x64 -Destination '.\tools\ffmpeg-cache'
+          .\tools\download-fixture-ffmpeg.ps1 | Where-Object { $_ -like 'STREAMFIREFLY_*=*' } | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           $archive = Join-Path $packageDir "StreamFirefly-$env:BUNDLE_VERSION-internal-x64.zip"
           Expand-Archive -LiteralPath $archive -DestinationPath $extractDir
           $bundle = Join-Path $extractDir "StreamFirefly-$env:BUNDLE_VERSION-internal-x64"
@@ -149,9 +149,6 @@ jobs:
           }
           "STREAMFIREFLY_NATIVE_EXE=$(Join-Path $installDir 'streamfirefly-native.exe')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "STREAMFIREFLY_FFMPEG_EXE=$(Join-Path $installDir 'ffmpeg.exe')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          $ffprobe = (Get-ChildItem -LiteralPath '.\tools\ffmpeg-cache\x64-extracted' -Recurse -Filter ffprobe.exe | Select-Object -First 1).FullName
-          if (-not $ffprobe) { throw 'Capture output inspection requires FFprobe' }
-          "STREAMFIREFLY_FFPROBE_EXE=$ffprobe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "STREAMFIREFLY_EXTENSION_DIR=$(Join-Path $bundle 'extension')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           'STREAMFIREFLY_ISOLATED_INSTALL_TEST=1' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 

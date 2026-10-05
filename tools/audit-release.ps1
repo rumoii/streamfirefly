@@ -92,6 +92,9 @@ try {
     $machine = Get-PeMachine (Join-Path $root $name)
     if ($machine -ne $expectedMachine) { throw "$name has PE machine $machine, expected $expectedMachine" }
   }
+  $ffmpegPins = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'ffmpeg\ffmpeg-lgpl.json') | ConvertFrom-Json
+  if ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root 'native-host\ffmpeg.exe')).Hash.ToLowerInvariant() -ne $ffmpegPins.binaries.$ExpectedArchitecture) { throw 'Bundled ffmpeg.exe is not the pinned LGPL build' }
+  if (-not (Select-String -LiteralPath (Join-Path $root 'native-host\FFMPEG-LICENSE.txt') -Pattern 'GNU LESSER GENERAL PUBLIC LICENSE' -Quiet)) { throw 'Bundled FFmpeg license is not the LGPL text' }
   if ($packageInfo.extensionVersion -ne $extensionVersion) { throw "Extension version metadata mismatch: $($packageInfo.extensionVersion)" }
   $nestedZip = [System.IO.Compression.ZipFile]::OpenRead((Join-Path $root "StreamFirefly-extension-$extensionVersion.zip"))
   try {

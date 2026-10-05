@@ -13,15 +13,15 @@ GitHub Release、Windows 完整包和 Firefox 签名 XPI 一律使用通用版�
 5. 在干净提交执行：
 
    ```powershell
-   .\tools\package-release.ps1 -SignedFirefoxXpi '<匹配当前提交的签名 XPI>' -FfmpegSourceDirectory '<已审计的对应源码目录>'
+   .\tools\package-release.ps1 -SignedFirefoxXpi '<匹配当前提交的签名 XPI>'
    ```
 
-6. FFmpeg 对应源码目录须包含源码快照、匹配的构建配方和补丁、依赖源码与许可、目标覆盖清单和 Rust vendor 校验。`SOURCE-CLOSURE.json` 记录逐文件哈希；打包工具校验实际输入后生成 512 MiB 源码分片及 `FFMPEG-SOURCE-MANIFEST.json`。完整性声明须有对应材料支持，不能只填写通过标记。项目 MIT 不覆盖 FFmpeg；通用构建工具的可复现边界在源码说明中单独记录。
-7. 创建指向该完整 SHA 的 `v<版本>` 草稿 Release，上传两个 Windows ZIP、通用版 Chromium ZIP、签名 XPI、一键安装脚本 `StreamFirefly-install.ps1`、全部源码分片、源码清单和 `SHA256SUMS.txt`。不上传测试用 XPI、EXE 安装器或不同提交的附件。
+6. 捆绑的 FFmpeg 是 `tools/ffmpeg/build.sh` 编译的精简 LGPL 版：不启用 `--enable-gpl` 和 `--enable-nonfree`，不链接外部库，只保留 remux 和 WebVTT 字幕转换所需的组件。上游源码、工具链和两个架构的 exe 哈希固定在 `tools/ffmpeg/ffmpeg-lgpl.json`；`download-ffmpeg.ps1` 从工具发布按哈希获取 exe，`audit-release.ps1` 核对包内 exe 与固定哈希一致。**Verify release source** 的 ubuntu job 从源码重编并要求逐字节一致，以此证明 exe 与对应源码相符。打包时自动生成单个源码附件 `StreamFirefly-ffmpeg-source-<版本>.tar`，内含官方源码包原件、构建脚本和重编说明。升级 FFmpeg 或修改构建参数时，先运行 **Build minimal FFmpeg** 得到新哈希，更新固定值，再以 `publish` 发布新的工具发布，并重跑 `tools/test-ffmpeg-minimal.mjs` 功能矩阵。测试用的完整版 FFmpeg（`download-fixture-ffmpeg.ps1`）只用于生成和检查测试素材，不进入发布包。
+7. 创建指向该完整 SHA 的 `v<版本>` 草稿 Release，上传两个 Windows ZIP、通用版 Chromium ZIP、签名 XPI、一键安装脚本 `StreamFirefly-install.ps1`、FFmpeg 源码附件和 `SHA256SUMS.txt`。不上传测试用 XPI、EXE 安装器或不同提交的附件。
 8. 运行 **Verify draft release**，传入草稿的数字 ID 和完整源 SHA。此工作流重新下载草稿附件，核对完整资产集合、内外哈希、两种 PE 架构及来源元数据，再从实际包安装 x64 助手，验证 HTTP/HLS/DASH、队列、发现下载、捕捉、卸载。Firefox 在独立持久配置中以正常签名要求永久安装，重启后再次验证扩展和 Native Messaging；临时安装不能替代该验证。一键安装脚本用实际附件验证损坏包被拒绝、注册正确及卸载干净。安装冒烟检查会全部跑完再汇总失败，一次运行即可暴露所有问题。
 9. 完成旧版本到新版本的升级、回滚和数据保留验证。真实 ARM64 硬件、真实网站覆盖和 7200 秒捕捉另行记录，不作为已通过事实。
 草稿验收不依赖源码工作流的结果，两者可以并行运行；发布前两者都须通过。更新草稿附件时按哈希复用未变化的附件，只上传变化的文件；修改草稿目标提交时须同时传入 `tag_name`，否则 GitHub 会把草稿改成 `untagged-…`。
 
 10. 所有必需证据齐全后，将仓库设为公开并发布稳定 Release，标签指向同一最终提交。检查未登录访问的仓库、隐私政策和附件下载。任何包内文件改变后，重新打包、审计、上传和运行附件验证。
 
-`tools/package-release.ps1` 没有允许脏工作区或未签名替代包的开关。`tools/verify-release-assets.ps1` 核对完整附件集合、源码分片及合并哈希；`tools/audit-release.ps1` 审计运行包结构和内部哈希。Mozilla 签名元数据检查只能证明文件存在；真实签名接受性由 Firefox 的永久安装验证证明。
+`tools/package-release.ps1` 没有允许脏工作区或未签名替代包的开关。`tools/verify-release-assets.ps1` 核对完整附件集合、外层哈希及 FFmpeg 源码附件内容；`tools/audit-release.ps1` 审计运行包结构、内部哈希及捆绑 FFmpeg 的固定哈希和 LGPL 许可。Mozilla 签名元数据检查只能证明文件存在；真实签名接受性由 Firefox 的永久安装验证证明。

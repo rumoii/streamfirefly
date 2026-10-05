@@ -7,12 +7,13 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { discoveryCases } from './discovery-cases.mjs';
+import { fixtureFfmpeg, fixtureFfprobe } from './fixture-ffmpeg.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ffmpeg = process.env.STREAMFIREFLY_FFMPEG_EXE || path.join(root, 'installer/build/x64/ffmpeg.exe');
-const ffprobe = process.env.STREAMFIREFLY_FFPROBE_EXE || path.join(path.dirname(ffmpeg), 'ffprobe.exe');
+const ffprobe = fixtureFfprobe;
 const native = process.env.STREAMFIREFLY_NATIVE_EXE || path.join(root, 'native-host/target/debug/streamfirefly-native.exe');
-for (const file of [ffmpeg, ffprobe, native]) assert.ok(fs.existsSync(file), `Required executable missing: ${file}`);
+for (const file of [ffmpeg, fixtureFfmpeg, ffprobe, native]) assert.ok(fs.existsSync(file), `Required executable missing: ${file}`);
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'streamfirefly-generated-hls-'));
 const outputDirectory = path.join(root, 'test-results');
 fs.mkdirSync(outputDirectory, { recursive: true });
@@ -41,7 +42,7 @@ async function stop(child) {
 }
 try {
   const segment = path.join(directory, 'part.ts');
-  const generated = spawnSync(ffmpeg, ['-nostdin', '-y', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=160x90:rate=10', '-f', 'lavfi', '-i', 'sine=frequency=1000:sample_rate=44100', '-t', '2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-f', 'mpegts', segment], { windowsHide: true, timeout: 30000 });
+  const generated = spawnSync(fixtureFfmpeg, ['-nostdin', '-y', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=160x90:rate=10', '-f', 'lavfi', '-i', 'sine=frequency=1000:sample_rate=44100', '-t', '2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-f', 'mpegts', segment], { windowsHide: true, timeout: 30000 });
   assert.equal(generated.status, 0, String(generated.stderr));
   let requests = 0;
   server = http.createServer((request, response) => {

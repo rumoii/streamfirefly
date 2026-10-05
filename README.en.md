@@ -179,7 +179,7 @@ cargo test --manifest-path native-host/Cargo.toml
 npm run test:native
 ```
 
-`test:native` uses the debug build you just compiled and writes tasks to a temporary directory; set `STREAMFIREFLY_NATIVE_EXE` to test another build. The HLS/DASH tests need x64 FFmpeg and FFprobe, either in `installer/build/x64/` or set through `STREAMFIREFLY_FFMPEG_EXE` and `STREAMFIREFLY_FFPROBE_EXE`.
+`test:native` uses the debug build you just compiled and writes tasks to a temporary directory; set `STREAMFIREFLY_NATIVE_EXE` to test another build. In the HLS/DASH tests the native helper runs the minimal FFmpeg named by `STREAMFIREFLY_FFMPEG_EXE` (default `installer/build/x64/ffmpeg.exe`); fixtures are generated and inspected with the full FFmpeg and FFprobe from `tools/download-fixture-ffmpeg.ps1`, or those named by `STREAMFIREFLY_FIXTURE_FFMPEG_EXE` and `STREAMFIREFLY_FFPROBE_EXE`.
 
 </details>
 
@@ -197,7 +197,7 @@ npm run package:firefox              # unsigned Firefox XPI for testing
 ```
 
 - Release packages require a clean source commit and its matching signed Firefox XPI. Legacy beta tools are not the release entry point.
-- Building the installer needs Inno Setup 6. FFmpeg is downloaded at build time from a fixed URL and checked against a fixed SHA-256; it is not committed to the repository.
+- Building the installer needs Inno Setup 6. The bundled FFmpeg is a minimal LGPL build produced by `tools/ffmpeg/build.sh`, downloaded and checked against a fixed SHA-256; it is not committed to the repository.
 - The local development extension ID is `gimoeapmpoeogpabfdplccplmmohklff`; do not use it for installers you hand out. Firefox always uses `streamfirefly@example.invalid`.
 - Store submission material is in `store-assets/`.
 

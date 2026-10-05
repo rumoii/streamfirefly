@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
+import { fixtureFfmpeg, fixtureFfprobe } from './fixture-ffmpeg.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'streamfirefly-capture-test-'));
 const ffmpeg = process.env.STREAMFIREFLY_FFMPEG_EXE || path.join(root, 'installer/build/x64/ffmpeg.exe');
@@ -22,7 +23,7 @@ const origin = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop';
 let socket;
 try {
   assert.equal((await send('capture.open', { origin: 'https://evil.test' })).ok, false);
-  const generated = spawnSync(ffmpeg, ['-nostdin', '-y', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=160x90:rate=10', '-t', '1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', 'frag_keyframe+empty_moov', sample], { windowsHide: true, encoding: 'utf8' });
+  const generated = spawnSync(fixtureFfmpeg, ['-nostdin', '-y', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=160x90:rate=10', '-t', '1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', 'frag_keyframe+empty_moov', sample], { windowsHide: true, encoding: 'utf8' });
   assert.equal(generated.status, 0, generated.stderr);
   const opened = await send('capture.open', { origin }); assert.equal(opened.ok, true, JSON.stringify(opened));
   const wrongOrigin = new WebSocket(opened.value.endpoint, { origin: 'https://evil.test' }); const rejected = await once(wrongOrigin, 'error'); assert.match(rejected[0].message, /403/); wrongOrigin.terminate();
@@ -37,7 +38,7 @@ try {
   socket.send('finish');
   const completed = await until(async () => (await send('capture.list')).value.find(item => item.id === opened.value.id && ['complete', 'partial', 'interrupted'].includes(item.state)));
   assert.equal(completed.state, 'complete', JSON.stringify(completed)); assert.equal(completed.bytes, bytes.length * 2); assert.equal(completed.outputs.length, 2); assert.ok(completed.outputs.every(output => fs.existsSync(output)));
-  const ffprobe = process.env.STREAMFIREFLY_FFPROBE_EXE || path.join(root, 'tools/ffmpeg-cache/x64-extracted', fs.readdirSync(path.join(root, 'tools/ffmpeg-cache/x64-extracted'), { recursive: true }).find(name => name.endsWith('ffprobe.exe')) || 'ffprobe.exe');
+  const ffprobe = fixtureFfprobe;
   const inspected = spawnSync(ffprobe, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'json', completed.output], { windowsHide: true, encoding: 'utf8' }); assert.equal(inspected.status, 0, String(inspected.error || inspected.stderr)); assert.ok(Number(JSON.parse(inspected.stdout).format.duration) >= 0.9);
   assert.equal((await send('integration.test', { executable: 'C:\\Windows\\System32\\cmd.exe', arguments: [] })).ok, false);
   const program = { requestId: 'native-program-test', executable: path.join(process.env.SystemRoot, 'System32/where.exe'), arguments: ['streamfirefly-nonexistent-test-command'] };

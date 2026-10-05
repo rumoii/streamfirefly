@@ -13,6 +13,21 @@ concurrency:
   group: release-source
   cancel-in-progress: false
 jobs:
+  ffmpeg:
+    # Rebuilding from the pinned source must reproduce the bundled binaries exactly.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out the requested source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.expected_commit }}
+          persist-credentials: false
+      - name: Rebuild the minimal LGPL FFmpeg
+        run: |
+          set -euo pipefail
+          for arch in x64 arm64; do bash tools/ffmpeg/build.sh "$arch" out; done
+          bash tools/ffmpeg/check-pins.sh out --require
   source:
     runs-on: windows-2025
     timeout-minutes: 90
@@ -49,12 +64,15 @@ jobs:
 
       - name: Prepare pinned media test dependencies
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          # The native helper runs the bundled minimal FFmpeg; fixtures and ffprobe use the full test-only build.
           .\tools\download-ffmpeg.ps1 -Architecture x64
-          $ffmpeg = (Get-ChildItem -LiteralPath 'tools\ffmpeg-cache\x64-extracted' -Recurse -File -Filter ffmpeg.exe).FullName
-          $ffprobe = (Get-ChildItem -LiteralPath 'tools\ffmpeg-cache\x64-extracted' -Recurse -File -Filter ffprobe.exe).FullName
-          "STREAMFIREFLY_FFMPEG_EXE=$ffmpeg" >> $env:GITHUB_ENV
-          "STREAMFIREFLY_FFPROBE_EXE=$ffprobe" >> $env:GITHUB_ENV
+          $minimal = New-Item -ItemType Directory -Force -Path 'tools\ffmpeg-cache\minimal-x64'
+          Copy-Item -LiteralPath 'tools\ffmpeg-cache\ffmpeg-x64.exe' -Destination (Join-Path $minimal.FullName 'ffmpeg.exe') -Force
+          "STREAMFIREFLY_FFMPEG_EXE=$(Join-Path $minimal.FullName 'ffmpeg.exe')" >> $env:GITHUB_ENV
+          .\tools\download-fixture-ffmpeg.ps1 | Where-Object { $_ -like 'STREAMFIREFLY_*=*' } >> $env:GITHUB_ENV
       - name: Verify source behavior
         shell: pwsh
         run: |
@@ -63,6 +81,8 @@ jobs:
           npm run validate:extension
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node --test tools/test-release-packaging.mjs tools/test-ffmpeg-source.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tools/test-ffmpeg-minimal.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run typecheck
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

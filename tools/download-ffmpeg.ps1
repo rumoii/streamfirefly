@@ -3,34 +3,35 @@ param(
   [string]$Destination = (Join-Path $PSScriptRoot 'ffmpeg-cache')
 )
 
+# Fetches the minimal LGPL ffmpeg.exe built by tools/ffmpeg/build.sh from its pinned tool release.
 $ErrorActionPreference = 'Stop'
-$release = 'autobuild-2026-10-01-13-06'
-$files = @{
-  x64 = @{ Name = 'ffmpeg-n8.1.3-14-g330caae0c1-win64-gpl-8.1.zip'; Hash = '6aca87b75999c4793871754c5c2e211129a56a160c1654a7d1c9c518a7eda9c0' }
-  arm64 = @{ Name = 'ffmpeg-n8.1.3-14-g330caae0c1-winarm64-gpl-8.1.zip'; Hash = '3dd51c0c37f8f6d6c6779da0af4b370589728abdcb16559bd9aa8318a187764e' }
-}
-$item = $files[$Architecture]
-$url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/$release/$($item.Name)"
+$pins = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'ffmpeg\ffmpeg-lgpl.json') | ConvertFrom-Json
+$expected = $pins.binaries.$Architecture
+if ($expected -notmatch '^[a-f0-9]{64}$') { throw "No pinned FFmpeg hash for $Architecture in tools/ffmpeg/ffmpeg-lgpl.json" }
+$release = $pins.binaries.release
 New-Item -ItemType Directory -Force -Path $Destination | Out-Null
-$archive = Join-Path $Destination $item.Name
-if (Test-Path -LiteralPath $archive) {
-  if ((Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant() -ne $item.Hash) { Remove-Item -LiteralPath $archive -Force }
+$executable = Join-Path $Destination "ffmpeg-$Architecture.exe"
+$license = Join-Path $Destination "ffmpeg-license-$Architecture.txt"
+function Test-Pinned { (Test-Path -LiteralPath $license) -and (Test-Path -LiteralPath $executable) -and (Get-FileHash -Algorithm SHA256 -LiteralPath $executable).Hash.ToLowerInvariant() -eq $expected }
+if (-not (Test-Pinned)) {
+  $staging = Join-Path $Destination "download-$Architecture"
+  if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
+  New-Item -ItemType Directory -Path $staging | Out-Null
+  try {
+    # The tool release is private until the repository is public; gh uses the caller's credentials.
+    & gh release download $release --repo rumoii/streamfirefly --dir $staging --pattern "ffmpeg-$Architecture.exe" --pattern 'ffmpeg-license.txt'
+    if ($LASTEXITCODE -ne 0) {
+      foreach ($name in @("ffmpeg-$Architecture.exe", 'ffmpeg-license.txt')) {
+        & curl.exe --fail --location --retry 5 --output (Join-Path $staging $name) "https://github.com/rumoii/streamfirefly/releases/download/$release/$name"
+        if ($LASTEXITCODE -ne 0) { throw "FFmpeg download failed: $release/$name" }
+      }
+    }
+    Move-Item -LiteralPath (Join-Path $staging "ffmpeg-$Architecture.exe") -Destination $executable -Force
+    Move-Item -LiteralPath (Join-Path $staging 'ffmpeg-license.txt') -Destination $license -Force
+  } finally {
+    Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  if (-not (Test-Pinned)) { Remove-Item -LiteralPath $executable -Force; throw "FFmpeg SHA-256 mismatch for $Architecture" }
 }
-if (-not (Test-Path -LiteralPath $archive)) {
-  & curl.exe --fail --location --retry 5 --retry-all-errors --continue-at - --output $archive $url
-  if ($LASTEXITCODE -ne 0) { throw "FFmpeg download failed: $url" }
-}
-if ((Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant() -ne $item.Hash) {
-  Remove-Item -LiteralPath $archive -Force
-  throw "FFmpeg archive SHA-256 mismatch: $archive"
-}
-$extract = Join-Path $Destination "$Architecture-extracted"
-if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
-Expand-Archive -LiteralPath $archive -DestinationPath $extract
-$ffmpeg = Get-ChildItem -LiteralPath $extract -Recurse -File -Filter ffmpeg.exe | Select-Object -First 1
-if (-not $ffmpeg) { throw 'ffmpeg.exe was not found in the verified archive' }
-Copy-Item -LiteralPath $ffmpeg.FullName -Destination (Join-Path $Destination "ffmpeg-$Architecture.exe") -Force
-$license = Get-ChildItem -LiteralPath $extract -Recurse -File -Filter LICENSE.txt | Select-Object -First 1
-if (-not $license) { throw 'LICENSE.txt was not found in the verified FFmpeg archive' }
-Copy-Item -LiteralPath $license.FullName -Destination (Join-Path $Destination "ffmpeg-license-$Architecture.txt") -Force
-Write-Host "FFmpeg $Architecture ready: $($item.Name)"
+if (-not (Select-String -LiteralPath $license -Pattern 'GNU LESSER GENERAL PUBLIC LICENSE' -Quiet)) { throw 'FFmpeg license is not the LGPL text' }
+Write-Host "FFmpeg $Architecture ready: $release (LGPL)"

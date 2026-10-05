@@ -8,6 +8,7 @@ import { WebSocketServer } from 'ws';
 import assert from 'node:assert/strict';
 import { discoveryReporter } from './discovery-reporter.mjs';
 import { stimulateDiscovery, discoveryCases, scoreDiscoveryCase } from './discovery-cases.mjs';
+import { fixtureFfmpeg } from './fixture-ffmpeg.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const extensionRoot = process.env.STREAMFIREFLY_EXTENSION_DIR || path.join(repositoryRoot, 'extension');
@@ -316,8 +317,7 @@ function startFixtureServer() {
   let captureSample;
   const captureStatus = { bytes: 0, frames: 0, generation: null, finished: false, error: '' };
   if (captureTest) {
-    const executable = process.env.STREAMFIREFLY_FFMPEG_EXE || path.join(repositoryRoot, 'installer/build/x64/ffmpeg.exe');
-    const sample = spawnSync(executable, ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=160x90:rate=10', '-t', '1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', 'frag_keyframe+empty_moov', '-f', 'mp4', 'pipe:1'], { windowsHide: true });
+    const sample = spawnSync(fixtureFfmpeg, ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=160x90:rate=10', '-t', '1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', 'frag_keyframe+empty_moov', '-f', 'mp4', 'pipe:1'], { windowsHide: true });
     assert.equal(sample.status, 0, String(sample.error || sample.stderr)); captureSample = sample.stdout;
   }
   let resolveReport;

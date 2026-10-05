@@ -1,24 +1,16 @@
-StreamFirefly bundles the FFmpeg n8.1.3-14-g330caae0c1 GPL build for
-Windows x64 or ARM64.
+StreamFirefly bundles a minimal FFmpeg 8.1.3 build for Windows x64 or ARM64,
+licensed under the GNU Lesser General Public License version 2.1 or later
+(FFMPEG-LICENSE.txt). It is configured without --enable-gpl or
+--enable-nonfree, links no external libraries, and only remuxes media
+(stream copy) and converts WebVTT subtitles. FFmpeg runs as a separate
+executable invoked by StreamFirefly.
 
-Verified binary release:
-https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-10-01-13-06
-
-Exact FFmpeg source revision:
-https://github.com/FFmpeg/FFmpeg/tree/330caae0c1
-
-Exact FFmpeg build script revision:
-https://github.com/BtbN/FFmpeg-Builds/tree/e88e49f624457c455700b058f0a84ca87d499cc2
-
-Corresponding source delivery (same Release as these binaries):
+Corresponding source (same Release as these binaries):
 https://github.com/rumoii/streamfirefly/releases/tag/v1.0.2
-Download FFMPEG-SOURCE-MANIFEST.json and every
-StreamFirefly-ffmpeg-source-1.0.2.tar.gz.partNNN attachment.
-Concatenate parts in numeric order, verify the archive SHA-256 from the
-manifest, and extract the archive. Its README.md contains build instructions,
-source provenance, licenses and the build-tool reproducibility boundary.
+Download StreamFirefly-ffmpeg-source-1.0.2.tar. It contains the unmodified
+upstream ffmpeg-8.1.3.tar.xz, the build recipe (recipe/build.sh with the
+complete configure options, recipe/ffmpeg-lgpl.json with pinned source,
+toolchain and binary SHA-256 values) and README.txt with rebuild steps.
+Rebuilding from these inputs reproduces the bundled ffmpeg.exe byte for byte.
 
-The installer build records the exact binary archive name and SHA-256 in
-tools/download-ffmpeg.ps1. FFMPEG-LICENSE.txt is copied from that verified
-archive. FFmpeg is an independent executable invoked by StreamFirefly and is
-distributed under the GNU General Public License.
+The same recipe is in the StreamFirefly repository under tools/ffmpeg/.

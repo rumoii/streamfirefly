@@ -179,7 +179,7 @@ cargo test --manifest-path native-host/Cargo.toml
 npm run test:native
 ```
 
-`test:native` 默认使用刚编译的 debug 版本，任务写入临时目录；可以用 `STREAMFIREFLY_NATIVE_EXE` 指定其他版本。HLS/DASH 测试需要 x64 的 FFmpeg 和 FFprobe，放在 `installer/build/x64/`，或用 `STREAMFIREFLY_FFMPEG_EXE`、`STREAMFIREFLY_FFPROBE_EXE` 指定。
+`test:native` 默认使用刚编译的 debug 版本，任务写入临时目录；可以用 `STREAMFIREFLY_NATIVE_EXE` 指定其他版本。HLS/DASH 测试中，本地助手使用 `STREAMFIREFLY_FFMPEG_EXE` 指定的精简版 FFmpeg（默认 `installer/build/x64/ffmpeg.exe`）；测试素材的生成和检查使用 `tools/download-fixture-ffmpeg.ps1` 下载的完整版 FFmpeg 和 FFprobe，也可用 `STREAMFIREFLY_FIXTURE_FFMPEG_EXE`、`STREAMFIREFLY_FFPROBE_EXE` 指定。
 
 </details>
 
@@ -197,7 +197,7 @@ npm run package:firefox              # Firefox 测试用 XPI（未签名）
 ```
 
 - 正式打包必须使用干净提交和与其运行时代码一致的 Firefox 签名包。内测工具只用于历史版本，不用于正式发布。
-- 安装包构建需要 Inno Setup 6。FFmpeg 在构建时按固定地址和 SHA-256 下载，不提交到仓库。
+- 安装包构建需要 Inno Setup 6。捆绑的 FFmpeg 是 `tools/ffmpeg/build.sh` 编译的精简 LGPL 版，按固定 SHA-256 下载，不提交到仓库。
 - 本地开发用的扩展 ID 是 `gimoeapmpoeogpabfdplccplmmohklff`，不要用它构建对外发布的安装包。Firefox 固定使用 `streamfirefly@example.invalid`。
 - 商店提交材料在 `store-assets/`。
 

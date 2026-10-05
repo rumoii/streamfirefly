@@ -68,4 +68,4 @@ Release 的 Windows x64 验证使用隔离环境和该 Release 的实际附件�
 
 项目代码采用 MIT；捆绑依赖各自的许可证见 `LICENSE`、`extension/THIRD_PARTY_NOTICES.md`、`native-host/THIRD_PARTY_NOTICES.md` 和 `native-host/FFMPEG-LICENSE.txt`。
 
-FFmpeg 对应源码、依赖与构建说明在同一 Release 的源码分片中提供，下载和校验方法见包内 `native-host/FFMPEG-SOURCE.txt`。日常安装使用 Windows 完整包。
+本地助手捆绑的 FFmpeg 是按 LGPL 2.1 自行编译的精简版，只用于合并媒体和转换字幕。对应源码和构建脚本在同一 Release 的 `StreamFirefly-ffmpeg-source-<版本>.tar` 中，说明见包内 `native-host/FFMPEG-SOURCE.txt`。

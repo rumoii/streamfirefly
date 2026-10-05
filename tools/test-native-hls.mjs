@@ -5,6 +5,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { fixtureFfmpeg } from './fixture-ffmpeg.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const exe = process.env.STREAMFIREFLY_NATIVE_EXE || path.join(root, 'native-host', 'target', 'debug', 'streamfirefly-native.exe');
@@ -18,7 +19,7 @@ const mediaDir = path.join(temp, 'media');
 const outputDir = path.join(temp, 'downloads');
 fs.mkdirSync(mediaDir, { recursive: true });
 fs.mkdirSync(outputDir, { recursive: true });
-const generated = spawnSync(ffmpeg, [
+const generated = spawnSync(fixtureFfmpeg, [
   '-nostdin', '-y', '-loglevel', 'error',
   '-f', 'lavfi', '-i', 'testsrc=size=160x90:rate=10',
   '-f', 'lavfi', '-i', 'sine=frequency=1000:sample_rate=44100',
@@ -32,7 +33,7 @@ const segments = fs.readdirSync(mediaDir).filter(name => name.endsWith('.ts')).s
 if (segments.length < 3) throw new Error(`Too few HLS fixture segments: ${segments.length}`);
 const audioDir = path.join(temp, 'audio');
 fs.mkdirSync(audioDir, { recursive: true });
-const generatedAudio = spawnSync(ffmpeg, [
+const generatedAudio = spawnSync(fixtureFfmpeg, [
   '-nostdin', '-y', '-loglevel', 'error',
   '-f', 'lavfi', '-i', 'sine=frequency=660:sample_rate=44100',
   '-t', '3', '-c:a', 'aac', '-f', 'hls', '-hls_time', '1', '-hls_list_size', '0',
@@ -183,7 +184,7 @@ function livePayload(name, text) {
   return value;
 }
 function assertPlayable(file, label) {
-  const result = spawnSync(ffmpeg, ['-nostdin', '-v', 'error', '-i', file, '-f', 'null', 'NUL'], { windowsHide: true });
+  const result = spawnSync(fixtureFfmpeg, ['-nostdin', '-v', 'error', '-i', file, '-f', 'null', 'NUL'], { windowsHide: true });
   if (result.status !== 0) throw new Error(`${label} output is not playable: ${result.stderr?.toString() || result.status}`);
 }
 

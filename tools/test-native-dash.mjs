@@ -7,6 +7,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { JSDOM } from 'jsdom';
+import { fixtureFfmpeg, fixtureFfprobe } from './fixture-ffmpeg.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const reportPath = path.join(root, 'test-results', process.argv.includes('--browser') ? 'native-dash-browser.json' : 'native-dash.json');
@@ -16,8 +17,8 @@ const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'streamfirefly-dash-'));
 const media = path.join(directory, 'media'); fs.mkdirSync(media);
 const executable = process.env.STREAMFIREFLY_NATIVE_EXE || path.join(root, 'native-host/target/debug/streamfirefly-native.exe');
 const ffmpeg = process.env.STREAMFIREFLY_FFMPEG_EXE || path.join(root, 'installer/build/x64/ffmpeg.exe');
-const ffprobe = process.env.STREAMFIREFLY_FFPROBE_EXE || path.join(path.dirname(ffmpeg), 'ffprobe.exe');
-for (const file of [executable, ffmpeg, ffprobe]) assert.ok(fs.existsSync(file), `Required executable missing: ${file}`);
+const ffprobe = fixtureFfprobe;
+for (const file of [executable, ffmpeg, fixtureFfmpeg, ffprobe]) assert.ok(fs.existsSync(file), `Required executable missing: ${file}`);
 const dom = new JSDOM('');
 globalThis.DOMParser = dom.window.DOMParser; globalThis.XMLSerializer = dom.window.XMLSerializer;
 const requests = [];
@@ -73,11 +74,11 @@ function inspect(output, video, audio) {
   if (video) assert.equal(metadata.streams.find(stream => stream.codec_type === 'video').width, video.width);
   if (audio) assert.equal(metadata.streams.find(stream => stream.codec_type === 'audio').sample_rate, '48000');
   assert.ok(Math.abs(Number(metadata.format.duration) - 4) < 0.3, metadata.format.duration);
-  const decoded = spawnSync(ffmpeg, ['-nostdin', '-v', 'error', '-i', output, '-f', 'null', 'NUL'], { windowsHide: true, timeout: 15000 });
+  const decoded = spawnSync(fixtureFfmpeg, ['-nostdin', '-v', 'error', '-i', output, '-f', 'null', 'NUL'], { windowsHide: true, timeout: 15000 });
   assert.equal(decoded.status, 0, String(decoded.stderr));
 }
 try {
-  const generated = spawnSync(ffmpeg, ['-nostdin', '-y', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=320x180:rate=10', '-f', 'lavfi', '-i', 'sine=frequency=600:sample_rate=44100', '-f', 'lavfi', '-i', 'sine=frequency=1000:sample_rate=48000', '-t', '4', '-map', '0:v', '-map', '0:v', '-map', '1:a', '-map', '2:a', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-filter:v:0', 'scale=160:90', '-b:v:0', '100k', '-b:v:1', '200k', '-g', '10', '-keyint_min', '10', '-sc_threshold', '0', '-c:a', 'aac', '-b:a', '64k', '-f', 'dash', '-seg_duration', '1', '-use_template', '1', '-use_timeline', '1', path.join(media, 'source.mpd')], { cwd: media, windowsHide: true, timeout: 30000 });
+  const generated = spawnSync(fixtureFfmpeg, ['-nostdin', '-y', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=320x180:rate=10', '-f', 'lavfi', '-i', 'sine=frequency=600:sample_rate=44100', '-f', 'lavfi', '-i', 'sine=frequency=1000:sample_rate=48000', '-t', '4', '-map', '0:v', '-map', '0:v', '-map', '1:a', '-map', '2:a', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-filter:v:0', 'scale=160:90', '-b:v:0', '100k', '-b:v:1', '200k', '-g', '10', '-keyint_min', '10', '-sc_threshold', '0', '-c:a', 'aac', '-b:a', '64k', '-f', 'dash', '-seg_duration', '1', '-use_template', '1', '-use_timeline', '1', path.join(media, 'source.mpd')], { cwd: media, windowsHide: true, timeout: 30000 });
   assert.equal(generated.status, 0, String(generated.stderr));
   const compiled = path.join(directory, 'dash.mjs');
   await build({ entryPoints: [path.join(root, 'extension-ui/src/dash.ts')], bundle: true, platform: 'node', format: 'esm', outfile: compiled });

@@ -2,7 +2,6 @@ param(
   [ValidatePattern('^\d+\.\d+\.\d+(-beta\.\d+)?$')]
   [string]$BundleVersion = '1.0.2',
   [Parameter(Mandatory=$true)][string]$SignedFirefoxXpi,
-  [Parameter(Mandatory=$true)][string]$FfmpegSourceDirectory,
   [string]$OutputDir = (Join-Path (Split-Path -Parent $PSScriptRoot) 'release')
 )
 $ErrorActionPreference = 'Stop'
@@ -20,7 +19,7 @@ if (-not (Test-Path -LiteralPath $rustc -PathType Leaf)) { throw 'Rust compiler 
 $node = Get-Command node -ErrorAction SilentlyContinue
 if (-not $node) { throw 'Node.js was not found' }
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
-& $node.Source (Join-Path $PSScriptRoot 'ffmpeg-source.mjs') package $FfmpegSourceDirectory $OutputDir $sourceCommit
+& $node.Source (Join-Path $PSScriptRoot 'ffmpeg-source.mjs') package $OutputDir
 if ($LASTEXITCODE -ne 0) { throw 'FFmpeg corresponding source packaging failed' }
 & $PSScriptRoot\package-extension.ps1 -Edition general -OutputDir $OutputDir
 if ($LASTEXITCODE -ne 0) { throw 'Chromium extension packaging failed' }
@@ -106,9 +105,7 @@ if ($installerText.Contains('__STREAMFIREFLY_')) { throw 'Online installer place
 $onlineInstaller = Join-Path $OutputDir 'StreamFirefly-install.ps1'
 [System.IO.File]::WriteAllText($onlineInstaller, $installerText, [System.Text.UTF8Encoding]::new($true))
 $archives += @($extensionZip, $firefoxXpi, $onlineInstaller)
-$sourceManifest = Get-Content -Raw -LiteralPath (Join-Path $OutputDir 'FFMPEG-SOURCE-MANIFEST.json') | ConvertFrom-Json
-$archives += @(Join-Path $OutputDir 'FFMPEG-SOURCE-MANIFEST.json')
-$archives += @($sourceManifest.parts | ForEach-Object { Join-Path $OutputDir $_.name })
+$archives += @(Join-Path $OutputDir "StreamFirefly-ffmpeg-source-$BundleVersion.tar")
 $outerChecksums = foreach ($archive in $archives) {
   "$((Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant())  $([System.IO.Path]::GetFileName($archive))"
 }

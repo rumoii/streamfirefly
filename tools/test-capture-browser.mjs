@@ -11,6 +11,7 @@ import { buildSync } from 'esbuild';
 import { WebSocketServer } from 'ws';
 import { OwnedCaptureProcesses, checkMemoryBudget, errorDetails, finishCaptureTest, removeCaptureDirectory, resetCaptureEvidence, resetCaptureReports } from './capture-test-runtime.mjs';
 import { archiveCaptureEvidence } from './capture-test-evidence.mjs';
+import { fixtureFfmpeg } from './fixture-ffmpeg.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const executeFile = promisify(execFile);
 const argumentsList = process.argv.slice(2);
@@ -24,7 +25,6 @@ assert.ok(Number.isInteger(duration) && duration >= 0 && duration <= 7200);
 if (duration && !installed) throw Error('Soak validation requires the installed Native Host');
 if (installed && (process.env.GITHUB_ACTIONS !== 'true' || process.env.STREAMFIREFLY_ISOLATED_INSTALL_TEST !== '1')) throw Error('Installed capture only runs in the explicitly enabled isolated CI job; local registrations are not modified');
 const native = process.env.STREAMFIREFLY_NATIVE_EXE;
-const ffmpeg = process.env.STREAMFIREFLY_FFMPEG_EXE || path.join(root, 'installer/build/x64/ffmpeg.exe');
 if (installed) {
   assert.ok(native && fs.existsSync(native), 'Packaged Native Host path required');
   assert.ok(process.env.STREAMFIREFLY_EXTENSION_DIR, 'Packaged extension directory required');
@@ -47,7 +47,7 @@ const socketState = { bytes: 0, chunks: 0, finished: false, error: '' };
 const diagnostics = [], memory = [];
 try {
   log('generating media fixture');
-  const sampleResult = spawnSync(ffmpeg, ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=160x90:rate=10', '-t', String(Math.max(2, duration + 3)), '-c:v', 'libx264', '-g', '10', '-pix_fmt', 'yuv420p', '-movflags', 'frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4', 'pipe:1'], { windowsHide: true, maxBuffer: 128 * 1024 * 1024, timeout: 300000 });
+  const sampleResult = spawnSync(fixtureFfmpeg, ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=160x90:rate=10', '-t', String(Math.max(2, duration + 3)), '-c:v', 'libx264', '-g', '10', '-pix_fmt', 'yuv420p', '-movflags', 'frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4', 'pipe:1'], { windowsHide: true, maxBuffer: 128 * 1024 * 1024, timeout: 300000 });
   assert.equal(sampleResult.status, 0, String(sampleResult.stderr));
   const initialization = [], fragments = []; let fragment = null;
   for (let offset = 0; offset < sampleResult.stdout.length;) {

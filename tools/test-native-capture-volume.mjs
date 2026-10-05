@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import { archiveCaptureEvidence } from './capture-test-evidence.mjs';
 import { finishCaptureTest, removeCaptureDirectory, resetCaptureEvidence, resetCaptureReports } from './capture-test-runtime.mjs';
+import { fixtureFfmpeg, fixtureFfprobe } from './fixture-ffmpeg.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'streamfirefly-capture-browser-'));
@@ -18,7 +19,7 @@ resetCaptureReports(reportPath);
 resetCaptureEvidence(reportPath);
 const native = process.env.STREAMFIREFLY_NATIVE_EXE || path.join(root, 'native-host/target/debug/streamfirefly-native.exe');
 const ffmpeg = process.env.STREAMFIREFLY_FFMPEG_EXE || path.join(root, 'installer/build/x64/ffmpeg.exe');
-const ffprobe = process.env.STREAMFIREFLY_FFPROBE_EXE || path.join(root, 'tools/ffmpeg-cache/x64-extracted', fs.readdirSync(path.join(root, 'tools/ffmpeg-cache/x64-extracted'), { recursive: true }).find(name => name.endsWith('ffprobe.exe')) || 'ffprobe.exe');
+const ffprobe = fixtureFfprobe;
 const origin = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop';
 const deadline = performance.now() + 600000;
 const pending = new Map();
@@ -75,7 +76,7 @@ async function finish(id) {
   throw Error('Volume capture finalization timeout');
 }
 try {
-  const generated = spawnSync(ffmpeg, ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=160x90:rate=10', '-t', '6500', '-c:v', 'libx264', '-g', '10', '-pix_fmt', 'yuv420p', '-movflags', 'frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4', 'pipe:1'], { windowsHide: true, maxBuffer: 128 * 1024 ** 2, timeout: 300000 });
+  const generated = spawnSync(fixtureFfmpeg, ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=160x90:rate=10', '-t', '6500', '-c:v', 'libx264', '-g', '10', '-pix_fmt', 'yuv420p', '-movflags', 'frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4', 'pipe:1'], { windowsHide: true, maxBuffer: 128 * 1024 ** 2, timeout: 300000 });
   assert.equal(generated.status, 0, String(generated.error || generated.stderr));
   const fragments = [], initialization = [];
   let fragment;

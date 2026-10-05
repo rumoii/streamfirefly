@@ -150,7 +150,7 @@ requireText(workflow, 'path: test-results/capture/**', 'Capture evidence archive
 requireText(scripts['test:discovery:native'], 'npm run test:dash:discovery', 'Discovery download entry');
 requireText(scripts['test:dash:native'], 'node tools/test-native-dash.mjs', 'DASH Native entry');
 requireText(scripts['test:dash:discovery'], 'node tools/test-native-dash.mjs --browser', 'DASH browser entry');
-for (const expected of ['STREAMFIREFLY_NATIVE_EXE', 'STREAMFIREFLY_FFMPEG_EXE', 'STREAMFIREFLY_FFPROBE_EXE', 'passed: false', 'browserCases, scenarios']) requireText(nativeDashTest, expected, 'DASH integration evidence');
+for (const expected of ['STREAMFIREFLY_NATIVE_EXE', 'STREAMFIREFLY_FFMPEG_EXE', 'fixtureFfprobe', 'passed: false', 'browserCases, scenarios']) requireText(nativeDashTest, expected, 'DASH integration evidence');
 for (const expected of ['test-results/generated-dash-browser.json', 'test-results/native-dash.json', 'test-results/native-dash-browser.json']) requireText(workflow, expected, 'DASH release evidence');
 
 console.log('Internal packaging version, provenance, workflow, and audit contracts passed');

@@ -22,13 +22,13 @@ test('draft workflow accepts current source parts and rejects other versions and
   [`StreamFirefly-${version}-windows-arm64.zip`,true],
   [`StreamFirefly-extension-${version}.zip`,true],
   [`StreamFirefly-firefox-${version}-signed.xpi`,true],
-  [`StreamFirefly-ffmpeg-source-${version}.tar.gz.part001`,true],
-  [`StreamFirefly-ffmpeg-source-${version}.tar.gz.part999`,true],
-  ['FFMPEG-SOURCE-MANIFEST.json',true],['SHA256SUMS.txt',true],['StreamFirefly-install.ps1',true],
-  ['StreamFirefly-other.ps1',false],['StreamFirefly-install.ps1.exe',false],
-  ['StreamFirefly-ffmpeg-source-0.0.0.tar.gz.part001',false],
-  [`StreamFirefly-ffmpeg-source-${version.replaceAll('.','x')}.tar.gz.part001`,false],
-  [`StreamFirefly-ffmpeg-source-${version}.tar.gz.part001.exe`,false],
+  [`StreamFirefly-ffmpeg-source-${version}.tar`,true],
+  ['SHA256SUMS.txt',true],['StreamFirefly-install.ps1',true],
+  ['StreamFirefly-other.ps1',false],['StreamFirefly-install.ps1.exe',false],['FFMPEG-SOURCE-MANIFEST.json',false],
+  ['StreamFirefly-ffmpeg-source-0.0.0.tar',false],
+  [`StreamFirefly-ffmpeg-source-${version.replaceAll('.','x')}.tar`,false],
+  [`StreamFirefly-ffmpeg-source-${version}.tar.gz.part001`,false],
+  [`StreamFirefly-ffmpeg-source-${version}.tar.exe`,false],
   ['../SHA256SUMS.txt',false],['C:/SHA256SUMS.txt',false],['unknown.txt',false]
  ];
  const script=[declaration,...names.flatMap(([name,accepted])=>[

@@ -83,8 +83,11 @@ jobs:
 
       - name: Build and audit both architectures
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           .\tools\package-internal-test.ps1 -BundleVersion $env:BUNDLE_VERSION
+          .\tools\download-fixture-ffmpeg.ps1 | Where-Object { $_ -like 'STREAMFIREFLY_*=*' } >> $env:GITHUB_ENV
 
       - name: Smoke test the packaged x64 install
         shell: pwsh
@@ -108,8 +111,7 @@ jobs:
             foreach ($path in $registryPaths) { if (-not (Test-Path -LiteralPath $path)) { throw "Native Messaging registration is missing: $path" } }
             $env:STREAMFIREFLY_NATIVE_EXE = Join-Path $installDir 'streamfirefly-native.exe'
             $env:STREAMFIREFLY_FFMPEG_EXE = Join-Path $installDir 'ffmpeg.exe'
-            $env:STREAMFIREFLY_FFPROBE_EXE = (Get-ChildItem -LiteralPath '.\tools\ffmpeg-cache\x64-extracted' -Recurse -Filter ffprobe.exe | Select-Object -First 1).FullName
-            if (-not $env:STREAMFIREFLY_FFPROBE_EXE) { throw 'Capture output inspection requires FFprobe' }
+            if (-not (Test-Path -LiteralPath $env:STREAMFIREFLY_FFPROBE_EXE) -or -not (Test-Path -LiteralPath $env:STREAMFIREFLY_FIXTURE_FFMPEG_EXE)) { throw 'Fixture generation and output inspection require the test-only FFmpeg and FFprobe' }
             $env:STREAMFIREFLY_EXTENSION_DIR = Join-Path $bundle.FullName 'extension'
             $env:STREAMFIREFLY_ISOLATED_INSTALL_TEST = '1'
             npm run test:native
