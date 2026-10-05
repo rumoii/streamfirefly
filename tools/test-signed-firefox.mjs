@@ -24,7 +24,7 @@ async function request(method,route,body){
  const json=await res.json(); assert.ok(res.ok&&!json.value?.error,`WebDriver ${method} ${route}: ${JSON.stringify(json.value)}`);return json.value;
 }
 async function start(){
- const value=await request('POST','/session',{capabilities:{alwaysMatch:{browserName:'firefox','moz:firefoxOptions':{binary:firefox,args:['-headless','--allow-system-access','-profile',profile],prefs:{'xpinstall.signatures.required':true,'remote.prefs.recommended':false,'extensions.update.enabled':false}}}}});
+ const value=await request('POST','/session',{capabilities:{alwaysMatch:{browserName:'firefox','moz:firefoxOptions':{binary:firefox,args:['-headless','-remote-allow-system-access','-profile',profile],prefs:{'xpinstall.signatures.required':true,'remote.prefs.recommended':false,'extensions.update.enabled':false}}}}});
  session=value.sessionId;assert.ok(Number.parseInt(value.capabilities.browserVersion)>=142,'Firefox must be 142+');return value.capabilities.browserVersion;
 }
 async function execute(script,args=[]){return request('POST',`/session/${session}/execute/async`,{script,args});}
