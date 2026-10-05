@@ -49,7 +49,7 @@ foreach ($architecture in @('x64', 'arm64')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "ffmpeg-cache\ffmpeg-license-$architecture.txt") -Destination (Join-Path $bundleRoot 'native-host\FFMPEG-LICENSE.txt')
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'register-native-host.ps1'), (Join-Path $PSScriptRoot 'install-internal-test.ps1'), (Join-Path $PSScriptRoot 'uninstall-internal-test.ps1') -Destination (Join-Path $bundleRoot 'tools')
     Copy-Item -LiteralPath (Join-Path $root 'store-assets\promo-small.png'), (Join-Path $root 'store-assets\screenshot-popup.png') -Destination (Join-Path $bundleRoot 'store-assets')
-    Copy-Item -LiteralPath (Join-Path $root 'README-INTERNAL.md') -Destination $bundleRoot
+    Copy-Item -LiteralPath (Join-Path $root 'docs/archive/README-INTERNAL.md') -Destination (Join-Path $bundleRoot 'README-INTERNAL.md')
     $packageInfo = [ordered]@{
       product = 'StreamFirefly'
       version = $BundleVersion

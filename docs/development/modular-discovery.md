@@ -1,13 +1,8 @@
 # 模块化发现、工具交接与缓存捕捉
 
-2026-09-08 的工具草稿、URL 提取和统一设置布局见 [工具交接、规则提取与设置界面](tools-and-extraction.md)。该开发进度不替代后续统一验收。
+本文说明当前模块职责与生命周期约束。外部工具和 URL 提取见[工具交接、规则提取与设置界面](tools-and-extraction.md)，实验性 DASH 范围见 [DASH 点播开发说明](dash-vod.md)。安装与发布验收以[正式发布流程](release.md)和对应 Release 的验证结果为准。
 
-
-2026-09-09 的动态 MPD、实验性 DASH 选轨和资源优先界面见 [DASH 点播开发说明](dash-vod.md)。下文关于 DASH 未实现的范围描述属于 Beta 1 历史基线，不作为当前源码能力结论。
-
-Beta 2 的当前状态、模块职责、证据边界和下一步验收顺序统一见 [捕捉与深搜 Beta 2 开发交接](capture-beta2.md)。下文保留 Beta 1 的实现与验证基线，不代表新增改动已通过安装态验收。
-
-Beta 2 将捕捉与深搜状态分别放在 `extension-ui/src/features/capture/state.ts` 和 `extension-ui/src/features/deep-search/state.ts`，通过 `extension-ui/src/features/session-client.ts` 使用 `shared/capture.ts` 的请求契约；配置面板仍负责交互和既有上下文接入。详细生命周期不在本页重复维护。
+捕捉与深搜状态分别放在 `extension-ui/src/features/capture/state.ts` 和 `extension-ui/src/features/deep-search/state.ts`，通过 `extension-ui/src/features/session-client.ts` 使用 `shared/capture.ts` 的请求契约；配置面板负责交互和上下文接入。
 
 ## 代码边界
 
@@ -52,8 +47,6 @@ Native 接收端只监听回环地址，验证 Origin 和一次性随机会话�
 
 Native 集成仅使用临时 `LOCALAPPDATA`。需要先准备 x64 FFmpeg 与 FFprobe，或设置 `STREAMFIREFLY_FFMPEG_EXE`、`STREAMFIREFLY_FFPROBE_EXE`；可用 `STREAMFIREFLY_NATIVE_EXE` 指向待测产物。浏览器使用独立测试配置，不读取日常浏览器配置。
 
-2026-09-07 的本地证据：37 项前端单测、38 项 Rust 单测、真实 HTTP/HLS/队列/恢复测试及捕捉认证、重放、代际合并通过；实际 Chrome 捕捉传输和 Chrome/Edge 原工作区链路通过；Firefox 构建与 lint 通过，未安装 Firefox，实际 Firefox 验收未完成。Playwright MCP 的规则保存/复制/重载、工具保存、模板预览使用 localhost 模拟扩展接口，不是外部下载器联调。
+正式发布还要求从实际附件验证助手安装、浏览器下载与捕捉、Firefox 签名永久安装和重启、升级回滚及卸载。源码测试、模拟界面和临时扩展安装分别记录，不能代替该验收。
 
-`npm audit` 仍报告既有 `web-ext → addons-linter → image-size` 开发工具链的 3 项 high 风险，本次未强制升级或降级该工具链。
-
-后续完整验收仍需补：已安装助手的浏览器捕捉全链路、真实 Aria2/N_m3u8DL-RE/协议处理器、Firefox、长时播放压力和 Windows ARM64 包验收。DASH 完整轨道选择不在本次实现内。
+真实网站覆盖、外部下载器联调、ARM64 硬件运行和长时间播放压力需各自记录。实验性 DASH 仅支持静态、单 Period、非加密清单。

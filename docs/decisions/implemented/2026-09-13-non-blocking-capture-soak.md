@@ -2,7 +2,7 @@
 
 Status: implemented
 
-> 注：本记录写于 2026-09-16 提交历史署名规范化改写之前，文中提交哈希已无法在当前仓库中直接解析；相关判定以对应的 GitHub Actions 运行记录为准。改写范围见 [提交历史署名改写](../../development/commit-history-rewrite.md)。
+> 注：本记录写于 2026-09-16 提交历史署名规范化改写之前，文中提交哈希已无法在当前仓库中直接解析；相关判定以对应的 GitHub Actions 运行记录为准。改写范围见 [提交历史署名改写](../../archive/development/commit-history-rewrite.md)。
 
 ## Problem
 

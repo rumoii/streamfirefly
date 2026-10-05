@@ -15,8 +15,8 @@ const nativeTest = read('tools/test-native.mjs');
 const nativeDownloadTest = read('tools/test-native-download.mjs');
 const nativeHlsTest = read('tools/test-native-hls.mjs');
 const nativeDashTest = read('tools/test-native-dash.mjs');
-const readme = read('README-INTERNAL.md');
-const releaseNotes = read(`docs/releases/${bundleVersion}.md`);
+const readme = read('docs/archive/README-INTERNAL.md');
+const releaseNotes = read(`docs/archive/releases/${bundleVersion}.md`);
 const workflow = read('.github/workflows/package-internal.yml');
 
 const version = JSON.parse(read('package.json')).version;

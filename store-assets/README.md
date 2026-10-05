@@ -8,7 +8,7 @@
 
 - 类别：工具
 - 语言：中文（简体）
-- 官方网址：无。首页网址、支持信息页面网址：仓库公开后填写仓库地址和 Issues 地址。
+- 官方网址：无。首页网址：`https://github.com/rumoii/streamfirefly`；支持信息页面网址：`https://github.com/rumoii/streamfirefly/issues`。提交审核前确认均可公开访问。
 - 成人内容：关
 
 说明：
@@ -81,13 +81,13 @@
 - 用户活动：观察网页的网络请求以识别媒体。
 - 网站内容：网页中的媒体地址和页面元素。
 
-隐私政策网址：仓库公开后填写 `PRIVACY.md` 的公开地址。
+隐私政策网址：`https://github.com/rumoii/streamfirefly/blob/main/PRIVACY.md`。提交审核前确认可公开访问。
 
 ## 测试说明
 
 ```text
 无需账号。下载功能需要 Windows 本地助手。
-1. 在 Windows 11 上，从 <助手下载地址> 下载 StreamFirefly-1.0.0-windows-x64.zip 并解压。
+1. 在 Windows 11 上，从 https://github.com/rumoii/streamfirefly/releases/tag/v1.0.0 下载 StreamFirefly-1.0.0-windows-x64.zip 并解压。
 2. 在解压目录运行 PowerShell：
 .\tools\install.ps1 -ChromeExtensionId 'ooblmahffkiimlflhdnfojjemlibmhhj'
 3. 重启 Chrome，打开 https://developer.mozilla.org/en-US/docs/Web/HTML/Element/video

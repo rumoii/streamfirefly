@@ -1,6 +1,6 @@
 # 捕捉与深搜 Beta 2 开发交接
 
-> 注：本记录写于 2026-09-16 提交历史署名规范化改写之前，文中提交哈希已无法在当前仓库中直接解析；相关判定以对应的 GitHub Actions 运行记录为准。改写范围见 [提交历史署名改写](commit-history-rewrite.md)。
+> 历史验证快照。文中提交哈希已无法在当前仓库中直接解析；相关判定以对应的 GitHub Actions 运行记录为准。改写范围见[提交历史署名改写](commit-history-rewrite.md)。
 
 ## 交接基线
 
@@ -8,7 +8,7 @@
 
 源码数字版本保持 `0.10.0`，内测打包工作流的 `bundle_version` 默认值为 `0.10.0-beta.2`，用于 Actions 测试产物；两者不能用作 Beta 2 已发布的证据。Beta 1 的 CI 结果也不覆盖后续源码提交。
 
-整体架构见 [模块化发现、工具交接与缓存捕捉](modular-discovery.md)，身份隔离的取舍与回滚见 [捕捉文档身份决策](../decisions/proposed/2026-09-07-capture-document-identity.md)。本页统一维护 Beta 2 的交接状态和验收清单。
+当前架构见[模块化发现、工具交接与缓存捕捉](../../development/modular-discovery.md)，身份隔离的取舍与回滚见[捕捉文档身份决策](../../decisions/proposed/2026-09-07-capture-document-identity.md)。本页仅保留 Beta 2 的历史交接状态和验收清单。
 
 ## 已实现
 

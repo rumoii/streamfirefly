@@ -71,7 +71,7 @@ Screenshots come from the automated UI tests and show test data.
 
 ### Beta package
 
-Follow the [installation guide](INSTALL.md) (in Chinese). The extension and the native helper must come from the same build.
+Download the Windows bundle for your architecture from the [v1.0.0 Release](https://github.com/rumoii/streamfirefly/releases/tag/v1.0.0), then follow the [installation guide](INSTALL.md) (in Chinese). The extension and the native helper must come from the same build.
 
 ### Build from source
 
@@ -205,7 +205,7 @@ Most documents are in Chinese.
 - [Modular discovery and tool integration](docs/development/modular-discovery.md)
 - [External tools and URL extraction](docs/development/tools-and-extraction.md)
 - [Design decisions](docs/decisions/README.md)
-- [Release notes](docs/releases/)
+- [Release notes](docs/releases/1.0.0.md)
 
 ## Privacy
 
