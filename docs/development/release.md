@@ -2,6 +2,8 @@
 
 正式发布使用同一个干净的 `main` 提交；版本须同时出现在 npm、扩展清单、Cargo、安装器和安装指南中。历史内测工具保留供旧版本使用。
 
+Chrome 与 Edge 上传草稿及商店扩展 ID 的配置见[商店草稿准备](browser-stores.md)。
+
 1. 运行 `npm ci`、`npm run verify:release:source`、`npm run validate:extension`、`npm run typecheck`、`npm run test:unit`。Windows 打包验证使用 `npm run test:release:packaging`。
 2. 对该提交运行 Actions 的 **Verify release source**，要求所有步骤通过，包括三个浏览器的基础与发现测试、Native 下载链路、Windows 子进程测试和两个架构的构建。
 3. 检查 Firefox 固定 ID `streamfirefly@example.invalid` 的版本占用，再用 `web-ext sign --channel unlisted --upload-source-code <可读源码 ZIP>` 提交构建运行时。凭据仅由本地受保护输入传入环境变量，不进入 Git、日志、包或 GitHub Secrets。可读源码 ZIP 只包含 Git 跟踪的扩展、界面、共享代码、构建工具和依赖锁文件，不包含本地状态、凭据和 Native 二进制。
