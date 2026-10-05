@@ -14,7 +14,7 @@ export async function runCaptureScenario(origin, installed, durationSeconds, dir
     if (!results.length || results[0].error) throw new Error(`Frame ${frameId} execution failed: ${results[0]?.error?.message || 'missing result'}`);
     return results[0].result;
   }
-  const output = { installed, durationSeconds, sources: [], sessions: [], checks: [], progress: [], diagnostics: [] };
+  const output = { installed, durationSeconds, sources: [], sessions: [], checks: [], progress: [], diagnostics: [], frameReadiness: [] };
   async function durable(id, label) {
     const deadline = Date.now() + 30000;
     const progress = { id, label, snapshot: null }; output.progress.push(progress);
@@ -28,17 +28,22 @@ export async function runCaptureScenario(origin, installed, durationSeconds, dir
     }
     throw new Error(`${label}: timeout (${id})`);
   }
-  let tab;
+  let tab, frames = [];
   try {
     if (installed) {
       const response = await fetch(origin + '/register', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: api.runtime.id }) });
       if (!response.ok) throw new Error('Isolated Native registration failed');
     }
+    output.sniffMode = (await api.storage.local.get('sniffMode')).sniffMode;
     tab = await api.tabs.create({ url: origin + '/frames' });
     await until(async () => (await api.tabs.get(tab.id)).status === 'complete', 'fixture navigation');
-    const frames = await until(async () => { const frames = await api.webNavigation.getAllFrames({ tabId: tab.id }); return frames.length === 3 && frames.every(frame => /^http:/.test(frame.url)) ? frames : null; }, 'iframe discovery');
+    frames = await until(async () => { const frames = await api.webNavigation.getAllFrames({ tabId: tab.id }); return frames.length === 3 && frames.every(frame => /^http:/.test(frame.url)) ? frames : null; }, 'iframe discovery');
     for (const frame of frames) {
-      await until(() => execute(tab.id, frame.frameId, () => Boolean(window.__streamFireflyCaptureProbe?.installed)), 'frame probe');
+      const readiness = { frameId: frame.frameId, url: frame.url }; output.frameReadiness.push(readiness);
+      await until(async () => {
+        Object.assign(readiness, await execute(tab.id, frame.frameId, () => ({ installed: Boolean(window.__streamFireflyCaptureProbe?.installed), readyState: document.readyState, url: location.href })));
+        return readiness.installed;
+      }, `frame probe ${frame.frameId}`);
       await execute(tab.id, frame.frameId, async () => {
         window.captureDiagnostics = [];
         window.addEventListener('message', event => {
@@ -158,7 +163,7 @@ export async function runCaptureScenario(origin, installed, durationSeconds, dir
     output.checks.push('stale-document-rejected');
     await fetch(origin + '/report', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ok: true, ...output }) });
   } catch (error) {
-    if (tab) for (const source of output.sources) {
+    if (tab) for (const source of frames) {
       try { output.diagnostics.push({ frameId: source.frameId, ...await execute(tab.id, source.frameId, () => ({ events: window.captureDiagnostics || [], nextFragment: window.captureFixture?.nextFragment, sourceState: window.captureFixture?.source.readyState })) }); }
       catch (reason) { output.diagnostics.push({ frameId: source.frameId, error: reason.message }); }
     }

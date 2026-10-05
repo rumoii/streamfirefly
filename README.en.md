@@ -12,7 +12,9 @@ Local-first media discovery and download for the web
 
 StreamFirefly has two parts: a browser extension and a native helper for Windows. The extension finds video, audio, images and HLS/DASH manifests on web pages. The helper, written in Rust, handles downloading, queueing, recovery and FFmpeg merging. Tasks and settings stay on your machine.
 
-The current version is 1.0.1. The interface is currently in Simplified Chinese. StreamFirefly does not circumvent DRM; only download content you own or are authorized to download. Per Chrome Web Store policy, StreamFirefly does not detect or download YouTube content; the site list is `BLOCKED_SITES` in `extension/src/platform.js`.
+The current version is 1.0.1. The interface is currently in Simplified Chinese. StreamFirefly does not circumvent DRM; only download content you own or are authorized to download. Current release packages do not detect or download YouTube content. The project is open source: for a custom build, you can adjust the `BLOCKED_SITES` list in `extension/src/platform.js` and rebuild with `npm run build:extension`. The settings page cannot change this list, and changing it does not establish that downloads from a particular website work.
+
+We plan to offer a Chrome Web Store edition and a general edition distributed independently through GitHub and other channels. The store edition will retain the YouTube site restriction. The general edition's site policy and supported features will be documented in its release notes and verification results. Version 1.0.1 does not yet provide these separate editions.
 
 ## Features
 

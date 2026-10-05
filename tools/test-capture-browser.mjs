@@ -124,7 +124,7 @@ try {
   const manifest = JSON.parse(fs.readFileSync(path.join(extension, 'manifest.json'), 'utf8')); manifest.key = key.toString('base64');
   const background = path.join(stage, manifest.background.service_worker);
   if (!installed) fs.appendFileSync(background, `\nchrome.runtime.onMessage.addListener((message,sender,respond)=>{if(message.type!=='test.capture.transport'||sender.url?.split('?')[0]!==chrome.runtime.getURL('dist/app.html'))return false;chrome.runtime.sendMessage({type:'capture.transport.'+message.operation,payload:message.payload}).then(respond,error=>respond({ok:false,error:error.message}));return true;});\n`);
-  fs.appendFileSync(background, `\nchrome.storage.local.set({sniffMode:'always'}).then(()=>chrome.tabs.create({url:chrome.runtime.getURL('dist/app.html?surface=options&e2e=capture')}));\n`);
+  fs.appendFileSync(background, `\nStreamFireflyBackground.runtime.settings.ready.then(()=>chrome.storage.local.set({sniffMode:'always'})).then(()=>chrome.tabs.create({url:chrome.runtime.getURL('dist/app.html?surface=options&e2e=capture')}));\n`);
   const script = buildSync({ stdin: { contents: `import { runCaptureScenario } from './tools/capture-browser-scenario.js'; if (new URL(location.href).searchParams.get('e2e') === 'capture') void runCaptureScenario(${JSON.stringify(origin)}, ${installed}, ${duration}, ${JSON.stringify(downloads)});`, resolveDir: root }, bundle: true, format: 'iife', write: false }).outputFiles[0].text;
   fs.writeFileSync(path.join(stage, 'dist/test-capture.js'), script);
   const html = path.join(stage, 'dist/app.html'); fs.writeFileSync(html, fs.readFileSync(html, 'utf8').replace('</body>', '<script src="./test-capture.js"></script></body>'));

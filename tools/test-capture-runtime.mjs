@@ -2,13 +2,46 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import vm from 'node:vm';
 import { test } from 'node:test';
+import { createSettings } from '../extension/src/settings.js';
 import { OwnedCaptureProcesses, checkMemoryBudget, commandFailure, createCommandTrace, finishCaptureTest, processSnapshot, removeCaptureDirectory, resetCaptureReports } from './capture-test-runtime.mjs';
 
 const created = '2026-09-09T00:00:00.0000000Z';
 const root = { pid: 101, parentPid: 99, created, bytes: 100 };
 const descendant = { pid: 102, parentPid: 101, created, bytes: 200 };
 const success = processes => ({ status: 0, signal: null, error: null, stdout: JSON.stringify(processes), stderr: '', elapsedMs: 7, timeoutMs: 10000 });
+
+test('capture bootstrap writes sniffing mode after the initial settings snapshot settles', async () => {
+  const source = fs.readFileSync(new URL('./test-capture-browser.mjs', import.meta.url), 'utf8');
+  const literal = source.match(/fs\.appendFileSync\(background, (`[^`]*chrome\.storage\.local\.set[^`]*`)\);/)?.[1];
+  assert.ok(literal, 'Capture browser bootstrap must exist');
+  const bootstrap = vm.runInNewContext(literal);
+  const events = [], listeners = [];
+  let resolveInitialRead;
+  const api = {
+    storage: {
+      local: {
+        get: () => new Promise(resolve => { resolveInitialRead = resolve; }).then(value => { events.push('initialized'); return value; }),
+        set: async value => {
+          events.push('write');
+          for (const listener of listeners) listener({ sniffMode: { newValue: value.sniffMode } }, 'local');
+        },
+      },
+      onChanged: { addListener: listener => listeners.push(listener) },
+    },
+    tabs: { create: async () => events.push('open') },
+    runtime: { getURL: value => value },
+  };
+  const settings = createSettings(api);
+  const pending = vm.runInNewContext(bootstrap, { chrome: api, StreamFireflyBackground: { runtime: { settings } } });
+  await Promise.resolve();
+  resolveInitialRead({});
+  await settings.ready;
+  await pending;
+  assert.deepEqual(events, ['initialized', 'write', 'open']);
+  assert.equal(settings.get().sniffMode, 'always');
+});
 
 test('command deadlines reject late success and missing timing without hiding existing failures', () => {
   for (const elapsedMs of [0, 9999, 10000]) assert.equal(commandFailure({ ...success([root]), elapsedMs }), null);
