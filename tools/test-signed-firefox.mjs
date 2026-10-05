@@ -17,14 +17,14 @@ assert.ok(fs.existsSync(firefox),'Firefox release binary is required');
 async function freePort(){const server=net.createServer();await new Promise(r=>server.listen(0,'127.0.0.1',r));const port=server.address().port;await new Promise(r=>server.close(r));return port;}
 const port=await freePort(), marionettePort=await freePort();
 const profile=fs.mkdtempSync(path.join(os.tmpdir(),'streamfirefly-signed-firefox-'));
-const proc=spawn(driver,['--host','127.0.0.1','--port',String(port),'--marionette-port',String(marionettePort)],{windowsHide:true,stdio:['ignore','ignore','inherit']});
+const proc=spawn(driver,['--allow-system-access','--host','127.0.0.1','--port',String(port),'--marionette-port',String(marionettePort)],{windowsHide:true,stdio:['ignore','ignore','inherit']});
 let session;
 async function request(method,route,body){
  const res=await fetch(`http://127.0.0.1:${port}${route}`,{method,headers:{'content-type':'application/json'},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(120000)});
  const json=await res.json(); assert.ok(res.ok&&!json.value?.error,`WebDriver ${method} ${route}: ${JSON.stringify(json.value)}`);return json.value;
 }
 async function start(){
- const value=await request('POST','/session',{capabilities:{alwaysMatch:{browserName:'firefox','moz:firefoxOptions':{binary:firefox,args:['-headless','-remote-allow-system-access','-profile',profile],prefs:{'xpinstall.signatures.required':true,'remote.prefs.recommended':false,'extensions.update.enabled':false}}}}});
+ const value=await request('POST','/session',{capabilities:{alwaysMatch:{browserName:'firefox','moz:firefoxOptions':{binary:firefox,args:['-headless','-profile',profile],prefs:{'xpinstall.signatures.required':true,'remote.prefs.recommended':false,'extensions.update.enabled':false}}}}});
  session=value.sessionId;assert.ok(Number.parseInt(value.capabilities.browserVersion)>=142,'Firefox must be 142+');return value.capabilities.browserVersion;
 }
 async function execute(script,args=[]){return request('POST',`/session/${session}/execute/async`,{script,args});}
