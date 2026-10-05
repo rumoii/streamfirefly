@@ -76,6 +76,24 @@ jobs:
           $driverDir = Join-Path $env:RUNNER_TEMP 'geckodriver'
           Expand-Archive -LiteralPath $driverZip -DestinationPath $driverDir
           "GECKODRIVER_BINARY=$(Join-Path $driverDir 'geckodriver.exe')" >> $env:GITHUB_ENV
+      - name: Verify native upgrade and rollback from the final bundle
+        shell: pwsh
+        run: |
+          $baselineRoot = Join-Path $env:RUNNER_TEMP 'streamfirefly-rollback-source'
+          $baselineTar = Join-Path $env:RUNNER_TEMP 'streamfirefly-rollback-source.tar'
+          New-Item -ItemType Directory -Path $baselineRoot | Out-Null
+          git archive --format=tar --output=$baselineTar 22bb9080e521a76e3bf680a99830b33a82324a18 native-host
+          if ($LASTEXITCODE -ne 0) { throw 'Rollback baseline archive failed' }
+          tar -xf $baselineTar -C $baselineRoot
+          if ($LASTEXITCODE -ne 0) { throw 'Rollback baseline extraction failed' }
+          cargo build --locked --release --target x86_64-pc-windows-msvc --manifest-path (Join-Path $baselineRoot 'native-host\Cargo.toml')
+          if ($LASTEXITCODE -ne 0) { throw 'Rollback baseline build failed' }
+          $upgradeRoot = Join-Path $env:RUNNER_TEMP 'streamfirefly-upgrade-bundle'
+          Expand-Archive -LiteralPath ".\release\StreamFirefly-$env:BUNDLE_VERSION-windows-x64.zip" -DestinationPath $upgradeRoot
+          $bundle = Join-Path $upgradeRoot "StreamFirefly-$env:BUNDLE_VERSION-windows-x64"
+          $env:STREAMFIREFLY_ISOLATED_INSTALL_TEST = '1'
+          node tools/test-release-upgrade.mjs $bundle (Join-Path $baselineRoot 'native-host\target\x86_64-pc-windows-msvc\release\streamfirefly-native.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Final bundle native upgrade or rollback failed' }
       - name: Smoke test the packaged x64 install
         shell: pwsh
         run: |
