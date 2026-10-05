@@ -1,6 +1,6 @@
 # StreamFirefly 隐私政策
 
-最后更新：2026-09-24
+最后更新：2026-10-05
 
 StreamFirefly 是一个本地优先的网页媒体发现与下载工具。浏览器扩展负责识别当前网页加载的媒体资源，Windows 本地助手负责执行用户主动创建的下载任务。
 
@@ -41,6 +41,7 @@ StreamFirefly 不提供云端账号，不向开发者服务器上传、出售或
 - `webRequest` 和网站访问权限：识别媒体 URL、类型、大小和下载所需请求信息；
 - `tabs`、`webNavigation`、`scripting`：关联当前页面、在页面导航时清除旧候选，并识别媒体元素和脚本中生成的媒体地址；
 - `storage`：保存本机设置；
+- `sidePanel`：在浏览器侧栏中显示资源列表、下载任务和设置。
 - `declarativeNetRequest`：在用户播放预览时临时附加必要请求头；
 - `nativeMessaging`：把用户确认的下载任务交给本机下载助手。
 - Chrome `offscreen`：运行可终止的规则计算 Worker，以及持有缓存捕捉的本机传输连接。

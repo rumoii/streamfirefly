@@ -12,9 +12,15 @@
 ## 安装
 
 1. 解压完整包到固定目录，保留整个目录结构。
-2. Chrome 打开 `chrome://extensions`，Edge 打开 `edge://extensions`，启用开发者模式，选择“加载已解压的扩展程序”，选择包里的 `extension` 文件夹，记录各浏览器的扩展 ID。
+2. Chrome 用户在商店上架后，从 Chrome Web Store 安装流萤，商店扩展 ID 固定为 `ooblmahffkiimlflhdnfojjemlibmhhj`；上架前使用离线加载方式。Edge 和离线安装：Chrome 打开 `chrome://extensions`，Edge 打开 `edge://extensions`，启用开发者模式，选择“加载已解压的扩展程序”，选择包里的 `extension` 文件夹，记录各浏览器实际显示的扩展 ID。Edge 商店 ID 尚未取得。
 3. Firefox 打开 `about:addons`，齿轮菜单选择“从文件安装附加组件”，选择包里的签名 XPI。正式包不提供未签名替代品。
-4. 在包根目录执行下面的命令，只填写你实际使用的浏览器 ID。不使用的 Chromium 浏览器可以省略对应参数。Firefox ID 已固定。
+4. 在包根目录安装本地助手。通过 Chrome Web Store 安装流萤时运行：
+
+   ```powershell
+   .\tools\install.ps1 -ChromeExtensionId 'ooblmahffkiimlflhdnfojjemlibmhhj'
+   ```
+
+   开发者模式加载或同时使用 Edge 时，填写各浏览器实际显示的扩展 ID。不使用的 Chromium 浏览器可以省略对应参数。Firefox ID 已固定。
 
    ```powershell
    .\tools\install.ps1 -ChromeExtensionId '<Chrome ID>' -EdgeExtensionId '<Edge ID>'
