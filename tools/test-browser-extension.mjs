@@ -10,7 +10,7 @@ import { discoveryReporter } from './discovery-reporter.mjs';
 import { stimulateDiscovery, discoveryCases, scoreDiscoveryCase } from './discovery-cases.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const extensionRoot = path.join(repositoryRoot, 'extension');
+const extensionRoot = process.env.STREAMFIREFLY_EXTENSION_DIR || path.join(repositoryRoot, 'extension');
 const runtimeFiles = JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'tools', 'extension-package-files.json'), 'utf8'));
 const cliArgs = process.argv.slice(2);
 const option = name => { const index = cliArgs.indexOf(name); return index >= 0 ? cliArgs[index + 1] : undefined; };
