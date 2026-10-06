@@ -17,7 +17,7 @@
 流萤分为两个发行版，源码相同：
 
 - **通用版**：不限制网站，通过 GitHub Release 分发，包含 Chrome/Edge 扩展、签名 Firefox 扩展和 Windows 本地助手。能否识别和下载仍取决于网站本身。
-- **Chrome 应用商店版**：根据 Chrome 应用商店政策，不识别和下载 YouTube 内容。
+- **Chrome 应用商店版**：根据 Chrome 应用商店政策，不识别和下载 YouTube 内容。（当前还在审核中，所以应用商店可能搜索不到流萤）
 
 ## 功能
 
