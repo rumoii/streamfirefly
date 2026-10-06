@@ -6,6 +6,7 @@
   "content.js",
   "capture-content.js",
   "capture-probe.js",
+  "capture-initialization.js",
   "page-probe.js",
   "page-probe-advanced.js",
   "dist/app.html",

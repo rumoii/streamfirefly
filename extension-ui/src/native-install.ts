@@ -13,13 +13,14 @@ export function detectBrowser(api: any, userAgent: string): InstallBrowser {
 /**
  * Builds the command pasted into Win+R. It downloads the installer published with the same release
  * as this extension and registers the helper for the running browser and extension ID.
+ * Invoke-WebRequest follows the Windows system proxy, which curl.exe ignores.
  */
 export function installCommand(version: string, browser: InstallBrowser, extensionId: string) {
   if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error("extension_version_invalid");
   if (browser !== "firefox" && !/^[a-p]{32}$/.test(extensionId)) throw new Error("extension_id_invalid");
   const url = `${RELEASE_DOWNLOAD}/v${version}/StreamFirefly-install.ps1`;
   const target = browser === "firefox" ? "firefox" : `${browser} ${extensionId}`;
-  return `powershell -nop -ep Bypass -c "$f=$env:TEMP+'\\sf-install.ps1';curl.exe -fsSLo $f '${url}';if($?){& $f ${target}}"`;
+  return `powershell -nop -ep Bypass -c "$f=$env:TEMP+'\\sf-install.ps1';iwr '${url}' -useb -outf $f;if($?){& $f ${target}}"`;
 }
 
 export function currentInstallCommand(api: any, userAgent = globalThis.navigator?.userAgent || "") {

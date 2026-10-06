@@ -2,7 +2,7 @@
 import { copyResources } from "../features/configuration/copy";
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import type { MediaCandidate, ResourceViewState } from "../types";
-import { filterCandidates, sortCandidates } from "../media";
+import { betterAlternative, filterCandidates, isBlobCandidate, sortCandidates } from "../media";
 import { formatBytes, formatDuration, sourceLabel, typeLabel } from "../format";
 import { sendMessage } from "../api";
 import SfIcon from "../ui/SfIcon.vue";
@@ -63,18 +63,33 @@ const resourceCandidates = computed(() => props.candidates.filter(item => item.t
 const filtered = computed(() => filterCandidates(resourceCandidates.value, props.viewState.pattern, props.viewState.type, props.viewState.minMb, props.viewState.maxMb, props.viewState.minDuration, props.viewState.maxDuration));
 const visible = computed(() => sortCandidates(filtered.value.items, props.viewState.sortMode));
 const expanded = computed(() => visible.value.find(item => item.id === props.viewState.expandedId) || null);
+const captureExplanation = "缓存捕捉也能把视频保存到本地：有些网站不提供可直接下载的地址（显示为 Blob），流萤会在视频播放时录下加载的视频数据，播完自动保存成文件。";
+const captureCount = computed(() => visible.value.filter(isBlobCandidate).length);
+const showCaptureHint = computed(() => captureCount.value > 0 && visible.value.length > captureCount.value);
+const resourceScroll = ref<HTMLElement | null>(null);
+function scrollToCapture() {
+  const first = visible.value.find(isBlobCandidate);
+  const row = first ? [...(resourceScroll.value?.querySelectorAll<HTMLElement>("[data-candidate-id]") || [])].find(element => element.dataset.candidateId === first.id) : undefined;
+  row?.scrollIntoView({ block: "center", behavior: "smooth" });
+}
+const alternative = computed(() => expanded.value ? betterAlternative(expanded.value, visible.value) : null);
+const alternativeText = computed(() => {
+  const found = alternative.value;
+  if (!found) return "";
+  const { candidate } = found;
+  if (found.reason === "resolution") return `疑似发现分辨率更高的同一视频（${candidate.width} × ${candidate.height}）`;
+  return `发现可直接下载的同一视频（${typeLabel(candidate.type)}），通常画质更完整，下载也更快`;
+});
 const segments = computed(() => props.candidates.filter(item => item.type === "segment"));
 const selectedCandidates = computed(() => visible.value.filter(item => selectedIds.value.has(item.id)));
 const selectedHasBlob = computed(() => selectedCandidates.value.some(isBlobCandidate));
-
-function isBlobCandidate(item: MediaCandidate) { return item.url.startsWith("blob:"); }
 
 watch(visible, items => {
   selectedIds.value = new Set([...selectedIds.value].filter(id => items.some(item => item.id === id)));
   if (props.viewState.expandedId && !items.some(item => item.id === props.viewState.expandedId)) emit("updateViewState", { expandedId: "" });
 });
 
-watch(() => [props.viewState.expandedId, props.coverOnly, props.suspended], async () => {
+watch([() => props.viewState.expandedId, () => props.coverOnly, () => props.suspended], async () => {
   await disposePreview();
   if (!props.viewState.expandedId || props.coverOnly || props.suspended) return;
   await nextTick();
@@ -363,6 +378,7 @@ onBeforeUnmount(() => { void disposePreview(); });
         <button class="icon-button" aria-label="取消选择" title="取消选择" @click="clearSelection"><SfIcon name="x" /></button>
       </div>
     </div>
+    <button v-if="!loading && showCaptureHint" type="button" class="capture-hint" @click="scrollToCapture"><SfIcon name="info-circle" /><span>找不到能下载的视频？列表底部有 {{ captureCount }} 个可以<span class="term-hint" :title="captureExplanation">「缓存捕捉」</span>的视频</span><SfIcon name="chevron-down" /></button>
     <div v-if="filtered.error" class="inline-error">{{ filtered.error }}</div>
     <div class="resource-body">
       <div class="resource-list">
@@ -371,9 +387,9 @@ onBeforeUnmount(() => { void disposePreview(); });
           <span class="head-name">{{ resourceCandidates.length }} 个资源<template v-if="visible.length !== resourceCandidates.length"> · 显示 {{ visible.length }} 个</template><template v-if="segments.length"> · {{ segments.length }} 个分片已隐藏</template></span>
           <span class="cell-resolution">分辨率</span><span class="cell-duration">时长</span><span class="cell-size">大小</span><span class="cell-actions"></span>
         </div>
-        <div class="resource-scroll">
+        <div ref="resourceScroll" class="resource-scroll">
           <template v-if="loading"><div v-for="index in 4" :key="index" class="resource-row skeleton-row"><i></i><b></b></div></template>
-          <article v-for="item in visible" v-else :key="item.id" class="resource-row" :class="{ selected: selectedIds.has(item.id), active: viewState.expandedId === item.id }">
+          <article v-for="item in visible" v-else :key="item.id" :data-candidate-id="item.id" class="resource-row" :class="{ selected: selectedIds.has(item.id), active: viewState.expandedId === item.id }">
             <label class="row-check"><input type="checkbox" class="checkbox" :checked="selectedIds.has(item.id)" :aria-label="`选择${resourceName(item)}`" @change="toggleSelection(item.id)"></label>
             <span class="type-tile" :class="{ thumb: coverUrl(item) }" :data-type="item.type" :title="typeLabel(item.type)"><img v-if="coverUrl(item)" :src="coverUrl(item)" alt="" loading="lazy" decoding="async" @error="markImageFailed(coverUrl(item))"><SfIcon v-else :name="typeIcons[item.type] || 'file'" /></span>
             <button class="row-main" type="button" :aria-expanded="viewState.expandedId === item.id" :title="resourceName(item)" @click="toggleDetails(item)">
@@ -382,7 +398,7 @@ onBeforeUnmount(() => { void disposePreview(); });
             </button>
             <span class="cell-resolution">{{ item.width && item.height ? `${item.width}×${item.height}` : '—' }}</span><span class="cell-duration">{{ item.duration ? formatDuration(item.duration) : '—' }}</span><span class="cell-size">{{ sizeText(item) }}</span>
             <span class="cell-actions">
-              <button class="button sm" :class="isBlobCandidate(item) ? '' : 'primary-soft'" type="button" :disabled="connected === false" :aria-label="`${primaryLabel(item)}：${resourceName(item)}`" @click="runPrimary(item)"><SfIcon :name="isBlobCandidate(item) ? 'capture' : 'download'" /><span>{{ primaryLabel(item) }}</span></button>
+              <button class="button sm" :class="isBlobCandidate(item) ? '' : 'primary-soft'" type="button" :disabled="connected === false" :aria-label="`${primaryLabel(item)}：${resourceName(item)}`" :title="isBlobCandidate(item) ? captureExplanation : undefined" @click="runPrimary(item)"><SfIcon :name="isBlobCandidate(item) ? 'capture' : 'download'" /><span>{{ primaryLabel(item) }}</span></button>
               <SfMenu :items="rowMenu(item)" :label="`更多操作：${resourceName(item)}`" @select="onRowMenu(item, $event)" />
             </span>
           </article>
@@ -411,8 +427,9 @@ onBeforeUnmount(() => { void disposePreview(); });
               <button v-if="(previewState === 'ready' || previewState === 'preparing' && item.poster) && item.type !== 'image' && !isBlobCandidate(item)" class="preview-play" type="button" @click="startPreview"><span><SfIcon name="player-play" :size="20" /></span><strong>播放预览</strong></button>
               <div v-if="isBlobCandidate(item) && item.poster" class="blob-poster-note">Blob 页面临时媒体 · 请使用缓存捕捉</div>
             </div>
+            <div v-if="alternative" class="detail-alternative" role="note"><SfIcon name="sparkles" /><span>{{ alternativeText }}</span><button class="button sm primary-soft" type="button" @click="updateViewState('expandedId', alternative.candidate.id)">查看</button></div>
             <div class="detail-actions">
-              <button class="button primary" type="button" :disabled="connected === false" @click="runPrimary(item)"><SfIcon :name="isBlobCandidate(item) ? 'capture' : 'download'" /><span>{{ primaryLabel(item) }}</span></button>
+              <button class="button primary" type="button" :disabled="connected === false" :title="isBlobCandidate(item) ? captureExplanation : undefined" @click="runPrimary(item)"><SfIcon :name="isBlobCandidate(item) ? 'capture' : 'download'" /><span>{{ primaryLabel(item) }}</span></button>
               <button v-if="isStream(item)" class="button" type="button" @click="$emit('parse', item)"><SfIcon name="adjustments-horizontal" /><span>详细解析</span></button>
               <button v-if="coverOnly && item.type !== 'image' && !isBlobCandidate(item)" class="button" type="button" @click="$emit('inspect', item)"><SfIcon name="eye" /><span>在工作区预览</span></button>
             </div>

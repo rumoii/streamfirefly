@@ -96,6 +96,11 @@ impl CaptureManager {
                 output: None,
                 outputs: Vec::new(),
                 error: None,
+                created_at: now_millis(),
+                page_title: bounded_text(&payload["pageTitle"], 300),
+                page_url: bounded_text(&payload["pageUrl"], 2048).filter(|value| {
+                    value.starts_with("https://") || value.starts_with("http://")
+                }),
             },
             directory,
             stop: false,
@@ -180,12 +185,48 @@ impl CaptureManager {
 
     pub(crate) fn list(&self) -> Value {
         let sessions = self.sessions.lock().unwrap();
-        let mut entries = sessions
+        let mut snapshots = sessions
             .values()
-            .filter_map(|session| session.lock().ok().map(|value| json!(value.snapshot)))
+            .filter_map(|session| session.lock().ok().map(|value| value.snapshot.clone()))
             .collect::<Vec<_>>();
+        snapshots.sort_by(|a, b| b.created_at.cmp(&a.created_at).then_with(|| a.id.cmp(&b.id)));
+        let mut entries = snapshots.iter().map(|snapshot| json!(snapshot)).collect::<Vec<_>>();
         entries.extend(self.errors.clone());
         json!(entries)
+    }
+
+    /// Removes a finished session together with its directory, including saved outputs.
+    pub(crate) fn delete(&self, payload: &Value) -> Result<Value, String> {
+        let id = payload["id"].as_str().ok_or("capture_id_required")?;
+        let mut sessions = self.sessions.lock().map_err(|_| "capture_unavailable")?;
+        let session = sessions.get(id).cloned().ok_or("capture_not_found")?;
+        let directory = {
+            let current = session.lock().map_err(|_| "capture_unavailable")?;
+            if current.worker_active
+                || !["complete", "partial", "interrupted"].contains(&current.snapshot.state.as_str())
+            {
+                return Err("capture_delete_active".into());
+            }
+            current.directory.clone()
+        };
+        let expected = format!("capture-{}", Uuid::parse_str(id).map_err(|_| "capture_not_found")?);
+        if directory.file_name().and_then(|name| name.to_str()) != Some(expected.as_str()) {
+            return Err("capture_delete_failed".into());
+        }
+        match fs::symlink_metadata(&directory) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err("capture_delete_failed".into())
+            }
+            Ok(_) => fs::remove_dir_all(&directory).map_err(|_| "capture_delete_failed")?,
+            Err(_) => {}
+        }
+        sessions.remove(id);
+        let directories = sessions
+            .values()
+            .filter_map(|entry| entry.lock().ok().map(|value| value.directory.clone()))
+            .collect::<Vec<_>>();
+        save_index(&self.root, &directories).map_err(|_| "capture_index_write_failed")?;
+        Ok(json!({"id":id}))
     }
 
     pub(crate) fn stop(&self, payload: &Value, aborted: bool) -> Result<Value, String> {
@@ -267,6 +308,23 @@ impl Drop for CaptureManager {
     }
 }
 
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis() as u64)
+}
+
+fn bounded_text(value: &Value, limit: usize) -> Option<String> {
+    let text = value
+        .as_str()?
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(limit)
+        .collect::<String>();
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_owned())
+}
+
 fn result_is_finalizing(session: &Arc<Mutex<Session>>) -> bool {
     session
         .lock()
@@ -287,6 +345,56 @@ mod tests {
         assert!(!root.exists());
     }
     #[test]
+    fn lists_newest_first_and_deletes_only_finished_sessions() {
+        let root = std::env::temp_dir().join(format!("capture-test-{}", Uuid::new_v4()));
+        let write = |state: &str, created_at: u64| {
+            let id = Uuid::new_v4().to_string();
+            let directory = root.join(format!("capture-{id}"));
+            fs::create_dir_all(&directory).unwrap();
+            let snapshot = Snapshot {
+                version: 1,
+                id: id.clone(),
+                state: state.into(),
+                bytes: 0,
+                tracks: Vec::new(),
+                output: None,
+                outputs: Vec::new(),
+                error: None,
+                created_at,
+                page_title: Some("页面".into()),
+                page_url: None,
+            };
+            fs::write(directory.join("capture.json"), serde_json::to_vec(&snapshot).unwrap())
+                .unwrap();
+            fs::write(directory.join("capture-0.mkv"), b"media").unwrap();
+            (id, directory)
+        };
+        let (older, older_directory) = write("complete", 1);
+        let (newer, newer_directory) = write("partial", 2);
+        let manager = CaptureManager::new(root.clone());
+        let listed = manager.list();
+        assert_eq!(listed[0]["id"], newer);
+        assert_eq!(listed[1]["id"], older);
+        assert_eq!(listed[0]["pageTitle"], "页面");
+        manager.delete(&json!({"id":older})).unwrap();
+        assert!(!older_directory.exists());
+        assert_eq!(manager.list().as_array().unwrap().len(), 1);
+        assert_eq!(
+            manager.delete(&json!({"id":older})).unwrap_err(),
+            "capture_not_found"
+        );
+        let active = manager.sessions.lock().unwrap()[&newer].clone();
+        active.lock().unwrap().worker_active = true;
+        assert_eq!(
+            manager.delete(&json!({"id":newer})).unwrap_err(),
+            "capture_delete_active"
+        );
+        assert!(newer_directory.exists());
+        active.lock().unwrap().worker_active = false;
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn rejects_oversized_metadata_and_missing_sequences() {
         let directory = std::env::temp_dir().join(format!("capture-test-{}", Uuid::new_v4()));
         fs::create_dir_all(&directory).unwrap();
@@ -303,6 +411,9 @@ mod tests {
                 output: None,
                 outputs: Vec::new(),
                 error: None,
+                created_at: 0,
+                page_title: None,
+                page_url: None,
             },
         }));
         assert!(append(&session, &[255, 255, 255, 255, 1]).is_err());

@@ -22,6 +22,12 @@ pub(crate) struct Snapshot {
     pub(crate) output: Option<String>,
     pub(crate) outputs: Vec<String>,
     pub(crate) error: Option<String>,
+    #[serde(default, rename = "createdAt")]
+    pub(crate) created_at: u64,
+    #[serde(default, rename = "pageTitle", skip_serializing_if = "Option::is_none")]
+    pub(crate) page_title: Option<String>,
+    #[serde(default, rename = "pageUrl", skip_serializing_if = "Option::is_none")]
+    pub(crate) page_url: Option<String>,
 }
 
 pub(crate) struct Session {

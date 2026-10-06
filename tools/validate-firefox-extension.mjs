@@ -1,4 +1,5 @@
 import { readBackgroundSource } from './read-background-source.mjs';
+import { assertCaptureContentScripts } from './extension-manifest.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -6,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const extensionRoot = path.join(repositoryRoot, 'extension');
 const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'manifest.firefox.json'), 'utf8'));
+assertCaptureContentScripts(manifest);
 const background = readBackgroundSource();
 const required = JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'tools', 'extension-package-files.json'), 'utf8'));
 const missing = required.filter(file => !fs.existsSync(path.join(extensionRoot, file)));

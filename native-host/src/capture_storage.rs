@@ -1,4 +1,5 @@
 use crate::capture_model::{Session, Track};
+use crate::capture_format::inspect_file;
 use crate::persistence::replace_file;
 use serde_json::{json, Value};
 use std::fs::{self, OpenOptions};
@@ -76,9 +77,7 @@ pub(crate) fn append(session: &Arc<Mutex<Session>>, frame: &[u8]) -> Result<Valu
                 bytes: 0,
                 next_sequence: 0,
                 last_chunk_size: 0,
-                initialized: data.starts_with(&[0x1a, 0x45, 0xdf, 0xa3])
-                    || data.get(4..8) == Some(b"ftyp")
-                    || data.get(4..8) == Some(b"moov"),
+                initialized: false,
                 file: format!("track-{id}.{extension}"),
             });
             current.snapshot.tracks.len() - 1
@@ -119,6 +118,10 @@ pub(crate) fn append(session: &Arc<Mutex<Session>>, frame: &[u8]) -> Result<Valu
     current.snapshot.tracks[index].next_sequence += 1;
     current.snapshot.tracks[index].last_chunk_size = data.len() as u64;
     current.snapshot.bytes += data.len() as u64;
+    if !current.snapshot.tracks[index].initialized {
+        current.snapshot.tracks[index].initialized = inspect_file(&current.directory.join(&current.snapshot.tracks[index].file), mime)
+            .map_err(|_| "capture_read_failed")?.initialized;
+    }
     save(&current).map_err(|_| "capture_checkpoint_failed")?;
     Ok(json!({"track":id,"sequence":sequence,"bytes":current.snapshot.bytes}))
 }

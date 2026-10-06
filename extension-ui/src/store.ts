@@ -4,6 +4,7 @@ import { currentWindowId, extensionApi, sendCore, sendMessage, surfaceFromUrl, t
 import type { DownloadTask, MediaCandidate, ResourceViewState, UiContext } from "./types";
 import { createSettingsState } from "./features/settings/state";
 import { createDownloadsState } from "./features/downloads/state";
+import { createHlsMetadataQueue } from "./hls-metadata";
 
 
 
@@ -82,6 +83,7 @@ export const useAppStore = defineStore("app", () => {
     const sameContext = context.value?.sourceContextId === nextContext.sourceContextId;
     context.value = nextContext;
     candidates.value = Array.isArray(result.context?.candidates) ? result.context.candidates : [];
+    hlsMetadata.schedule(nextContext.sourceContextId, candidates.value);
     if (!sameContext || (!pendingPatches && nextContext.resourceViewState.revision >= resourceViewState.value.revision)) resourceViewState.value = { ...nextContext.resourceViewState };
     error.value = "";
     if (surface.value !== "workspace") document.title = `流萤 · ${context.value?.pageTitle || "网页媒体"}`;
@@ -184,6 +186,15 @@ export const useAppStore = defineStore("app", () => {
     resourcePatchQueue = operation.catch(() => {});
     return operation;
   }
+
+  const hlsMetadata = createHlsMetadataQueue({
+    load: async (candidate, url) => {
+      const result: any = await sendMessage({ type: "media.fetchText", tabId: context.value?.sourceTabId, id: candidate.id, url });
+      if (!result?.ok) throw new Error(result?.error || "media_fetch_failed");
+      return { text: String(result.text), url: String(result.url || url) };
+    },
+    apply: (candidate, metadata) => updateCandidateMetadata(candidate, metadata)
+  });
 
   async function updateCandidateMetadata(candidate: MediaCandidate, metadata: Partial<Pick<MediaCandidate, "duration" | "width" | "height" | "poster" | "live">>) {
     if (!context.value?.supported) return;

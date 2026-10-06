@@ -119,11 +119,12 @@ try {
     result.cases.push('6500-fragments-finish-close-and-ffprobe');
     const invalidId = await open();
     await push(Buffer.from([0, 0, 0, 16, 102, 116, 121, 112, 0, 0, 0, 0, 0, 0, 0, 0]), 0);
-    assert.equal((await finish(invalidId)).state, 'partial');
+    const invalid = await finish(invalidId);
+    assert.equal(invalid.state, 'partial');
+    assert.equal(invalid.error, 'capture_initialization_missing');
     const stages = JSON.parse(fs.readFileSync(path.join(outputs, `capture-${invalidId}`, 'diagnostics.json')));
-    assert.ok(stages.some(item => item.stage === 'merge-exited' && item.details.success === false));
-    assert.ok(fs.statSync(path.join(outputs, `capture-${invalidId}`, 'ffmpeg-stderr-0.txt')).size > 0);
-    result.cases.push('merge-nonzero-exit-with-stderr');
+    assert.equal(stages.some(item => item.stage === 'merge-started'), false);
+    result.cases.push('truncated-initialization-preserves-raw-without-merge');
   })();
   await Promise.race([experiment, lifecycle]);
   result.ok = true;

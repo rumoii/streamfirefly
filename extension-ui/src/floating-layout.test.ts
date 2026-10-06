@@ -11,7 +11,9 @@ describe("floating layout boundaries", () => {
         expect(rect.y + rect.height).toBeLessThanOrEqual(height - 12);
       }
     }
-    expect(initialRect("panel", 1920, 1080).width).toBe(420);
+    expect(initialRect("panel", 1920, 1080).width).toBe(480);
+    expect(parseLayout({ version: 1, panel: { x: 1488, y: 12, width: 420, height: 640 } }).panel).toEqual({ x: 1428, y: 12, width: 480, height: 640 });
+    expect(parseLayout({ version: 1, panel: { x: 100, y: 12, width: 530, height: 640 } }).panel?.width).toBe(530);
     expect(initialRect("workspace", 1920, 1080).width).toBe(1120);
   });
   it("discards corrupt geometry without losing valid preferences", () => {

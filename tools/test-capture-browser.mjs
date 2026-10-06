@@ -12,6 +12,7 @@ import { WebSocketServer } from 'ws';
 import { OwnedCaptureProcesses, checkMemoryBudget, errorDetails, finishCaptureTest, removeCaptureDirectory, resetCaptureEvidence, resetCaptureReports } from './capture-test-runtime.mjs';
 import { archiveCaptureEvidence } from './capture-test-evidence.mjs';
 import { fixtureFfmpeg } from './fixture-ffmpeg.mjs';
+import { createCaptureFixtureReceiver } from './capture-fixture-receiver.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const executeFile = promisify(execFile);
 const argumentsList = process.argv.slice(2);
@@ -43,7 +44,7 @@ const reportPath = path.join(root, `test-results/capture/${browser}-${installed 
 resetCaptureReports(reportPath);
 resetCaptureEvidence(reportPath);
 const log = message => console.log(`[${browser} capture ${duration}s] ${message}`);
-const socketState = { bytes: 0, chunks: 0, finished: false, error: '' };
+const socketState = { bytes: 0, chunks: 0, finished: false, error: '', sessions: [] };
 const diagnostics = [], memory = [];
 try {
   log('generating media fixture');
@@ -61,14 +62,17 @@ try {
   if (fragment) fragments.push(Buffer.concat(fragment));
   assert.ok(fragments.length >= Math.max(2, duration + 2));
   const sample = Buffer.concat([...initialization, fragments[0]]);
+  let refreshFixture = false;
+  const earlyPlayer = () => !refreshFixture ? '' : `<script>const video=document.createElement('video');video.muted=true;document.body.append(video);const source=new MediaSource();video.src=URL.createObjectURL(source);source.addEventListener('sourceopen',()=>{const buffer=source.addSourceBuffer('video/mp4; codecs="avc1.64000a"');window.captureFixture={video,source,buffer,nextFragment:1};buffer.addEventListener('updateend',()=>window.captureEarlyReady=true,{once:true});buffer.appendBuffer(Uint8Array.from(atob('${sample.toString('base64')}'),value=>value.charCodeAt(0)));},{once:true});</script>`;
   let resolveReport; const report = new Promise(resolve => { resolveReport = resolve; });
   server = http.createServer(async (request, response) => {
     try {
       if (stopping) { response.writeHead(503).end('Capture test is stopping'); return; }
       response.setHeader('access-control-allow-origin', '*');
       if (request.url.startsWith('/sample.mp4')) { const index = Number(new URL(request.url, 'http://fixture').searchParams.get('fragment') || 0); if (!Number.isInteger(index) || !fragments[index]) { response.writeHead(404).end(); return; } response.writeHead(200, { 'content-type': 'video/mp4' }).end(index === 0 ? sample : fragments[index]); return; }
-      if (request.url === '/frames') { response.writeHead(200, { 'content-type': 'text/html' }).end(`<html><body>Main player<iframe src="${origin}/player"></iframe><iframe src="${origin.replace('127.0.0.1', 'localhost')}/player"></iframe></body></html>`); return; }
-      if (request.url.startsWith('/player')) { response.writeHead(200, { 'content-type': 'text/html' }).end('<html><body>Frame player</body></html>'); return; }
+      if (request.url === '/arm-refresh') { refreshFixture = true; response.end('ok'); return; }
+      if (request.url === '/frames') { response.writeHead(200, { 'content-type': 'text/html' }).end(`<html><body>Main player${earlyPlayer()}<iframe src="${origin}/player"></iframe><iframe src="${origin.replace('127.0.0.1', 'localhost')}/player"></iframe></body></html>`); return; }
+      if (request.url.startsWith('/player')) { response.writeHead(200, { 'content-type': 'text/html' }).end(`<html><body>Frame player${earlyPlayer()}</body></html>`); return; }
       if (request.method === 'OPTIONS') { response.setHeader('access-control-allow-headers', 'content-type'); response.writeHead(204).end(); return; }
       if (request.url === '/heartbeat' && installed) {
         if (request.headers.origin !== `chrome-extension://${extensionId}`) { response.writeHead(403).end(); return; }
@@ -102,19 +106,21 @@ try {
   const origin = `http://127.0.0.1:${server.address().port}`;
   if (!installed) {
     sockets = new WebSocketServer({ server, maxPayload: 300000 });
+    let connectionIndex = 0;
     sockets.on('connection', (socket, request) => {
       let authenticated = false;
+      const index = connectionIndex++, header = Buffer.concat(initialization);
+      assert.ok(index < 4, 'Unexpected capture session');
+      const receiver = createCaptureFixtureReceiver(Buffer.concat([header, fragments[index === 3 ? 0 : index]]), header, index === 3);
       socket.on('message', (data, binary) => {
         try {
           assert.equal(request.headers.origin, `chrome-extension://${extensionId}`);
           if (!authenticated) { assert.equal(JSON.parse(data).token, 'a'.repeat(64)); authenticated = true; socket.send('{"ready":true}'); return; }
-          if (!binary) { if (data.toString() === 'finish') socketState.finished = true; return; }
+          if (!binary) { assert.equal(data.toString(), 'finish'); socketState.sessions.push(receiver.finish()); socketState.finished = socketState.sessions.length === 4; return; }
           const length = data.readUInt32LE(0), metadata = JSON.parse(data.subarray(4, 4 + length));
-          const expected = [sample, fragments[1], fragments[2]][socketState.chunks];
-          assert.ok(expected, 'Unexpected capture chunk');
-          assert.deepEqual(data.subarray(4 + length), expected); assert.equal(metadata.sequence, 0);
-          socketState.bytes += expected.length; socketState.chunks++;
-          socket.send(JSON.stringify({ track: metadata.track, sequence: metadata.sequence, bytes: expected.length }));
+          const bytes = data.subarray(4 + length), ack = receiver.append(metadata, bytes);
+          socketState.bytes += bytes.length; socketState.chunks++;
+          socket.send(JSON.stringify(ack));
         } catch (error) { socketState.error = error.message; socket.close(); }
       });
     });
@@ -145,7 +151,7 @@ try {
   assert.equal(result.ok, true, JSON.stringify(result));
   if (duration >= 60) assert.ok(memory.length >= 2, 'Repeated installed memory sampling required');
   log('validating capture output');
-  if (!installed) { assert.equal(socketState.error, ''); assert.equal(socketState.finished, true); assert.equal(socketState.chunks, 3); assert.equal(socketState.bytes, sample.length + fragments[1].length + fragments[2].length); }
+  if (!installed) { assert.equal(socketState.error, ''); assert.equal(socketState.finished, true); assert.equal(socketState.chunks, 7); assert.equal(socketState.sessions.length, 4); assert.equal(socketState.bytes, initialization.reduce((sum, bytes) => sum + bytes.length, 0) * 4 + fragments.slice(0, 3).reduce((sum, bytes) => sum + bytes.length, 0) + fragments[0].length); }
   else {
     const ffprobe = process.env.STREAMFIREFLY_FFPROBE_EXE; assert.ok(ffprobe && fs.existsSync(ffprobe), 'FFprobe required for installed output validation');
     for (const session of result.sessions) for (const output of session.outputs) {

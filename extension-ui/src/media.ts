@@ -203,11 +203,37 @@ export function deriveMediaPlaylist(manifest: HlsManifest, first: number, last: 
   return { text: `${lines.join("\n")}\n`, baseUrl: selected[0].uri, first: from, last: to, actualStart: selected[0].start, actualEnd: selected[selected.length - 1].end };
 }
 
+export function isBlobCandidate(item: MediaCandidate): boolean { return item.url.startsWith("blob:"); }
+
 export function sortCandidates(items: MediaCandidate[], mode: string): MediaCandidate[] {
-  const values = [...items];
-  if (mode === "size") return values.sort((a, b) => candidateSize(b) - candidateSize(a) || (b.detectedAt || 0) - (a.detectedAt || 0));
-  if (mode === "duration") return values.sort((a, b) => (b.duration || 0) - (a.duration || 0) || (b.detectedAt || 0) - (a.detectedAt || 0));
-  return values.sort((a, b) => (b.detectedAt || 0) - (a.detectedAt || 0));
+  return [...items].sort((a, b) => {
+    const captureOrder = Number(isBlobCandidate(a)) - Number(isBlobCandidate(b));
+    if (captureOrder) return captureOrder;
+    const posterOrder = Number(!a.poster) - Number(!b.poster);
+    if (posterOrder) return posterOrder;
+    if (mode === "size") return candidateSize(b) - candidateSize(a) || (b.detectedAt || 0) - (a.detectedAt || 0);
+    if (mode === "duration") return (b.duration || 0) - (a.duration || 0) || (b.detectedAt || 0) - (a.detectedAt || 0);
+    return (b.detectedAt || 0) - (a.detectedAt || 0);
+  });
+}
+
+export interface MediaAlternative { candidate: MediaCandidate; reason: "resolution" | "downloadable" }
+
+/** Finds a likely better copy of the same video: matching cover image or duration, then higher resolution or direct download. */
+export function betterAlternative(item: MediaCandidate, candidates: MediaCandidate[]): MediaAlternative | null {
+  const playable = (candidate: MediaCandidate) => ["video", "hls", "dash"].includes(candidate.type);
+  if (!playable(item)) return null;
+  const posterKey = (candidate: MediaCandidate) => { try { const url = new URL(candidate.poster || ""); return url.origin + url.pathname; } catch { return ""; } };
+  const pixels = (candidate: MediaCandidate) => (candidate.width || 0) * (candidate.height || 0);
+  const ownPoster = posterKey(item);
+  const matches = candidates.filter(other => other.id !== item.id && playable(other) && !isBlobCandidate(other) && !other.live && (
+    (ownPoster && posterKey(other) === ownPoster)
+    || (Boolean(item.duration) && Boolean(other.duration) && Math.abs(item.duration! - other.duration!) <= Math.max(1, item.duration! * 0.02))));
+  const higher = pixels(item) ? matches.filter(other => pixels(other) > pixels(item)).sort((a, b) => pixels(b) - pixels(a))[0] : undefined;
+  if (higher) return { candidate: higher, reason: "resolution" };
+  if (!isBlobCandidate(item)) return null;
+  const direct = matches.find(other => other.type === "hls" || other.type === "dash") || matches[0];
+  return direct ? { candidate: direct, reason: "downloadable" } : null;
 }
 
 function candidateSize(item: MediaCandidate): number { return item.sizeKind === "manifest" ? -1 : Number(item.size) || 0; }

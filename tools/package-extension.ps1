@@ -34,6 +34,8 @@ try {
     }
     Copy-Item -LiteralPath (Join-Path $extension $relative) -Destination $destination
   }
+  & node (Join-Path $PSScriptRoot 'extension-manifest.mjs') (Join-Path $extension 'manifest.json') (Join-Path $stage 'manifest.json') $Edition
+  if ($LASTEXITCODE -ne 0) { throw 'Extension manifest generation failed' }
   Add-Type -AssemblyName System.IO.Compression.FileSystem
   if (Test-Path -LiteralPath $output) { Remove-Item -LiteralPath $output -Force }
   [System.IO.Compression.ZipFile]::CreateFromDirectory(

@@ -51,6 +51,10 @@ pub(crate) fn run() -> io::Result<()> {
                 }
             }
             "capture.list" => json!({"version":1,"id":id,"ok":true,"value":captures.list()}),
+            "capture.delete" => match captures.delete(&message["payload"]) {
+                Ok(value) => json!({"version":1,"id":id,"ok":true,"value":value}),
+                Err(error) => json!({"version":1,"id":id,"ok":false,"error":error}),
+            },
             "integration.test" | "integration.invoke" => {
                 let result = if message_type == "integration.test" {
                     launcher.test(&message["payload"])

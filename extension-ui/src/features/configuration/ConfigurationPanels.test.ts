@@ -145,6 +145,11 @@ describe("configuration serialization", () => {
     const wrapper = mount(CaptureView); await flushPromises();
     expect(send.mock.calls.some(([message]) => message.type === "capture.sources" && message.payload.tabId === 7)).toBe(true);
     expect(wrapper.text()).toContain("已定位此 Blob 对应的媒体源");
+    const scans = send.mock.calls.filter(([message]) => message.type === "capture.sources").length;
+    await wrapper.find('input[type="checkbox"]').setValue(true);
+    await wrapper.findAll("button").find(button => button.text() === "刷新来源页面状态")!.trigger("click"); await flushPromises();
+    expect(send.mock.calls.filter(([message]) => message.type === "capture.sources")).toHaveLength(scans + 1);
+    expect((wrapper.get('input[type="checkbox"]').element as HTMLInputElement).checked).toBe(false);
     await wrapper.findAll("button").find(button => button.text() === "返回来源播放")!.trigger("click");
     expect(send.mock.calls.find(([message]) => message.type === "ui.source.activate")?.[0].payload).toEqual({ tabId: 7, closeCurrent: false });
     wrapper.unmount();

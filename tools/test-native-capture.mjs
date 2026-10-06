@@ -40,11 +40,42 @@ try {
   assert.equal(completed.state, 'complete', JSON.stringify(completed)); assert.equal(completed.bytes, bytes.length * 2); assert.equal(completed.outputs.length, 2); assert.ok(completed.outputs.every(output => fs.existsSync(output)));
   const ffprobe = fixtureFfprobe;
   const inspected = spawnSync(ffprobe, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'json', completed.output], { windowsHide: true, encoding: 'utf8' }); assert.equal(inspected.status, 0, String(inspected.error || inspected.stderr)); assert.ok(Number(JSON.parse(inspected.stdout).format.duration) >= 0.9);
+  let initLength = 0;
+  while (initLength < bytes.length && bytes.toString('ascii', initLength + 4, initLength + 8) !== 'moof') initLength += bytes.readUInt32BE(initLength);
+  const initialization = bytes.subarray(0, initLength), media = bytes.subarray(initLength);
+  async function exercise(chunks, expectedError, partialInitialization = false) {
+    socket?.terminate();
+    const response = await send('capture.open', { origin }); assert.equal(response.ok, true, JSON.stringify(response));
+    socket = new WebSocket(response.value.endpoint, { origin }); await once(socket, 'open');
+    const handshake = message(socket, 'case ready'); socket.send(JSON.stringify({ token: response.value.token })); assert.equal((await handshake).ready, true);
+    for (const [index, data] of chunks.entries()) {
+      const meta = Buffer.from(JSON.stringify({ track: 0, generation: 0, sequence: index, mime: 'video/mp4' })), head = Buffer.alloc(4); head.writeUInt32LE(meta.length);
+      const durable = message(socket, 'case durable ACK'); socket.send(Buffer.concat([head, meta, data])); assert.equal((await durable).sequence, index);
+      if (partialInitialization && index === 0) assert.equal((await send('capture.list')).value.find(item => item.id === response.value.id).tracks[0].initialized, false);
+    }
+    socket.send('finish');
+    const snapshot = await until(async () => (await send('capture.list')).value.find(item => item.id === response.value.id && ['complete', 'partial', 'interrupted'].includes(item.state)));
+    assert.equal(snapshot.error || null, expectedError, JSON.stringify(snapshot));
+    const diagnostics = JSON.parse(fs.readFileSync(path.join(temporary, 'StreamFirefly', 'captures', `capture-${snapshot.id}`, 'diagnostics.json')));
+    assert.equal(diagnostics.some(event => event.stage === 'merge-started'), expectedError === null || expectedError === 'capture_merge_failed');
+    if (!expectedError) {
+      assert.equal(snapshot.state, 'complete'); assert.equal(snapshot.tracks[0].initialized, true);
+      const probe = spawnSync(ffprobe, ['-v', 'error', '-show_entries', 'format=duration:stream=codec_type,codec_name', '-of', 'json', snapshot.output], { windowsHide: true, encoding: 'utf8' });
+      assert.equal(probe.status, 0, probe.stderr); const value = JSON.parse(probe.stdout); assert.ok(Number(value.format.duration) >= 0.9); assert.equal(value.streams[0].codec_type, 'video');
+    }
+  }
+  await exercise([], 'capture_no_media_data');
+  await exercise([initialization], 'capture_no_media_data');
+  await exercise([media], 'capture_initialization_missing');
+  await exercise([initialization.subarray(0, initialization.length - 1)], 'capture_initialization_missing');
+  const invalidMedia = Buffer.alloc(16); invalidMedia.writeUInt32BE(16); invalidMedia.write('moof', 4);
+  await exercise([initialization, invalidMedia], 'capture_merge_failed');
+  await exercise([initialization.subarray(0, 5), initialization.subarray(5), media], null, true);
   assert.equal((await send('integration.test', { executable: 'C:\\Windows\\System32\\cmd.exe', arguments: [] })).ok, false);
   const program = { requestId: 'native-program-test', executable: path.join(process.env.SystemRoot, 'System32/where.exe'), arguments: ['streamfirefly-nonexistent-test-command'] };
   const launched = await send('integration.invoke', program); assert.equal(launched.ok, true, JSON.stringify(launched)); assert.equal(launched.receipt.state, 'started');
   const replayed = await send('integration.invoke', program); assert.equal(replayed.receipt.pid, launched.receipt.pid);
-  console.log('Native capture: origin rejection, authenticated WebSocket, durable ACK, duplicate suppression, FFmpeg merge and FFprobe duration passed');
+  console.log('Native capture: origin rejection, authenticated WebSocket, durable ACK, duplicate suppression, split initialization, three error categories, FFmpeg merge and FFprobe duration passed');
 } finally {
   socket?.terminate(); const exited = child.exitCode == null ? once(child, 'exit') : Promise.resolve(); child.kill(); await exited;
   const resolved = fs.realpathSync(temporary); assert.equal(path.dirname(resolved), fs.realpathSync(os.tmpdir())); assert.ok(path.basename(resolved).startsWith('streamfirefly-capture-test-')); fs.rmSync(resolved, { recursive: true });

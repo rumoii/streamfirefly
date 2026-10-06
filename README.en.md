@@ -12,7 +12,7 @@ Local-first media discovery and download for the web
 
 StreamFirefly has two parts: a browser extension and a native helper for Windows. The extension finds video, audio, images and HLS/DASH manifests on web pages. The helper, written in Rust, handles downloading, queueing, recovery and FFmpeg merging. Tasks and settings stay on your machine.
 
-The current version is 1.0.2. The interface is currently in Simplified Chinese. StreamFirefly does not circumvent DRM; only download content you own or are authorized to download.
+The current version is 1.0.3. The interface is currently in Simplified Chinese. StreamFirefly does not circumvent DRM; only download content you own or are authorized to download.
 
 StreamFirefly ships in two editions built from the same source:
 
@@ -219,7 +219,7 @@ Most documents are in Chinese.
 - [Modular discovery and tool integration](docs/development/modular-discovery.md)
 - [External tools and URL extraction](docs/development/tools-and-extraction.md)
 - [Design decisions](docs/decisions/README.md)
-- [Release notes](docs/releases/1.0.2.md)
+- [Release notes](docs/releases/1.0.3.md)
 
 ## Privacy
 

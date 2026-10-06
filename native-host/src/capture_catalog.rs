@@ -69,6 +69,14 @@ fn read_snapshot(directory: &Path) -> Result<Snapshot, String> {
         snapshot.state = "interrupted".into();
         snapshot.error = Some("capture_host_restarted".into());
     }
+    if snapshot.created_at == 0 {
+        // Records written before creation times were stored fall back to the directory time.
+        snapshot.created_at = fs::metadata(directory)
+            .and_then(|metadata| metadata.created().or_else(|_| metadata.modified()))
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |elapsed| elapsed.as_millis() as u64);
+    }
     Ok(snapshot)
 }
 
@@ -165,6 +173,9 @@ mod tests {
             output: None,
             outputs: Vec::new(),
             error: None,
+            created_at: 0,
+            page_title: None,
+            page_url: None,
         };
         fs::write(
             directory.join("capture.json"),

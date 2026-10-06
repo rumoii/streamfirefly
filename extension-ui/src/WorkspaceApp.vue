@@ -66,6 +66,7 @@ function onWorkspaceNavigate(event: Event) {
 async function handleNavigation(detail: NonNullable<typeof pendingNavigation>) {
   floating.value?.restore();
   if (detail.displayMode !== "panel") { floating.value?.setMode("workspace"); applyWorkspaceNavigation(detail.view || "resources", detail.candidateId || ""); }
+  else if (detail.candidateId) applyWorkspaceNavigation(detail.view || "resources", detail.candidateId);
   await nextTick();
   if (!disposed && detail.attemptId) await sendMessage({ type: "workspace.ready", attemptId: detail.attemptId }).catch(() => {});
 }

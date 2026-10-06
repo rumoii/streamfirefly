@@ -1,6 +1,6 @@
 # Chrome Web Store 商店资料
 
-条目：流萤 StreamFirefly，扩展 ID `ooblmahffkiimlflhdnfojjemlibmhhj`，上传包 `release/StreamFirefly-chrome-store-1.0.2.zip`（`package-extension.ps1 -Edition chrome-store` 生成）。公开范围为公开。上传草稿的步骤见 [商店草稿准备](../docs/development/browser-stores.md)。
+条目：流萤 StreamFirefly，扩展 ID `ooblmahffkiimlflhdnfojjemlibmhhj`，上传包 `release/StreamFirefly-chrome-store-1.0.3.zip`（`package-extension.ps1 -Edition chrome-store` 生成）。公开范围为公开。上传草稿的步骤见 [商店草稿准备](../docs/development/browser-stores.md)。
 
 ## 商品详情
 
@@ -83,12 +83,14 @@
 
 隐私政策网址：`https://github.com/rumoii/streamfirefly/blob/main/PRIVACY.md`。提交审核前确认可公开访问。
 
+缓存捕捉在 HTTP(S) 页面开始时登记来源并保留完整初始化段：512 KiB/SourceBuffer、4 MiB/框架，包含解析暂存。仅用户授权重新捕捉的那次刷新暂存早期正文：来源页及对应框架写入一次性 sessionStorage 标记，页面开始时同步读取并删除，没有标记不复制正文。后台验证随机 token、有效期和新文档身份；无效或 5 秒确认超时即丢弃，不外发、不落盘。确认开启后，暂存和队列共用每框架 16 MiB，上限或 2 分钟会话建立超时会停止并释放。“一键捕捉”（重新捕捉）经用户授权刷新来源页，用新身份确认来源后才向本机助手发送数据；一次性状态最多保留 3 分钟。普通捕捉补入初始化段，仅保存开启后的正文。商店包按站点策略排除不支持的页面。上述处理范围须在权限用途和隐私政策中一致披露；此说明不代表审核通过。
+
 ## 测试说明
 
 ```text
 无需账号。下载功能需要 Windows 本地助手。
 1. 在 Windows 11 上安装扩展后，设置页会显示“一键安装本地下载助手”。点击“复制安装命令”。
-2. 按 Win+R，粘贴并回车。命令从 https://github.com/rumoii/streamfirefly/releases/tag/v1.0.2 下载并校验本地助手，安装后扩展自动连接。
+2. 按 Win+R，粘贴并回车。命令从 https://github.com/rumoii/streamfirefly/releases/tag/v1.0.3 下载并校验本地助手，安装后扩展自动连接。
 3. 打开 https://developer.mozilla.org/en-US/docs/Web/HTML/Element/video
 4. 点击流萤图标打开侧栏，资源列表显示页面媒体；点“下载”后在“下载”页查看进度。
 未安装助手时仍可识别和预览媒体，但无法下载。
@@ -98,5 +100,5 @@
 
 ## 提交审核前
 
-- 仓库公开、v1.0.2 Release 发布后，用无痕窗口确认隐私政策、首页、支持、Release 四个地址都能公开访问，然后再提交审核。
+- 仓库公开、v1.0.3 Release 发布后，用无痕窗口确认隐私政策、首页、支持、Release 四个地址都能公开访问，然后再提交审核。
 - 宣传图上的“开源透明”在仓库公开后才成立，届时复核。

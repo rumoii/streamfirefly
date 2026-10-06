@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import { buildSync } from 'esbuild';
 import { fileURLToPath } from 'node:url';
 import { editionDefine, resolveEdition } from './edition.mjs';
+import { assertCaptureContentScripts, extensionManifestForEdition } from './extension-manifest.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const blockedUrls = ['https://www.youtube.com/watch?v=1', 'https://m.youtube.com/watch?v=1', 'https://youtu.be/1', 'https://www.youtube-nocookie.com/embed/1', 'https://rr1---sn-a.googlevideo.com/videoplayback?id=1'];
@@ -34,6 +35,24 @@ test('chrome-store edition blocks YouTube hosts and general edition does not', (
     assert.doesNotThrow(() => general.assertSiteAllowed(url));
   }
   assert.equal(store.blockedSite('https://media.example/a.mp4'), false);
+});
+
+test('static capture registration preserves on-open discovery and excludes blocked sites in store packages', () => {
+  for (const name of ['manifest.json', 'manifest.firefox.json']) {
+    const manifest = JSON.parse(fs.readFileSync(path.join(root, 'extension', name), 'utf8'));
+    const original = JSON.stringify(manifest);
+    assertCaptureContentScripts(manifest);
+    const general = extensionManifestForEdition(manifest, 'general');
+    const store = extensionManifestForEdition(manifest, 'chrome-store');
+    assert.equal(JSON.stringify(manifest), original);
+    assert.deepEqual(general, manifest);
+    assert.deepEqual(assertCaptureContentScripts(store).exclude_matches, Array.from(platform('chrome-store').BLOCKED_SITES, host => `*://${host}/*`));
+    assert.equal(store.version, manifest.version);
+    assert.deepEqual(store.browser_specific_settings, manifest.browser_specific_settings);
+    const invalid = structuredClone(manifest);
+    assertCaptureContentScripts(invalid).world = 'ISOLATED';
+    assert.throws(() => extensionManifestForEdition(invalid, 'general'), /Capture probe/);
+  }
 });
 
 test('site restrictions are defined only in platform.js', () => {

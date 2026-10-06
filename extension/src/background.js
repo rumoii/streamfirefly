@@ -132,6 +132,7 @@ api.webRequest.onHeadersReceived.addListener(details => {
 api.webRequest.onErrorOccurred.addListener(details => requestHeadersById.delete(details.requestId), { urls: ["http://*/*", "https://*/*"] });
 
 api.webNavigation?.onBeforeNavigate?.addListener(details => {
+  if (details.frameId === 0) void capture.restart.navigation(details.tabId);
   if (details.frameId !== 0) { deepSearch.clear(details.tabId, details.frameId); void capture.interrupted(details.tabId, details.frameId); return; }
   deepSearch.clear(details.tabId);
   void capture.interrupted(details.tabId);
@@ -143,6 +144,7 @@ api.webNavigation?.onHistoryStateUpdated?.addListener(details => {
 });
 
 api.tabs.onRemoved.addListener(tabId => {
+  void capture.restart.clear(tabId);
   const pending = navigationCleanups.get(tabId);
   for (let entry = pending; entry; entry = entry.previous) entry.cancelled = true;
   navigationCleanups.delete(tabId);
@@ -179,6 +181,10 @@ async function ensureNativeConfigured() {
 }
 
 api.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "capture.stage.confirm" && sender.tab) {
+    waitForNavigationCleanup(sender.tab.id).then(() => capture.restart.confirm(sender, message.payload?.documentToken, message.payload?.stageToken)).then(sendResponse, () => sendResponse({ enabled: false })); return true;
+  }
+  if (message?.type === "capture.ended" && sender.tab) { capture.ended(sender, message.payload || {}).then(() => sendResponse({ ok: true }), error => sendResponse({ ok: false, error: error.message })); return true; }
   if (message?.type === "capture.transport.push" && capture.isLocal) { capture.push(message.payload, sender).then(value => sendResponse({ ok: true, value }), error => sendResponse({ ok: false, error: error.message })); return true; }
   if (message?.type === "capture.interrupted" && sender.tab) { if (!message.payload?.id || !message.payload?.documentToken) return false; capture.interrupted(sender.tab.id, sender.frameId ?? 0, message.payload.documentToken, message.payload.id, message.payload.error).then(() => sendResponse({ ok: true }), () => sendResponse({ ok: false })); return true; }
   if (message?.type === "deep.key.add") { deepSearch.addKey(sender, message.payload).then(ok => sendResponse({ ok }), () => sendResponse({ ok: false })); return true; }
@@ -211,6 +217,10 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!Number.isInteger(tab?.id) || !Number.isInteger(tab?.windowId) || !supportedPage(tab.url) || blockedSite(tab.url)) throw new Error("source_tab_unavailable");
       try { await api.tabs.update(tab.id, { active: true }); await api.windows?.update?.(tab.windowId, { focused: true }); }
       catch (_) { throw new Error("source_tab_unavailable"); }
+      if (typeof message.payload.candidateId === "string" && message.payload.candidateId) {
+        const opened = await openWorkspace(tab, "resources", message.payload.candidateId.slice(0, 200), "panel");
+        if (!opened?.ok) throw new Error(opened?.error || "workspace_injection_failed");
+      }
       if (message.payload.closeCurrent && Number.isInteger(sender.tab?.id) && sender.tab.id !== tab.id) {
         try { await api.tabs.remove(sender.tab.id); } catch (_) { throw new Error("page_close_unavailable"); }
       }
@@ -220,7 +230,7 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!Number.isInteger(sender.tab?.id)) { sendResponse({ ok: false, error: "page_close_unavailable" }); return false; }
     api.tabs.remove(sender.tab.id).then(() => sendResponse({ ok: true }), () => sendResponse({ ok: false, error: "page_close_unavailable" })); return true;
   }
-  const administrative = ["extraction.get", "extraction.save", "extraction.test", "discovery.get", "discovery.save", "discovery.test", "template.render", "templates.get", "templates.save", "integration.preview", "integration.get", "integration.save", "integration.test", "integration.invoke", "integration.secret", "integration.intent", "capture.sources", "capture.open", "capture.close", "capture.list", "capture.recover"];
+  const administrative = ["extraction.get", "extraction.save", "extraction.test", "discovery.get", "discovery.save", "discovery.test", "template.render", "templates.get", "templates.save", "integration.preview", "integration.get", "integration.save", "integration.test", "integration.invoke", "integration.secret", "integration.intent", "capture.sources", "capture.open", "capture.close", "capture.list", "capture.recover", "capture.restart", "capture.restart.status", "capture.replay", "capture.delete"];
   if (administrative.includes(message?.type)) {
     if (typeof sender.url !== "string" || sender.url.split(/[?#]/, 1)[0] !== api.runtime.getURL("dist/app.html")) { sendResponse({ ok: false, error: "请从扩展设置页执行此操作" }); return false; }
     const operations = {
@@ -241,10 +251,14 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
       "integration.secret": () => integrations.setSecret(message.payload.profileId, message.payload.secret),
       "integration.intent": () => dispatchIntents.get(message.payload.id),
       "capture.sources": () => capture.sources(message.payload.tabId),
+      "capture.restart": () => capture.restart.begin(message.payload),
+      "capture.restart.status": async () => ({ ...(await capture.restart.status(message.payload.tabId, message.payload.operationId)), ...(await capture.sources(message.payload.tabId)) }),
+      "capture.replay": () => capture.replay(message.payload),
       "capture.open": () => capture.open(message.payload),
       "capture.close": () => capture.close(message.payload.tabId, message.payload.id),
       "capture.list": () => capture.list(),
-      "capture.recover": () => capture.recover(message.payload.id)
+      "capture.recover": () => capture.recover(message.payload.id),
+      "capture.delete": () => capture.remove(message.payload.id)
     };
     Promise.resolve().then(operations[message.type]).then(value => sendResponse({ ok: true, value }), error => sendResponse({ ok: false, error: error.message }));
     return true;
@@ -322,7 +336,7 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!sniffing.allowed(sender.tab.id) || blockedSite(tab?.url) || blockedSite(sender.url)) return { ok: true, active: false };
       const target = { tabId: sender.tab.id, ...(sender.documentId ? { documentIds: [sender.documentId] } : { frameIds: [sender.frameId ?? 0] }) };
       const advanced = await deepSearch.install(sender, message.documentToken);
-      try { await api.scripting.executeScript({ target, world: "MAIN", files: ["page-probe.js", "capture-probe.js"] }); await deepSearch.activate(sender, message.documentToken); }
+      try { await api.scripting.executeScript({ target, world: "MAIN", files: ["page-probe.js"] }); await deepSearch.activate(sender, message.documentToken); }
       catch (error) { await deepSearch.injected(sender, message.documentToken, error.message); throw error; }
       return { ok: true, active: true, advanced };
     })().then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));

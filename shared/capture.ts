@@ -25,7 +25,11 @@ export interface CaptureSnapshot {
   error?: string;
   tabId?: number;
   source?: CaptureSource;
+  ended?: boolean;
   tracks: { id: number; mime: string; bytes: number; initialized: boolean }[];
+  createdAt?: number;
+  pageTitle?: string;
+  pageUrl?: string;
 }
 export interface DeepSearchStatus {
   enabled: boolean;
@@ -36,10 +40,14 @@ export interface DeepSearchStatus {
 }
 export interface CaptureRequests {
   "capture.sources": { payload: { tabId: number }; value: CaptureSources };
-  "capture.open": { payload: { tabId: number; sourceContextId: string; source: CaptureSource; directory: string; objectUrl?: string }; value: { id: string } };
+  "capture.open": { payload: { tabId: number; sourceContextId: string; source: CaptureSource; directory: string; objectUrl?: string; restartOperation?: string }; value: { id: string } };
+  "capture.restart": { payload: { tabId: number; sourceContextId: string }; value: { operationId: string } };
+  "capture.restart.status": { payload: { tabId: number; operationId: string }; value: CaptureSources & { phase: string; sourceContextId: string } };
+  "capture.replay": { payload: { tabId: number; id: string }; value: void };
   "capture.close": { payload: { tabId: number; id: string }; value: void };
   "capture.list": { payload: undefined; value: CaptureSnapshot[] };
   "capture.recover": { payload: { id: string }; value: unknown };
+  "capture.delete": { payload: { id: string }; value: { id: string } };
   "deep.status": { payload: { tabId: number }; value: DeepSearchStatus };
   "deep.set": { payload: { tabId: number; enabled: boolean; remember: boolean }; value: DeepSearchStatus };
 }

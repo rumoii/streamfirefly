@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import { createCaptureFixtureReceiver } from './capture-fixture-receiver.mjs';
+const header = Buffer.from('initialization'), body = Buffer.from('media'), expected = Buffer.concat([header, body]);
+const metadata = { track: 0, generation: 0, sequence: 0, mime: 'video/mp4' };
+const good = createCaptureFixtureReceiver(expected, header);
+assert.equal(good.append(metadata, header).sequence, 0); assert.equal(good.append({ ...metadata, sequence: 1 }, body).sequence, 1); assert.equal(good.finish().initializationFirst, true);
+for (const patch of [{ sequence: 1 }, { track: 1 }, { generation: 1 }, { mime: 'audio/mp4' }]) assert.throws(() => createCaptureFixtureReceiver(expected, header).append({ ...metadata, ...patch }, header));
+assert.throws(() => createCaptureFixtureReceiver(expected, header).append(metadata, body), /Initialization/);
+const partial = createCaptureFixtureReceiver(expected, header); partial.append(metadata, header); assert.throws(() => partial.finish(), /before all expected bytes/);
+const corrupt = createCaptureFixtureReceiver(expected, header); corrupt.append(metadata, header); assert.throws(() => corrupt.append({ ...metadata, sequence: 1 }, Buffer.from('wrong')), /byte mismatch/);
+console.log('Capture fixture receiver: ordered bytes and ACK, missing initialization, corruption, sequence, track, generation and early finish rejection passed');

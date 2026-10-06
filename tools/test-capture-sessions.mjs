@@ -43,6 +43,11 @@ await coordinator.interrupted(1, 2, 'stale-document', opened.id); assert.equal((
 await assert.rejects(coordinator.close(1, 'old-session'), /capture_session_changed/);
 await Promise.all([coordinator.close(1, opened.id), coordinator.close(1, opened.id)]);
 assert.equal(calls.filter(call => call.type === 'capture.stop').length, 1); assert.equal(timers.size, 0);
+for (const patch of [{ id: 'missing' }, { frameId: 3 }, { documentToken: 'stale-document' }]) {
+  const arrivals = openArrivals;
+  await assert.rejects(coordinator.open({ ...payload, source: { ...source, ...patch } }), /capture_source_unavailable/);
+  assert.equal(openArrivals, arrivals, 'Invalid manual source selection reached native capture.open');
+}
 documentToken = 'new-document'; await assert.rejects(coordinator.open(payload), /capture_source_unavailable/);
 documentToken = 'frame-document'; rejectStart = true; await assert.rejects(coordinator.open(payload), /capture_probe_failed/); rejectStart = false;
 assert.equal([...snapshots.values()].at(-1).state, 'interrupted');

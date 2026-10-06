@@ -76,7 +76,7 @@ describe("floating shell transitions", () => {
     wrapper.unmount();
     storage.get.mockRejectedValue(new Error("storage unavailable"));
     const fallback = mount(FloatingShell, { props: props() }); await flushPromises();
-    expect(fallback.get("section").attributes("style")).toContain("width: 420px");
+    expect(fallback.get("section").attributes("style")).toContain("width: 480px");
     fallback.unmount();
   });
   it("keeps dragging usable when a preference write fails", async () => {

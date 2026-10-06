@@ -1,6 +1,8 @@
 use crate::capture_diagnostics::{drain_stderr, record};
 use crate::capture_model::{Session, Track};
 use crate::capture_storage::save;
+use crate::capture_format::inspect_file;
+use crate::capture_output::{matches, read_progress};
 use crate::media_process::bundled_tool;
 use crate::persistence::replace_file;
 use serde_json::json;
@@ -27,20 +29,29 @@ pub(crate) fn finalize(session: &Arc<Mutex<Session>>) {
     }
     let mut outputs = Vec::new();
     let mut complete = !generations.is_empty();
-    let mut failure = "capture_initialization_missing";
+    let mut failure = "capture_no_media_data";
     for (generation, tracks) in &generations {
-        let initialized = tracks.iter().all(|track| {
-            track.initialized
-                && fs::metadata(directory.join(&track.file))
-                    .is_ok_and(|metadata| metadata.len() == track.bytes)
-        });
+        let inspections: Vec<_> = tracks.iter().map(|track| inspect_file(&directory.join(&track.file), &track.mime)).collect();
+        if tracks.iter().all(|track| track.bytes == 0) || inspections.iter().all(|inspection| inspection.as_ref().is_ok_and(|value| value.initialized && !value.media)) { continue; }
+        {
+            let mut current = session.lock().unwrap();
+            for (track, inspection) in tracks.iter().zip(&inspections) {
+                if let Some(saved) = current.snapshot.tracks.iter_mut().find(|saved| saved.id == track.id) {
+                    saved.initialized = inspection.as_ref().is_ok_and(|value| value.initialized);
+                }
+            }
+        }
+        let initialized = tracks.iter().zip(&inspections).all(|(track, inspection)| inspection.as_ref().is_ok_and(|value| value.initialized)
+            && fs::metadata(directory.join(&track.file)).is_ok_and(|metadata| metadata.len() == track.bytes));
         if !initialized {
             complete = false;
+            if failure != "capture_merge_failed" { failure = "capture_initialization_missing"; }
             continue;
         }
         let output = directory.join(format!("capture-{generation}.mkv"));
         let temporary = directory.join(format!("capture-{generation}.pending.mkv"));
-        let merged = merge(&directory, tracks, &temporary, session);
+        let active: Vec<_> = tracks.iter().zip(&inspections).filter(|(_, inspection)| inspection.as_ref().is_ok_and(|value| value.media)).map(|(track, _)| track.clone()).collect();
+        let merged = merge(&directory, &active, &temporary, session);
         let replaced = if merged {
             Some(replace_file(&temporary, &output))
         } else {
@@ -62,6 +73,7 @@ pub(crate) fn finalize(session: &Arc<Mutex<Session>>) {
     if current.snapshot.state == "interrupted" {
         return;
     }
+    complete &= !outputs.is_empty();
     current.snapshot.state = if complete && current.snapshot.error.is_none() {
         "complete"
     } else {
@@ -92,7 +104,7 @@ pub(crate) fn finalize(session: &Arc<Mutex<Session>>) {
 
 fn merge(directory: &Path, tracks: &[Track], output: &Path, session: &Arc<Mutex<Session>>) -> bool {
     let mut command = Command::new(bundled_tool("ffmpeg.exe"));
-    command.args(["-nostdin", "-y", "-v", "error"]);
+    command.args(["-nostdin", "-y", "-v", "error", "-progress", "pipe:1", "-nostats"]);
     for track in tracks {
         command.arg("-i").arg(directory.join(&track.file));
     }
@@ -103,7 +115,7 @@ fn merge(directory: &Path, tracks: &[Track], output: &Path, session: &Arc<Mutex<
         .args(["-c", "copy"])
         .arg(output)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(windows)]
     {
@@ -122,6 +134,11 @@ fn merge(directory: &Path, tracks: &[Track], output: &Path, session: &Arc<Mutex<
         }
     };
     let started = Instant::now();
+    let stdout = child.stdout.take().unwrap();
+    let progress = match thread::Builder::new().name("capture-merge-progress".into()).spawn(move || read_progress(stdout)) {
+        Ok(reader) => reader,
+        Err(error) => { let _ = child.kill(); let _ = child.wait(); record(&session.lock().unwrap(), "progress-reader-start-failed", json!({"error":error.to_string()})); return false; }
+    };
     record(
         &session.lock().unwrap(),
         "merge-started",
@@ -137,6 +154,7 @@ fn merge(directory: &Path, tracks: &[Track], output: &Path, session: &Arc<Mutex<
         Err(error) => {
             let _ = child.kill();
             let _ = child.wait();
+            let _ = progress.join();
             record(
                 &session.lock().unwrap(),
                 "stderr-reader-start-failed",
@@ -203,5 +221,9 @@ fn merge(directory: &Path, tracks: &[Track], output: &Path, session: &Arc<Mutex<
             eprintln!("capture merge stderr collection failed");
         }
     }
-    success
+    let out_time_us = progress.join().ok().and_then(Result::ok).unwrap_or(0);
+    let expected: Vec<_> = tracks.iter().map(|track| if track.mime.starts_with("video/") { 1 } else { 2 }).collect();
+    let container_valid = matches(output, &expected);
+    record(&session.lock().unwrap(), "output-validation", json!({"exitSuccess":success,"outTimeUs":out_time_us,"containerValid":container_valid,"expectedStreams":expected.len()}));
+    success && out_time_us > 0 && container_valid
 }

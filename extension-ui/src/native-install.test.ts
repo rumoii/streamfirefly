@@ -11,6 +11,9 @@ describe("one-click helper install command", () => {
     expect(command).toContain("https://github.com/rumoii/streamfirefly/releases/download/v1.0.2/StreamFirefly-install.ps1");
     expect(command).toContain(`& $f edge ${id}`);
     expect(command.startsWith("powershell -nop -ep Bypass -c \"")).toBe(true);
+    // Invoke-WebRequest uses the Windows system proxy; curl.exe would bypass it.
+    expect(command).toContain("iwr 'https://github.com/");
+    expect(command).not.toContain("curl");
     expect(installCommand("1.0.2", "firefox", "streamfirefly@example.invalid")).toContain("& $f firefox}");
   });
   it("fits the Win+R dialog even for long versions", () => {

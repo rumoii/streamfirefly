@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { discoveryReporter } from './discovery-reporter.mjs';
 import { stimulateDiscovery, discoveryCases, scoreDiscoveryCase } from './discovery-cases.mjs';
 import { fixtureFfmpeg } from './fixture-ffmpeg.mjs';
+import { createCaptureFixtureReceiver } from './capture-fixture-receiver.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const extensionRoot = process.env.STREAMFIREFLY_EXTENSION_DIR || path.join(repositoryRoot, 'extension');
@@ -100,6 +101,22 @@ function reporterSource(origin) {
     if (!lateText.ok || !lateText.text.startsWith('#EXTM3U')) throw new Error('Referer-protected manifest fetch failed: ' + JSON.stringify(lateText));
     await unmountWorkspace(lateTab.id);
     await testApi.tabs.remove(lateTab.id);
+    currentStage = 'verify-passive-capture-registration';
+    const passiveTab = await testApi.tabs.create({ url: origin + '/passive-capture-fixture' });
+    const passiveState = async () => (await testApi.scripting.executeScript({ target: { tabId: passiveTab.id }, world: 'MAIN', func: () => ({ ready: window.passiveReady, beforePlayer: window.passiveProbeBeforePlayer, url: window.passiveUrl, chunks: window.passiveChunks, sources: window.__streamFireflyCaptureProbe?.sources?.() || [] }) }))[0]?.result;
+    const passiveBefore = await waitFor(async () => { const state = await passiveState(); return state?.ready ? state : null; }, 'passive MediaSource fixture did not register');
+    const passiveSource = passiveBefore.sources.find(source => source.objectUrls.includes(passiveBefore.url));
+    if (!passiveBefore.beforePlayer || !passiveSource || passiveSource.tracks.length !== 1 || passiveBefore.chunks !== 0) throw new Error('capture probe missed the player created before opening StreamFirefly: ' + JSON.stringify(passiveBefore));
+    if (sniffing.allowed(passiveTab.id) || (await candidatesFor(passiveTab.id)).length) throw new Error('passive registration enabled on-open resource discovery');
+    const passiveIdentity = await testApi.tabs.sendMessage(passiveTab.id, { type: 'capture.identity' }, { frameId: 0 });
+    if (!passiveIdentity?.ok || !passiveIdentity.documentToken) throw new Error('main-frame capture bridge identity is unavailable');
+    const passiveOpened = await handleToolbarClick(await testApi.tabs.get(passiveTab.id));
+    if (!passiveOpened.ok) throw new Error('passive fixture workspace did not open: ' + passiveOpened.error);
+    await waitFor(async () => (await candidatesFor(passiveTab.id)).some(item => item.url === passiveBefore.url), 'opening the panel did not discover the revoked player Blob');
+    const passiveAfter = await passiveState();
+    if (!passiveAfter.sources.some(source => source.id === passiveSource.id && source.objectUrls.includes(passiveBefore.url)) || passiveAfter.chunks !== 0) throw new Error('opening the panel replaced source identity or emitted media data');
+    await unmountWorkspace(passiveTab.id);
+    await testApi.tabs.remove(passiveTab.id);
     await testApi.storage.local.set({ advancedDeepSearch: true, detectImages: false, sniffMode: 'always' });
     await waitFor(() => settings.get().advancedDeepSearch && !settings.get().detectImages && settings.get().sniffMode === 'always', 'settings were not applied');
     currentStage = 'create-fixture-tab';
@@ -185,7 +202,7 @@ function reporterSource(origin) {
       const closed = await testApi.runtime.sendMessage({ type: 'capture.transport.close', payload: { id: 'browser-capture' } });
       if (!closed?.ok) throw new Error(JSON.stringify(closed));
       const capture = await waitFor(async () => { const status = await fetch(origin + '/capture-status').then(response => response.json()); if (status.error) throw new Error(status.error); return status.finished && status.bytes > 0 ? status : null; }, 'capture transport did not finish');
-      if (capture.frames !== 1 || capture.generation !== 0) throw new Error(JSON.stringify(capture));
+      if (capture.frames !== 2 || capture.generation !== 0 || !capture.initializationFirst) throw new Error(JSON.stringify(capture));
     }
     currentStage = 'open-workspace';
     const tabsBeforeWorkspace = (await testApi.tabs.query({ windowId: tab.windowId })).length;
@@ -268,7 +285,7 @@ function reporterSource(origin) {
     }, 'SPA navigation did not clear old candidates and rescan the page');
     await waitFor(async () => (await testApi.scripting.executeScript({ target: { tabId: tab.id }, func: () => !document.getElementById('streamfirefly-workspace-host') }))[0]?.result, 'SPA navigation did not unload the workspace');
     currentStage = 'complete';
-    await postResult({ ok: true, browser: ${JSON.stringify(browserName)}, first, afterSpa, workspace: { mounted: true, duplicateCount: workspaceMounted.count, tabCountUnchanged: tabsAfterWorkspace === tabsBeforeWorkspace, navigationCleanup: true, sharedResourceState: true, titlePreserved: true, scrollVerified: true } });
+    await postResult({ ok: true, browser: ${JSON.stringify(browserName)}, first, afterSpa, passiveCapture: { beforePlayer: passiveBefore.beforePlayer, revokedUrlRetained: true, sourceIdentityPreserved: true, mainFrameBridge: true, chunksBeforeCapture: passiveAfter.chunks }, workspace: { mounted: true, duplicateCount: workspaceMounted.count, tabCountUnchanged: tabsAfterWorkspace === tabsBeforeWorkspace, navigationCleanup: true, sharedResourceState: true, titlePreserved: true, scrollVerified: true } });
   })().catch(async error => {
     try { await postResult({ ok: false, browser: ${JSON.stringify(browserName)}, stage: currentStage, error: currentStage + ': ' + (error?.message || String(error)), stack: error?.stack || null }); } catch (_) {}
   });
@@ -355,6 +372,21 @@ function startFixtureServer() {
       response.writeHead(allowed ? 200 : 403, { 'content-type': 'application/vnd.apple.mpegurl' }).end(allowed ? '#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nreferer-segment.ts\n#EXT-X-ENDLIST\n' : 'forbidden');
       return;
     }
+    if (request.url === '/passive-capture-fixture') {
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(`<!doctype html><title>Passive capture fixture</title><video id="player" muted></video><script>
+        window.passiveProbeBeforePlayer = Boolean(window.__streamFireflyCaptureProbe?.installed);
+        window.passiveChunks = 0;
+        window.addEventListener('message', event => { if (event.source === window && event.data?.source === 'streamfirefly-capture' && event.data.type === 'chunk') window.passiveChunks++; });
+        window.passiveSource = new MediaSource();
+        window.passiveUrl = URL.createObjectURL(window.passiveSource);
+        passiveSource.addEventListener('sourceopen', () => {
+          window.passiveBuffer = passiveSource.addSourceBuffer('video/mp4; codecs="avc1.42E01E"');
+          URL.revokeObjectURL(passiveUrl);
+          window.passiveReady = true;
+        }, { once: true });
+        document.getElementById('player').src = passiveUrl;
+      </script>`); return;
+    }
     if (request.url === '/fixture') { response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(fixtureHtml(origin)); return; }
     if (request.url === '/api/config') { response.writeHead(200, { 'content-type': 'text/plain' }).end(JSON.stringify({ source: `${origin}/media/json.m3u8` })); return; }
     if (request.url === '/api/post') { response.writeHead(200, { 'content-type': 'application/octet-stream' }).end('#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI="key.bin"\n#EXTINF:2,\n../media/post-segment.ts\n'); return; }
@@ -367,15 +399,18 @@ function startFixtureServer() {
     const sockets = new WebSocketServer({ server, maxPayload: 300000 });
     sockets.on('connection', (socket, request) => {
       let authenticated = false;
+      let headerLength = 0;
+      while (headerLength < captureSample.length && captureSample.toString('ascii', headerLength + 4, headerLength + 8) !== 'moof') headerLength += captureSample.readUInt32BE(headerLength);
+      const receiver = createCaptureFixtureReceiver(captureSample, captureSample.subarray(0, headerLength));
       socket.on('message', (data, binary) => {
         try {
           assert.match(request.headers.origin || '', /^chrome-extension:\/\/[a-p]{32}$/);
           if (!authenticated) { assert.equal(JSON.parse(data).token, 'a'.repeat(64)); authenticated = true; socket.send(JSON.stringify({ ready: true })); return; }
-          if (!binary) { if (data.toString() === 'finish') captureStatus.finished = true; return; }
+          if (!binary) { assert.equal(data.toString(), 'finish'); Object.assign(captureStatus, receiver.finish(), { finished: true }); return; }
           const length = data.readUInt32LE(0); const metadata = JSON.parse(data.subarray(4, 4 + length));
-          const bytes = data.subarray(4 + length); assert.deepEqual(bytes, captureSample); assert.equal(metadata.sequence, 0);
+          const bytes = data.subarray(4 + length), ack = receiver.append(metadata, bytes);
           captureStatus.frames++; captureStatus.bytes += bytes.length; captureStatus.generation = metadata.generation;
-          socket.send(JSON.stringify({ track: metadata.track, sequence: metadata.sequence, bytes: captureStatus.bytes }));
+          socket.send(JSON.stringify(ack));
         } catch (error) { captureStatus.error = error.message; socket.close(); }
       });
     });

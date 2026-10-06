@@ -125,6 +125,27 @@ export async function runCaptureScenario(origin, installed, durationSeconds, dir
         if (!released?.ok) throw new Error('Restart close failed');
       }
       output.checks.push('same-source-restart-and-frame-switch');
+      await fetch(origin + '/arm-refresh');
+      const operation = await request('capture.restart', { tabId: tab.id, sourceContextId: context.sourceContextId });
+      const fresh = await until(async () => {
+        const status = await request('capture.restart.status', { tabId: tab.id, operationId: operation.operationId });
+        return status.phase === 'claimed' && status.sourceContextId !== context.sourceContextId && status.sources.length === 3 ? status : null;
+      }, 'authorized refresh and three fresh sources');
+      for (const source of fresh.sources) {
+        if (catalog.sources.some(old => old.documentToken === source.documentToken)) throw Error('Refresh reused old document identity');
+        await until(() => execute(tab.id, source.frameId, () => Boolean(window.captureEarlyReady) && sessionStorage.getItem('streamfirefly:capture-restart') === null), 'early append and marker deletion');
+      }
+      const refreshed = fresh.sources.find(source => new URL(source.url).hostname === 'localhost');
+      const id = 'authorized-refresh';
+      const opened = await api.runtime.sendMessage({ type: 'test.capture.transport', operation: 'open', payload: { id, tabId: tab.id, frameId: refreshed.frameId, documentId: refreshed.documentId, documentToken: refreshed.documentToken, endpoint: origin.replace('http:', 'ws:'), token: 'a'.repeat(64) } });
+      if (!opened?.ok) throw Error('Refresh transport failed');
+      const started = await api.tabs.sendMessage(tab.id, { type: 'capture.start', id, documentToken: refreshed.documentToken, sourceId: refreshed.id, restart: true }, { frameId: refreshed.frameId });
+      if (!started?.ok) throw Error('Refresh staged start failed: ' + started?.error);
+      const refreshStopped = await api.tabs.sendMessage(tab.id, { type: 'capture.stop', id, documentToken: refreshed.documentToken }, { frameId: refreshed.frameId });
+      if (!refreshStopped?.ok) throw Error('Refresh drain failed');
+      const refreshClosed = await api.runtime.sendMessage({ type: 'test.capture.transport', operation: 'close', payload: { id } });
+      if (!refreshClosed?.ok) throw Error('Refresh release failed');
+      output.checks.push('authorized-refresh-main-same-cross-markers-and-early-data');
     } else {
       const opened = await request('capture.open', { tabId: tab.id, sourceContextId: context.sourceContextId, source: cross, directory });
       const duplicate = await api.runtime.sendMessage({ type: 'capture.open', payload: { tabId: tab.id, sourceContextId: context.sourceContextId, source: cross } });
@@ -155,8 +176,8 @@ export async function runCaptureScenario(origin, installed, durationSeconds, dir
       await until(async () => (await request('capture.list')).find(session => session.id === interrupted.id && ['partial', 'interrupted', 'complete'].includes(session.state)), 'partial recovery settlement');
       output.checks.push('selected-frame-navigation-preserves-partial-data');
     }
-    const stale = cross;
-    await execute(tab.id, cross.frameId, () => { location.href = location.origin + '/player?replaced=1'; });
+    const stale = installed ? cross : (await request('capture.sources', { tabId: tab.id })).sources.find(source => new URL(source.url).hostname === 'localhost');
+    await execute(tab.id, stale.frameId, () => { location.href = location.origin + '/player?replaced=1'; });
     await until(async () => !(await request('capture.sources', { tabId: tab.id })).sources.some(source => source.documentToken === stale.documentToken), 'frame document replacement');
     const rejected = await api.runtime.sendMessage({ type: 'capture.open', payload: { tabId: tab.id, sourceContextId: context.sourceContextId, source: stale } });
     if (rejected?.ok) throw new Error('Stale source was accepted');

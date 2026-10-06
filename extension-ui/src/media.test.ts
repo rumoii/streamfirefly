@@ -1,4 +1,4 @@
-import { chooseHlsContainer, defaultAudio, defaultVariant, deriveMediaPlaylist, filterCandidates, hlsEncryptionMethods, parseHls, segmentRangeForTime, sortCandidates, validateHlsKeyOverride } from "./media";
+import { betterAlternative, chooseHlsContainer, defaultAudio, defaultVariant, deriveMediaPlaylist, filterCandidates, hlsEncryptionMethods, isBlobCandidate, parseHls, segmentRangeForTime, sortCandidates, validateHlsKeyOverride } from "./media";
 import type { MediaCandidate } from "./types";
 
 const masterText = `#EXTM3U
@@ -60,6 +60,24 @@ test("sorts resources without treating manifest bytes as media size", () => {
   expect(sortCandidates(items, "duration")[0].id).toBe("video");
 });
 
+test.each(["detected", "size", "duration"])("prioritizes downloadable resources over Blob capture in %s mode", mode => {
+  const direct: MediaCandidate[] = [
+    { id: "hls", url: "https://example/master.m3u8", type: "hls", sizeKind: "manifest", size: 5000, duration: 11, detectedAt: 1 },
+    { id: "dash", url: "https://example/index.mpd", type: "dash", sizeKind: "manifest", detectedAt: 2 },
+    { id: "video", url: "https://example/a.mp4", type: "video", size: 100, duration: 10, detectedAt: 3 }
+  ];
+  const blobs: MediaCandidate[] = [
+    { id: "blob-new", url: "blob:https://example/new", type: "video", size: 999999, duration: 99, detectedAt: 500 },
+    { id: "blob-old", url: "blob:https://example/old", type: "video", detectedAt: 400 }
+  ];
+  const items = [blobs[0], ...direct, blobs[1]], original = [...items];
+  const sorted = sortCandidates(items, mode);
+  expect(sorted.slice(0, direct.length)).toEqual(sortCandidates(direct, mode));
+  expect(sorted.slice(direct.length)).toEqual(sortCandidates(blobs, mode));
+  expect(sorted.map(isBlobCandidate)).toEqual([false, false, false, true, true]);
+  expect(items).toEqual(original);
+});
+
 test("chooses a compatible output container from codecs", () => {
   expect(chooseHlsContainer("avc1.640028,mp4a.40.2")).toBe("mp4");
   expect(chooseHlsContainer("hvc1.1.6.L120.90,mp4a.40.2")).toBe("mp4");
@@ -83,4 +101,17 @@ test("identifies live LL-HLS parts and DRM key formats", () => {
   expect(manifest.live).toBe(true);
   expect(manifest.hasLowLatencyParts).toBe(true);
   expect(manifest.hasDrmKeyFormat).toBe(true);
+});
+
+test("puts covered resources first after direct downloads and finds better copies of the same video", () => {
+  const poster = "https://pbs.example/thumb/1.jpg";
+  const blob: MediaCandidate = { id: "blob", url: "blob:https://x.example/1", type: "video", width: 640, height: 360, duration: 11, poster: `${poster}?name=small`, detectedAt: 900 };
+  const hls: MediaCandidate = { id: "hls", url: "https://video.example/1.m3u8", type: "hls", poster, detectedAt: 100 };
+  const bare: MediaCandidate = { id: "bare", url: "https://video.example/2.mp4", type: "video", detectedAt: 800 };
+  const large: MediaCandidate = { id: "large", url: "https://video.example/1080.mp4", type: "video", width: 1920, height: 1080, duration: 11.1, detectedAt: 50 };
+  expect(sortCandidates([blob, bare, hls], "detected").map(item => item.id)).toEqual(["hls", "bare", "blob"]);
+  expect(betterAlternative(blob, [blob, hls, bare])).toEqual({ candidate: hls, reason: "downloadable" });
+  expect(betterAlternative(blob, [blob, hls, bare, large])).toEqual({ candidate: large, reason: "resolution" });
+  expect(betterAlternative(large, [blob, hls, large])).toBeNull();
+  expect(betterAlternative(bare, [bare, hls, large])).toBeNull();
 });

@@ -269,9 +269,16 @@ describe("resource preview lifecycle", () => {
     expect(wrapper.text()).toContain("播放预览");
     expect(wrapper.emitted("metadata")?.at(-1)?.[1]).toMatchObject({ duration: 42.5, width: 1920, height: 1080 });
 
-    await wrapper.setProps({ candidates: [{ ...candidate, poster: "https://media.example/poster.jpg", duration: 42.5, width: 1920, height: 1080 }] });
-    await flushPromises();
-    expect(instance.destroyed).toBe(false);
+    const applications = sent.filter(message => message.type === "preview.headers.apply").length;
+    for (let revision = 0; revision < 3; revision++) {
+      await wrapper.setProps({ candidates: [{ ...candidate, poster: "https://media.example/poster.jpg", duration: 42.5, width: 1920, height: 1080 }], viewState: { ...viewState, sortMode: "duration", revision } });
+      await flushPromises();
+      expect(instance.destroyed).toBe(false);
+      expect(wrapper.get("video").element).toBe(video);
+      expect(wrapper.find(".preview-status").exists()).toBe(false);
+      expect(hlsMock.instances).toHaveLength(1);
+    }
+    expect(sent.filter(message => message.type === "preview.headers.apply")).toHaveLength(applications);
 
     await wrapper.get(".preview-play").trigger("click");
     await flushPromises();
@@ -324,6 +331,27 @@ describe("resource preview lifecycle", () => {
     await wrapper.setProps({ coverOnly: true }); await flushPromises();
     expect(second.destroyed).toBe(true);
     expect((wrapper.get('.resource-row .row-check input').element as HTMLInputElement).checked).toBe(true);
+    wrapper.unmount();
+  });
+});
+
+describe("resource guidance", () => {
+  it("points to capture-only entries and to a downloadable copy of the same video", async () => {
+    const poster = "https://pbs.example/thumb.jpg";
+    const blob = { id: "blob", url: "blob:https://x.example/v", type: "video", poster, width: 640, height: 360, duration: 11, pageTitle: "推文视频" };
+    const hls = { id: "hls", url: "https://video.example/v.m3u8", type: "hls", sizeKind: "manifest", poster, pageTitle: "推文视频" };
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    const wrapper = mount(ResourcesView, { props: { candidates: [blob, hls], loading: false, viewState: defaultState("blob"), coverOnly: true, compact: true } });
+    expect(wrapper.get(".capture-hint").text()).toContain("列表底部有 1 个可以「缓存捕捉」的视频");
+    expect(wrapper.get(".capture-hint .term-hint").attributes("title")).toContain("缓存捕捉也能把视频保存到本地");
+    await wrapper.get(".capture-hint").trigger("click");
+    expect(scroll).toHaveBeenCalledTimes(1);
+    expect(wrapper.get(".detail-alternative").text()).toContain("发现可直接下载的同一视频（HLS）");
+    await wrapper.get(".detail-alternative button").trigger("click");
+    expect(wrapper.emitted("updateViewState")?.at(-1)).toEqual([{ expandedId: "hls" }]);
+    await wrapper.setProps({ candidates: [blob] });
+    expect(wrapper.find(".capture-hint").exists()).toBe(false);
     wrapper.unmount();
   });
 });
