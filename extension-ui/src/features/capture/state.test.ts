@@ -129,7 +129,7 @@ describe("capture and deep-search session state", () => {
   });
 });
 describe("capture page guidance and records", () => {
-  afterEach(() => { send.mockReset(); document.body.innerHTML = ""; });
+  afterEach(() => { send.mockReset(); document.body.replaceChildren(); });
   const record = (id: string, state: string, createdAt: number, extra = {}) => ({ id, state, bytes: 1048576, tracks: [], outputs: [], createdAt, pageTitle: `页面 ${id}`, ...extra });
   it("lists records newest first and deletes only after confirmation", async () => {
     let records = [record("old", "complete", 1, { outputs: ["C:\captures\old.mkv"] }), record("new", "partial", 3), record("mid", "interrupted", 2)];
