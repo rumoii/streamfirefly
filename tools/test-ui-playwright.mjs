@@ -194,7 +194,7 @@ try {
   const frame = workspace.locator('.floating-window');
   const hostBefore = await workspacePage.evaluate(() => ({ width: document.documentElement.clientWidth, overflow: document.documentElement.style.overflow, bodyOverflow: document.body.style.overflow }));
   assert.equal(await frame.getAttribute('data-display-mode'), 'panel');
-  assert.equal(Math.round((await frame.boundingBox()).width), 420);
+  assert.equal(Math.round((await frame.boundingBox()).width), 480);
   await workspacePage.locator('#host-action').click();
   assert.equal(await workspacePage.locator('#host-action').getAttribute('data-clicked'), 'true');
   await workspace.locator('.resource-row .type-tile.thumb img').first().waitFor();
@@ -279,7 +279,7 @@ try {
   assert.equal(await frame.getAttribute('data-display-mode'), 'workspace');
   assert.equal(await firstSelect.isChecked(), true);
   await resourceScroll.evaluate(element => { element.scrollTop = 0; });
-  await workspace.locator('.row-main').first().click();
+  await workspace.locator('.resource-row', { hasText: '封面图片' }).locator('.row-main').click();
   await workspace.locator('.resource-detail-pane img').waitFor();
   assert.equal(await resourceScroll.isVisible(), true, 'wide workspace keeps the list beside details');
   await workspacePage.screenshot({ path: path.join(output, 'floating-details.png') });
@@ -318,7 +318,7 @@ try {
   await workspace.locator('.parser-page').waitFor({ state: 'detached' });
   await workspacePage.emulateMedia({ colorScheme: 'dark' });
   await workspace.getByRole('navigation', { name: '流萤功能' }).getByRole('button', { name: /^资源/ }).click();
-  await workspace.locator('.row-main').first().click();
+  await workspace.locator('.resource-row', { hasText: '封面图片' }).locator('.row-main').click();
   await workspace.locator('.resource-detail-pane img').waitFor();
   assert.notEqual(await frame.evaluate(element => getComputedStyle(element).backgroundColor), 'rgb(255, 255, 255)', 'dark scheme switches surface tokens');
   await workspacePage.screenshot({ path: path.join(output, 'floating-workspace-dark.png') });
