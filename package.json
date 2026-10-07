@@ -1,7 +1,7 @@
 {
   "name": "streamfirefly-extension-tools",
   "private": true,
-  "version": "1.0.4",
+  "version": "1.0.5",
   "scripts": {
     "build:extension": "vite build && vite build --config vite.workspace.config.ts && node tools/build-background.mjs",
     "typecheck": "vue-tsc --noEmit",

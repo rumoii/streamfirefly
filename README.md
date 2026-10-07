@@ -19,7 +19,7 @@
 
 流萤由浏览器扩展和 Windows 本地助手两部分组成。扩展在网页里发现视频、音频、图片和 HLS/DASH 清单；本地助手用 Rust 编写，负责下载、排队、断点恢复和 FFmpeg 合并。任务和设置只保存在本机。
 
-当前版本为 1.0.4。流萤不绕过 DRM，请只下载你拥有版权或已获授权的内容。
+当前版本为 1.0.5。流萤不绕过 DRM，请只下载你拥有版权或已获授权的内容。
 
 流萤分为两个发行版，源码相同：
 
@@ -224,7 +224,7 @@ npm run package:firefox              # Firefox 测试用 XPI（未签名）
 - [模块化发现与工具集成](docs/development/modular-discovery.md)
 - [外部工具与 URL 提取](docs/development/tools-and-extraction.md)
 - [设计决策](docs/decisions/README.md)
-- [版本说明](docs/releases/1.0.4.md)
+- [版本说明](docs/releases/1.0.5.md)
 
 ## 隐私
 
