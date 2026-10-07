@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, ref, toRef, watch } from "vue";
+import { computed, onMounted, ref, toRef, watch } from "vue";
 import type { UiContext } from "../../types";
 import type { CaptureSnapshot } from "../../../../shared/capture";
 import { createCaptureState } from "../capture/state";
 import { sessionError } from "../session-client";
 import { configurationRequest } from "./client";
+import { readSettings } from "../settings/state";
 import SfIcon from "../../ui/SfIcon.vue";
 import SfSelect from "../../ui/SfSelect.vue";
 import SfDialog from "../../ui/SfDialog.vue";
@@ -22,6 +23,8 @@ const guidance = computed(() => {
   if (phase.value === "failed") return `这次录制没有成功：${sessionError(lastSession.value?.error || "capture_disconnected")}`;
   return acknowledged.value ? "点“一键捕捉”后，来源页会自动刷新并从头录制。" : "先勾选下面的授权说明，再点“一键捕捉”。";
 });
+const fallbackDirectory = "%LOCALAPPDATA%\\StreamFirefly\\captures", defaultDirectory = ref("");
+onMounted(async () => { try { defaultDirectory.value = (await readSettings()).saveDir.trim(); } catch { defaultDirectory.value = ""; } });
 const advancedOpen = ref(false);
 watch(() => [blobUnconfirmed.value, renewed.value && !restarting.value && !active.value && catalog.value.sources.length > 1], needs => { if (needs.some(Boolean)) advancedOpen.value = true; });
 const pendingDelete = ref<CaptureSnapshot | null>(null);
@@ -76,7 +79,7 @@ defineExpose({ scan });
           <p v-if="blobUnconfirmed" class="tool-notice">未确认对应此 Blob，将捕捉手动选择的媒体源。</p>
           <div class="capture-source-row"><div class="field"><span>媒体源</span><SfSelect v-model="selected" :options="sourceOptions" label="媒体源" :disabled="busy || !!active || selectionLocked" /></div><button class="button" :disabled="busy || !context?.supported || !!active" @click="scan"><SfIcon name="radar-2" /><span>扫描媒体源</span></button></div>
           <p v-for="frame in catalog.frames.filter(item => item.state !== 'ready' && item.state !== 'unsupported')" :key="frame.frameId" class="feature-note">框架 {{ frame.frameId }} · {{ frame.url }}：{{ sessionError(frame.error) }}</p>
-          <label class="field"><span>保存目录（留空使用默认目录）</span><input v-model="directory" class="control" :disabled="busy || !!active" placeholder="绝对路径"></label>
+          <label class="field"><span>保存目录（留空使用设置中的保存目录）</span><input v-model="directory" class="control" :disabled="busy || !!active" :placeholder="defaultDirectory || fallbackDirectory"></label>
           <div class="feature-row"><button class="button" :disabled="busy || restarting || !context?.supported || !selected || !acknowledged || !!active" @click="start()"><SfIcon name="capture" /><span>开始捕捉</span></button><button class="button" :disabled="busy || !active || !['armed', 'capturing'].includes(active.state)" @click="replay"><SfIcon name="player-play" /><span>从头捕获</span></button><button class="button ghost" @click="refresh"><SfIcon name="refresh" /><span>刷新会话</span></button></div>
         </div>
       </details>

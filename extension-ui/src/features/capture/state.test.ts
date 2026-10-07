@@ -3,12 +3,23 @@ import CapturePanel from "../configuration/CapturePanel.vue";
 import DeepSearchPanel from "../configuration/DeepSearchPanel.vue";
 import type { UiContext } from "../../types";
 const send = vi.fn();
-vi.mock("../../api", () => ({ sendMessage: (message: unknown) => send(message), surfaceFromUrl: () => "options" }));
+const storage = vi.hoisted(() => ({ saved: {} as Record<string, unknown> }));
+vi.mock("../../api", () => ({ sendMessage: (message: unknown) => send(message), surfaceFromUrl: () => "options", extensionApi: () => ({ storage: { local: { get: async () => storage.saved } } }) }));
 const context = { sourceTabId: 1, sourceContextId: "page", pageUrl: "https://main.test", supported: true } as UiContext;
 const source = { id: "1", frameId: 2, documentToken: "doc", url: "https://frame.test", tracks: ["video/mp4"], state: "open", objectUrls: ["blob:https://main.test/video"] };
 const deepState = { enabled: false, siteRemembered: true, requiresReload: false, frames: [{ frameId: 2, url: source.url, state: "disabled" }], keys: [] };
 describe("capture and deep-search session state", () => {
-  afterEach(() => { send.mockReset(); });
+  afterEach(() => { send.mockReset(); storage.saved = {}; });
+  it("shows the settings save directory as the capture directory default", async () => {
+    send.mockImplementation(async message => message.type === "capture.list" ? { ok: true, value: [] } : { ok: true, value: { sources: [], frames: [] } });
+    const directoryInput = (wrapper: ReturnType<typeof mount>) => wrapper.findAll("label.field").find(label => label.text().includes("保存目录"))!.get("input");
+    const fallback = mount(CapturePanel, { props: { context } }); await flushPromises();
+    expect(directoryInput(fallback).attributes("placeholder")).toBe("%LOCALAPPDATA%\\StreamFirefly\\captures"); fallback.unmount();
+    storage.saved = { saveDir: " D:\\Media " };
+    const configured = mount(CapturePanel, { props: { context } }); await flushPromises();
+    expect(directoryInput(configured).attributes("placeholder")).toBe("D:\\Media");
+    expect((directoryInput(configured).element as HTMLInputElement).value).toBe(""); configured.unmount();
+  });
   it("selects a single iframe and preserves the source identity in start and stop", async () => {
     let active = false;
     send.mockImplementation(async message => {

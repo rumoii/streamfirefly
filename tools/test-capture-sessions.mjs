@@ -35,6 +35,7 @@ assert.equal(catalog.sources.length, 2); assert.equal(catalog.frames.find(frame 
 const source = catalog.sources.find(item => item.frameId === 2), payload = { tabId: 1, sourceContextId: 'page', source };
 assert.deepEqual(source.objectUrls, ['blob:https://frame.test/source-2']);
 const opened = await coordinator.open(payload);
+assert.equal(calls.find(call => call.type === 'capture.open').payload.directory, '');
 assert.equal(calls.find(call => call.type === 'capture.start').frameId, 2);
 assert.equal(calls.find(call => call.type === 'capture.transport.open').payload.documentToken, 'frame-document');
 await assert.rejects(coordinator.open(payload), /capture_already_open/);
@@ -68,6 +69,12 @@ const freshSession = await fresh; releaseOpen = undefined;
 await coordinator.interrupted(1, 2, 'frame-document', freshSession.id);
 assert.equal(timers.size, 0);
 await assert.rejects(coordinator.open({ ...payload, objectUrl: 'blob:https://frame.test/missing' }), /capture_source_unavailable/);
+const lastOpenDirectory = () => calls.filter(call => call.type === 'capture.open').at(-1).payload.directory;
+const settingsCoordinator = factory({ ...api, storage: { local: { get: async () => ({ saveDir: ' D:\\Downloads ' }) } } }, native, { ensureDocument: async () => {} }, { loadTabState: async () => ({ sourceContextId: context }) });
+const settingsSession = await settingsCoordinator.open(payload); assert.equal(lastOpenDirectory(), 'D:\\Downloads');
+await settingsCoordinator.close(1, settingsSession.id);
+const explicitSession = await settingsCoordinator.open({ ...payload, directory: 'E:\\Captures' }); assert.equal(lastOpenDirectory(), 'E:\\Captures');
+await settingsCoordinator.close(1, explicitSession.id);
 const sockets = [];
 class Socket {
   constructor() { sockets.push(this); this.readyState = 1; }

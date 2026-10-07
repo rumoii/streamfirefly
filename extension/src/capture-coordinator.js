@@ -12,6 +12,10 @@ export function createCaptureCoordinator(api, nativeRequest, evaluation, resourc
     if (!result?.ok) throw new Error(result?.error || "capture_transport_failed");
     return result.value;
   }
+  async function savedDirectory() {
+    try { const stored = await api.storage?.local?.get("saveDir"); return typeof stored?.saveDir === "string" ? stored.saveDir.trim() : ""; }
+    catch { return ""; }
+  }
   async function identity(tabId, frameId) {
     const result = await api.tabs.sendMessage(tabId, { type: "capture.identity" }, { frameId });
     if (!result?.ok || typeof result.documentToken !== "string" || !result.documentToken) throw new Error("capture_document_unavailable");
@@ -89,7 +93,8 @@ export function createCaptureCoordinator(api, nativeRequest, evaluation, resourc
       if (!prepared?.ok) throw new Error("capture_document_changed");
       await check();
       const page = await resources.loadTabState(payload.tabId), tab = await Promise.resolve().then(() => api.tabs.get(payload.tabId)).catch(() => null);
-      const result = await nativeRequest("capture.open", { origin: api.runtime.getURL("").replace(/\/$/, ""), directory: payload.directory || "", pageTitle: pageTitleFor(tab) || "", pageUrl: page.pageUrl || "" });
+      const directory = (typeof payload.directory === "string" ? payload.directory.trim() : "") || await savedDirectory();
+      const result = await nativeRequest("capture.open", { origin: api.runtime.getURL("").replace(/\/$/, ""), directory, pageTitle: pageTitleFor(tab) || "", pageUrl: page.pageUrl || "" });
       if (!result.ok) throw new Error(result.error || "capture_open_failed");
       session = { ...result.value, tabId: payload.tabId, source: found, state: "armed", restartOperation: payload.restartOperation };
       operation.id = session.id;
