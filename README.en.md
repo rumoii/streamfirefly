@@ -118,6 +118,8 @@ cargo build --release --manifest-path native-host/Cargo.toml
 
 By default, sniffing only runs while StreamFirefly is open. If the list is empty, play the video first. If it is still empty, reload the page and open StreamFirefly again, or set sniffing to "always" in the settings.
 
+> **Tip: turn on deep search.** Deep search is off by default. When it is on, StreamFirefly also finds video manifests that pages generate with scripts, so more resources show up. On the Resources tab, click the radar icon in the toolbar → **开启深搜** (Turn on), then reload the page. Tick **记住此站点** (Remember this site) for sites you use often.
+
 ### Floating window
 
 - The panel starts at 480×640px. The expanded workspace starts 1120px wide and 80% of the visible page tall, and shrinks when there is less room.
