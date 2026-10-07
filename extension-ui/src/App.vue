@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, provide, ref, watch } from "vue";
 import { surfaceFromUrl } from "./api";
 import { useAppStore, humanError } from "./store";
 import type { MediaCandidate } from "./types";
@@ -11,12 +11,15 @@ import SettingsView from "./components/SettingsView.vue";
 import DispatchView from "./features/configuration/DispatchView.vue";
 import CaptureView from "./features/configuration/CaptureView.vue";
 import ResourceTools from "./features/configuration/ResourceTools.vue";
+import DeepSearchHint from "./features/configuration/DeepSearchHint.vue";
+import { createDeepSearchState, deepSearchKey } from "./features/deep-search/state";
 import { openCapture, openDispatch } from "./features/configuration/client";
 import DownloadDialog from "./components/DownloadDialog.vue";
 import TaskOverview from "./components/TaskOverview.vue";
 import SfIcon from "./ui/SfIcon.vue";
 
 const store = useAppStore();
+provide(deepSearchKey, createDeepSearchState(computed(() => store.context)));
 const surface = surfaceFromUrl();
 const isOptions = computed(() => surface === "options");
 const isDispatch = new URLSearchParams(location.search).has("dispatch");
@@ -57,7 +60,7 @@ onBeforeUnmount(() => { store.dispose(); clearTimeout(toastTimer); });
         <span><SfIcon name="plug-connected-x" :size="22" /></span><h2>当前页面不支持嗅探</h2><p>浏览器内部页面、扩展页面和本地受限页面不能读取媒体请求，也不能展开工作区。</p>
       </div>
       <template v-else>
-        <ResourcesView :connected="store.connection === 'ready'" @batch-download="batchCandidates = $event" :candidates="store.candidates" :loading="store.loading" :view-state="store.resourceViewState" compact cover-only @download="openDownload" @capture-blob="captureBlob" @parse="openParser" @inspect="candidate => guard(() => store.openWorkspace('resources', candidate.id))" @remove="guard(() => store.removeCandidates($event), '已从列表移除资源')" @update-view-state="patch => guard(() => store.patchResourceView(patch))" @metadata="(candidate, metadata) => guard(() => store.updateCandidateMetadata(candidate, metadata))" :external-enabled="Boolean(store.context?.supported)" @external-download="sendExternal"><template #header-tools><ResourceTools :context="store.context" /></template></ResourcesView>
+        <ResourcesView :connected="store.connection === 'ready'" @batch-download="batchCandidates = $event" :candidates="store.candidates" :loading="store.loading" :view-state="store.resourceViewState" compact cover-only @download="openDownload" @capture-blob="captureBlob" @parse="openParser" @inspect="candidate => guard(() => store.openWorkspace('resources', candidate.id))" @remove="guard(() => store.removeCandidates($event), '已从列表移除资源')" @update-view-state="patch => guard(() => store.patchResourceView(patch))" @metadata="(candidate, metadata) => guard(() => store.updateCandidateMetadata(candidate, metadata))" :external-enabled="Boolean(store.context?.supported)" @external-download="sendExternal"><template #header-tools><ResourceTools :context="store.context" /></template><template #hints><DeepSearchHint :context="store.context" /></template></ResourcesView>
         <TaskOverview :source-tasks="store.sourceTasks" :active-tasks="store.activeTasks" />
       </template>
     </main>

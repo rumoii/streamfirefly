@@ -354,4 +354,11 @@ describe("resource guidance", () => {
     expect(wrapper.find(".capture-hint").exists()).toBe(false);
     wrapper.unmount();
   });
+  it("renders extra hints below the capture hint once loading finishes", async () => {
+    const wrapper = mount(ResourcesView, { props: { candidates: [], loading: true, viewState: defaultState(), compact: true }, slots: { hints: '<p class="extra-hint">提示</p>' } });
+    expect(wrapper.find(".extra-hint").exists()).toBe(false);
+    await wrapper.setProps({ loading: false });
+    expect(wrapper.get(".extra-hint").text()).toBe("提示");
+    wrapper.unmount();
+  });
 });

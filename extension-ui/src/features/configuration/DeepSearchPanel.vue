@@ -1,19 +1,19 @@
 <script setup lang="ts">
-import { computed, ref, toRef } from "vue";
+import { computed, inject, toRef } from "vue";
 import SfDialog from "../../ui/SfDialog.vue";
 import SfIcon from "../../ui/SfIcon.vue";
 import type { UiContext } from "../../types";
-import { createDeepSearchState } from "../deep-search/state";
+import { createDeepSearchState, deepSearchKey } from "../deep-search/state";
 const props = defineProps<{ context: UiContext | null }>();
-const { state, remember, busy, message, hasError, refresh, toggle } = createDeepSearchState(toRef(props, "context"));
-const detailsOpen = ref(false);
+const { state, remember, busy, message, hasError, dialogOpen: detailsOpen, refresh, toggle } = inject(deepSearchKey, null) ?? createDeepSearchState(toRef(props, "context"));
 const failed = computed(() => state.value.frames.filter(frame => frame.state === "failed"));
+// The toolbar only shows a dot; the hint row under the toolbar explains what to do.
+const status = computed(() => !state.value.enabled ? "未开启" : failed.value.length ? `已开启，${failed.value.length} 个框架异常` : state.value.requiresReload ? "已开启，需刷新页面" : "已开启");
 const labels = { ready: "探针已运行", disabled: "未开启", failed: "注入失败", unsupported: "不支持此框架" };
 </script>
 <template>
   <div v-if="context?.supported" class="deep-search-actions">
-    <button class="icon-button deep-search-trigger" :class="{ enabled: state.enabled, warning: failed.length || state.requiresReload }" aria-haspopup="dialog" :aria-expanded="detailsOpen" :aria-label="`深度搜索（${state.enabled ? '已开启' : '未开启'}）`" :title="`深度搜索：${state.enabled ? '已开启' : '未开启'}`" @click="detailsOpen = true"><SfIcon name="radar-2" /><i aria-hidden="true"></i></button>
-    <span v-if="failed.length || state.requiresReload" class="probe-failure probe-status" role="status">{{ failed.length ? failed.length + ' 个框架异常' : '需刷新页面' }}</span>
+    <button class="icon-button deep-search-trigger" :class="{ enabled: state.enabled, warning: failed.length || state.requiresReload }" aria-haspopup="dialog" :aria-expanded="detailsOpen" :aria-label="`深度搜索（${status}）`" :title="`深度搜索：${status}`" @click="detailsOpen = true"><SfIcon name="radar-2" /><i aria-hidden="true"></i></button>
     <span v-if="hasError" class="resource-tool-error" role="alert">{{ message }}</span>
     <SfDialog v-if="detailsOpen" title="深度搜索" :description="`${state.enabled ? '已开启' : '未开启'} · ${state.frames.filter(frame => frame.state === 'ready').length}/${state.frames.length} 个框架就绪`" close-label="关闭深搜详情" size="lg" @close="detailsOpen = false">
       <div class="deep-search-settings"><label class="remember-site"><input v-model="remember" type="checkbox" class="checkbox" :disabled="busy">记住此站点（下次切换时应用）</label><button class="button" :disabled="busy" @click="refresh"><SfIcon name="refresh" /><span>刷新状态</span></button><button class="button primary" :disabled="busy" @click="toggle">{{ state.enabled ? '关闭深搜' : '开启深搜' }}</button></div>

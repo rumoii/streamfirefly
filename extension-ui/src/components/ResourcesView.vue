@@ -379,6 +379,7 @@ onBeforeUnmount(() => { void disposePreview(); });
       </div>
     </div>
     <button v-if="!loading && showCaptureHint" type="button" class="capture-hint" @click="scrollToCapture"><SfIcon name="info-circle" /><span>找不到能下载的视频？列表底部有 {{ captureCount }} 个可以<span class="term-hint" :title="captureExplanation">「缓存捕捉」</span>的视频</span><SfIcon name="chevron-down" /></button>
+    <slot v-if="!loading" name="hints" />
     <div v-if="filtered.error" class="inline-error">{{ filtered.error }}</div>
     <div class="resource-body">
       <div class="resource-list">

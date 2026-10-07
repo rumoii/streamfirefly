@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from "vue";
 import { useAppStore, humanError } from "./store";
 import type { DownloadTask, MediaCandidate } from "./types";
 import FloatingShell from "./components/FloatingShell.vue";
@@ -11,12 +11,15 @@ import ConnectionBanner from "./components/ConnectionBanner.vue";
 import DownloadsView from "./components/DownloadsView.vue";
 import SettingsView from "./components/SettingsView.vue";
 import ResourceTools from "./features/configuration/ResourceTools.vue";
+import DeepSearchHint from "./features/configuration/DeepSearchHint.vue";
+import { createDeepSearchState, deepSearchKey } from "./features/deep-search/state";
 import { openCapture, openDispatch } from "./features/configuration/client";
 import DownloadDialog from "./components/DownloadDialog.vue";
 import DashParserView from "./components/DashParserView.vue";
 import HlsParserView from "./components/HlsParserView.vue";
 
 const store = useAppStore();
+provide(deepSearchKey, createDeepSearchState(computed(() => store.context)));
 const floating = ref<InstanceType<typeof FloatingShell> | null>(null);
 const settingsView = ref<InstanceType<typeof SettingsView> | null>(null);
 const displayMode = ref<DisplayMode>("panel");
@@ -98,7 +101,7 @@ onBeforeUnmount(() => { disposed = true; store.dispose(); clearTimeout(toastTime
     <main class="app-content" :class="{ 'parser-content': tab === 'parser', 'resource-content': tab === 'resources' || tab === 'downloads' }">
       <ConnectionBanner :state="store.connection" :error="store.connectionError" @retry="store.refresh" />
       <div v-if="store.error" class="status-banner error">{{ store.error }}</div>
-        <ResourcesView v-show="tab === 'resources'" key="resources" :compact="isPanel" :suspended="suspended || tab !== 'resources'" :connected="store.connection === 'ready'" @batch-download="batchCandidates = $event" :candidates="store.candidates" :loading="store.loading" :view-state="store.resourceViewState" @download="openDownload" @capture-blob="captureBlob" @parse="openParser" @remove="guard(() => store.removeCandidates($event), '已从列表移除资源')" @update-view-state="patch => guard(() => store.patchResourceView(patch))" @metadata="(candidate, metadata) => guard(() => store.updateCandidateMetadata(candidate, metadata))" :external-enabled="Boolean(store.context?.supported)" @external-download="sendExternal"><template #header-tools><ResourceTools :context="store.context" /></template></ResourcesView>
+        <ResourcesView v-show="tab === 'resources'" key="resources" :compact="isPanel" :suspended="suspended || tab !== 'resources'" :connected="store.connection === 'ready'" @batch-download="batchCandidates = $event" :candidates="store.candidates" :loading="store.loading" :view-state="store.resourceViewState" @download="openDownload" @capture-blob="captureBlob" @parse="openParser" @remove="guard(() => store.removeCandidates($event), '已从列表移除资源')" @update-view-state="patch => guard(() => store.patchResourceView(patch))" @metadata="(candidate, metadata) => guard(() => store.updateCandidateMetadata(candidate, metadata))" :external-enabled="Boolean(store.context?.supported)" @external-download="sendExternal"><template #header-tools><ResourceTools :context="store.context" /></template><template #hints><DeepSearchHint :context="store.context" /></template></ResourcesView>
       <Transition name="page" mode="out-in">
         <component :is="parserCandidate?.type === 'dash' ? DashParserView : HlsParserView" v-if="tab === 'parser' && !suspended && parserCandidate && store.context" :key="parserCandidate.id" :candidate="parserCandidate" :context="store.context" :connected="store.connection === 'ready'" :capabilities="store.capabilities" :save-dir="store.settings.saveDir" :download-threads="store.settings.downloadThreads" @back="parserCandidate = null" @created="message => { showToast(message); navigate('downloads'); }" />
         <DownloadsView v-else-if="tab === 'downloads'" key="downloads" :compact="isPanel" :connected="store.connection === 'ready'" :tasks="store.tasks" :source-tasks="store.sourceTasks" @control="(task, action, context) => guard(() => store.controlTask(task, action, context))" @delete="handleDelete" />
