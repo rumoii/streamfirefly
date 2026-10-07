@@ -1,6 +1,6 @@
 # Chrome Web Store 商店资料
 
-条目：流萤 StreamFirefly，扩展 ID `ooblmahffkiimlflhdnfojjemlibmhhj`，上传包 `release/StreamFirefly-chrome-store-1.0.3.zip`（`package-extension.ps1 -Edition chrome-store` 生成）。公开范围为公开。上传草稿的步骤见 [商店草稿准备](../docs/development/browser-stores.md)。
+条目：流萤 StreamFirefly，扩展 ID `ooblmahffkiimlflhdnfojjemlibmhhj`，上传包 `release/StreamFirefly-chrome-store-1.0.4.zip`（`package-extension.ps1 -Edition chrome-store` 生成）。公开范围为公开。上传草稿的步骤见 [商店草稿准备](../docs/development/browser-stores.md)。
 
 ## 商品详情
 
@@ -90,7 +90,7 @@
 ```text
 无需账号。下载功能需要 Windows 本地助手。
 1. 在 Windows 11 上安装扩展后，设置页会显示“一键安装本地下载助手”。点击“复制安装命令”。
-2. 按 Win+R，粘贴并回车。命令从 https://github.com/rumoii/streamfirefly/releases/tag/v1.0.3 下载并校验本地助手，安装后扩展自动连接。
+2. 按 Win+R，粘贴并回车。命令从 https://github.com/rumoii/streamfirefly/releases/tag/v1.0.4 下载并校验本地助手，安装后扩展自动连接。
 3. 打开 https://developer.mozilla.org/en-US/docs/Web/HTML/Element/video
 4. 点击流萤图标打开侧栏，资源列表显示页面媒体；点“下载”后在“下载”页查看进度。
 未安装助手时仍可识别和预览媒体，但无法下载。
@@ -100,5 +100,5 @@
 
 ## 提交审核前
 
-- 仓库公开、v1.0.3 Release 发布后，用无痕窗口确认隐私政策、首页、支持、Release 四个地址都能公开访问，然后再提交审核。
+- 仓库公开、v1.0.4 Release 发布后，用无痕窗口确认隐私政策、首页、支持、Release 四个地址都能公开访问，然后再提交审核。
 - 宣传图上的“开源透明”在仓库公开后才成立，届时复核。
