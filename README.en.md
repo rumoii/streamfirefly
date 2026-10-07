@@ -17,7 +17,7 @@ The current version is 1.0.4. The interface is currently in Simplified Chinese. 
 StreamFirefly ships in two editions built from the same source:
 
 - **General edition**: no site restrictions. Distributed through GitHub Releases with the Chrome/Edge extension, the signed Firefox add-on and the Windows native helper. Whether a site can be detected and downloaded still depends on the site.
-- **Chrome Web Store edition**: following Chrome Web Store policy, it does not detect or download YouTube content.
+- **Chrome Web Store edition**: following Chrome Web Store policy, it does not detect or download YouTube content. (Still under review, so it may not be found in the store yet.)
 
 ## Features
 
@@ -78,7 +78,7 @@ Screenshots come from the automated UI tests and show test data.
 
 ### One-click install (recommended)
 
-1. Install the extension: Chrome users install it from the Chrome Web Store; for other browsers or the general edition, see the [installation guide](INSTALL.md) (in Chinese).
+1. Install the extension: the Chrome Web Store edition is still under review, so until it is approved install the general edition from the [installation guide](INSTALL.md) (in Chinese); other browsers use the same guide.
 2. The settings page opens after installation. Click **复制安装命令** (copy install command), press <kbd>Win</kbd> + <kbd>R</kbd>, paste and press Enter.
 3. The command downloads the native helper matching the extension version, verifies its SHA-256 and installs it for the current user without administrator rights. The extension then connects automatically.
 
