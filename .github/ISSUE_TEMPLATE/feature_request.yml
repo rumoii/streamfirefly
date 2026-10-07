@@ -1,0 +1,43 @@
+name: 功能建议 / Feature request
+description: 建议新功能或改进现有功能
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        English requests are welcome.
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 已搜索[已有 issue](https://github.com/rumoii/streamfirefly/issues?q=is%3Aissue)，包括已关闭的，没有重复
+          required: true
+        - label: 了解流萤不绕过 DRM，也不接受规避平台限制的需求
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 想解决什么问题
+      description: 描述你遇到的场景，以及现在哪里不方便。
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 设想的做法
+      description: 希望流萤怎样处理。
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: 现在的替代办法
+      description: 目前是怎么绕过这个问题的，或者其他工具是怎么做的。
+
+  - type: textarea
+    id: examples
+    attributes:
+      label: 相关网站或示例

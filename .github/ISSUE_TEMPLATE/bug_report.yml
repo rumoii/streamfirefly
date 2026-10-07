@@ -1,0 +1,121 @@
+name: 问题报告 / Bug report
+description: 流萤识别不到资源、下载失败或出现其他异常
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。信息越完整，越容易定位问题；缺少必填信息的 issue 可能无法处理。
+        English reports are welcome.
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 扩展和本地助手都已更新到[最新版](https://github.com/rumoii/streamfirefly/releases/latest)，并且两者版本一致
+          required: true
+        - label: 已搜索[已有 issue](https://github.com/rumoii/streamfirefly/issues?q=is%3Aissue)，包括已关闭的，没有重复
+          required: true
+        - label: 已看过 README 的[支持范围](https://github.com/rumoii/streamfirefly#支持范围)，问题内容不是 DRM 或 SAMPLE-AES 加密内容
+          required: true
+        - label: 这个 issue 只报告一个问题
+          required: true
+
+  - type: dropdown
+    id: edition
+    attributes:
+      label: 发行版
+      options:
+        - 通用版（Chrome / Edge）
+        - 通用版（Firefox）
+        - Chrome 应用商店版
+        - 从源码构建
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 流萤版本
+      description: 在流萤“设置 → 常规 → 版本”中查看。
+      placeholder: "1.0.5"
+    validations:
+      required: true
+
+  - type: input
+    id: browser
+    attributes:
+      label: 浏览器及版本
+      placeholder: Chrome 141.0.7390.55
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Windows 版本与架构
+      placeholder: Windows 11 24H2 x64
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 问题类型
+      options:
+        - 识别不到资源
+        - 下载失败或下载结果不对
+        - HLS / DASH 解析
+        - 缓存捕捉 / 直播录制
+        - 本地助手安装或连接
+        - 界面显示或操作
+        - 其他
+    validations:
+      required: true
+
+  - type: input
+    id: url
+    attributes:
+      label: 出问题的网页地址
+      description: 很多问题只在特定网站出现，请尽量提供具体地址。不方便公开时写明原因。
+      placeholder: https://example.com/video/123
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 从打开网页开始，一步步写出怎样能触发这个问题。
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果
+      description: 发生了什么。界面上有报错的话，请照原文贴出来。
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望结果
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 诊断报告
+      description: |
+        打开扩展设置页（网页内工作区的“设置 → 高级设置 → 打开扩展设置”，或浏览器扩展管理里的“扩展选项”），在“常规 → 问题反馈”中点“导出诊断报告”，把导出的 JSON 文件拖到这里。
+        注意：issue 是公开的。诊断报告已去掉视频地址的查询参数，并把 Windows 用户目录替换为 %USERPROFILE%，但保留了网页地址和标题，提交前请检查，不想公开的内容可以先删掉。
+      placeholder: 把诊断报告 JSON 文件拖到这里，或说明无法导出的原因。
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 截图或其他补充

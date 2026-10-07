@@ -214,6 +214,8 @@ Most documents are in Chinese.
 
 - [Installation guide](INSTALL.md)
 - [Privacy policy](PRIVACY.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
 - [DASH on-demand notes](docs/development/dash-vod.md)
 - [Modular discovery and tool integration](docs/development/modular-discovery.md)
 - [External tools and URL extraction](docs/development/tools-and-extraction.md)

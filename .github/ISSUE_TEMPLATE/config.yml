@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安装指南 / Installation guide
+    url: https://github.com/rumoii/streamfirefly/blob/main/INSTALL.md
+    about: 扩展装不上、本地助手连不上，先按安装指南检查一遍。
+  - name: 报告安全漏洞 / Report a security vulnerability
+    url: https://github.com/rumoii/streamfirefly/security/advisories/new
+    about: 安全问题请私下报告，不要开公开 issue。见 SECURITY.md。

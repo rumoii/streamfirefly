@@ -220,6 +220,8 @@ npm run package:firefox              # Firefox 测试用 XPI（未签名）
 
 - [安装指南](INSTALL.md)
 - [隐私政策](PRIVACY.md)
+- [贡献指南](CONTRIBUTING.md)
+- [安全策略](SECURITY.md)
 - [DASH 点播开发说明](docs/development/dash-vod.md)
 - [模块化发现与工具集成](docs/development/modular-discovery.md)
 - [外部工具与 URL 提取](docs/development/tools-and-extraction.md)
