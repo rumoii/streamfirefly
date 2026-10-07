@@ -1,4 +1,4 @@
-# StreamFirefly 1.0.3 安装指南
+# StreamFirefly 1.0.4 安装指南
 
 流萤由两部分组成，两部分都要装好才能下载视频：
 
@@ -26,7 +26,7 @@
 
 ### 方式 B：通用版（Chrome / Edge，所有网站都能用）
 
-1. 打开 [最新版本下载页](https://github.com/rumoii/streamfirefly/releases/latest)，在页面下方的 Assets 里点击 `StreamFirefly-extension-1.0.3.zip` 下载。
+1. 打开 [最新版本下载页](https://github.com/rumoii/streamfirefly/releases/latest)，在页面下方的 Assets 里点击 `StreamFirefly-extension-1.0.4.zip` 下载。
 2. 在下载的压缩包上点右键 →“全部解压缩”，**把解压出来的文件夹放到一个不会被删除的位置**，比如 `D:\软件\流萤`。
    > 这个文件夹就是扩展本身，以后**不要删除或移动它**，否则扩展会失效。
 3. 打开扩展管理页：Chrome 在地址栏输入 `chrome://extensions`，Edge 输入 `edge://extensions`，回车。
@@ -38,7 +38,7 @@
 
 ### 方式 C：Firefox
 
-1. 打开 [最新版本下载页](https://github.com/rumoii/streamfirefly/releases/latest)，下载 `StreamFirefly-firefox-1.0.3-signed.xpi`。
+1. 打开 [最新版本下载页](https://github.com/rumoii/streamfirefly/releases/latest)，下载 `StreamFirefly-firefox-1.0.4-signed.xpi`。
 2. 在 Firefox 地址栏输入 `about:addons` 回车，点右上角齿轮 →“从文件安装附加组件”，选择刚下载的文件，按提示确认。
 
 ## 第二步：一键安装本地下载助手
@@ -99,7 +99,7 @@
 2. 按 <kbd>Win</kbd> + <kbd>R</kbd>，粘贴下面这行并回车，卸载本地助手：
 
    ```text
-   powershell -ep Bypass -f "%LOCALAPPDATA%\StreamFirefly\package\1.0.3\tools\uninstall.ps1"
+   powershell -ep Bypass -f "%LOCALAPPDATA%\StreamFirefly\package\1.0.4\tools\uninstall.ps1"
    ```
 
 3. 在浏览器的扩展管理页移除流萤。

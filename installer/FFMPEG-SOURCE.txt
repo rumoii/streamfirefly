@@ -6,8 +6,8 @@ licensed under the GNU Lesser General Public License version 2.1 or later
 executable invoked by StreamFirefly.
 
 Corresponding source (same Release as these binaries):
-https://github.com/rumoii/streamfirefly/releases/tag/v1.0.3
-Download StreamFirefly-ffmpeg-source-1.0.3.tar. It contains the unmodified
+https://github.com/rumoii/streamfirefly/releases/tag/v1.0.4
+Download StreamFirefly-ffmpeg-source-1.0.4.tar. It contains the unmodified
 upstream ffmpeg-8.1.3.tar.xz, the build recipe (recipe/build.sh with the
 complete configure options, recipe/ffmpeg-lgpl.json with pinned source,
 toolchain and binary SHA-256 values) and README.txt with rebuild steps.
