@@ -6,7 +6,14 @@
 
 Local-first media discovery and download for the web
 
-[简体中文](README.md) | English
+[![Release](https://img.shields.io/github/v/release/rumoii/streamfirefly?color=2a8f7b)](https://github.com/rumoii/streamfirefly/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/rumoii/streamfirefly/total?color=2a8f7b)](https://github.com/rumoii/streamfirefly/releases)
+[![Stars](https://img.shields.io/github/stars/rumoii/streamfirefly?color=2a8f7b)](https://github.com/rumoii/streamfirefly/stargazers)
+[![License](https://img.shields.io/github/license/rumoii/streamfirefly)](LICENSE)
+![Browsers](https://img.shields.io/badge/browsers-Chrome%20%C2%B7%20Edge%20%C2%B7%20Firefox-4b6b8a)
+![Platform](https://img.shields.io/badge/platform-Windows%2011-4b6b8a)
+
+**[Download](https://github.com/rumoii/streamfirefly/releases/latest)** · [Installation guide](INSTALL.md) (Chinese) · [Usage](#usage) · [Privacy](PRIVACY.md) · [简体中文](README.md)
 
 </div>
 
@@ -32,21 +39,16 @@ StreamFirefly ships in two editions built from the same source:
 
 ## Screenshots
 
-<p align="center">
-  <img src="store-assets/screenshot-popup.png" width="820" alt="Resource list"><br>Resource list
-</p>
-
-<p align="center">
-  <img src="store-assets/screenshot-downloads.png" width="820" alt="Download tasks"><br>Download tasks
-</p>
-
-<p align="center">
-  <img src="store-assets/screenshot-workspace.png" width="820" alt="Floating workspace"><br>Floating workspace
-</p>
-
-<p align="center">
-  <img src="store-assets/screenshot-hls.png" width="820" alt="HLS parser"><br>HLS parser
-</p>
+<table>
+  <tr>
+    <td align="center"><img src="store-assets/screenshot-popup.png" width="420" alt="Resource list"><br>Resource list</td>
+    <td align="center"><img src="store-assets/screenshot-downloads.png" width="420" alt="Download tasks"><br>Download tasks</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="store-assets/screenshot-workspace.png" width="420" alt="Floating workspace"><br>Floating workspace</td>
+    <td align="center"><img src="store-assets/screenshot-hls.png" width="420" alt="HLS parser"><br>HLS parser</td>
+  </tr>
+</table>
 
 Screenshots come from the automated UI tests and show test data.
 
@@ -118,7 +120,7 @@ By default, sniffing only runs while StreamFirefly is open. If the list is empty
 
 ### Floating window
 
-- The panel starts at 420×640px. The expanded workspace starts 1120px wide and 80% of the visible page tall, and shrinks when there is less room.
+- The panel starts at 480×640px. The expanded workspace starts 1120px wide and 80% of the visible page tall, and shrinks when there is less room.
 - Drag the title bar to move the window and drag an edge or corner to resize it. When collapsed, the small launcher snaps to the nearest side. Size and position are stored in the extension's local `floatingUiLayout` setting.
 - Collapsing keeps the launcher and keeps sniffing, but stops previews in the panel. Closing removes the launcher; downloads that have started keep running.
 - "Back to panel" in the title bar returns to the panel, and a maximized window can be restored. Inside the window, Escape closes an open menu or filter, then a dialog, then restores, returns to the panel or collapses. The page's own Escape handling is left alone.
@@ -127,14 +129,9 @@ By default, sniffing only runs while StreamFirefly is open. If the list is empty
 
 ## How it works
 
-```mermaid
-flowchart LR
-  Page["Web page<br>content scripts and page probes"] --> BG["Extension background<br>sniffing and detection"]
-  BG <--> UI["Panel / workspace"]
-  BG <-- "Native Messaging" --> Host["Native helper (Rust)"]
-  Host --> Curl["curl"]
-  Host --> FFmpeg["FFmpeg"]
-```
+<p align="center">
+  <img src="docs/images/architecture.en.svg" width="900" alt="How it works: content scripts and the page probe hand media to the extension for detection; the extension talks to the floating panel and, over Native Messaging, to the Rust native helper, which runs curl to download and FFmpeg to merge">
+</p>
 
 | Directory | Contents |
 | --- | --- |
@@ -224,6 +221,15 @@ Most documents are in Chinese.
 ## Privacy
 
 Cookies and Authorization headers are kept in memory only while a download runs and are never written to task records. Cache capture only saves data from after capture starts and does not read the browser cache. See the [privacy policy](PRIVACY.md).
+
+## Star history
+
+<a href="https://star-history.com/#rumoii/streamfirefly&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=rumoii/streamfirefly&type=Date&theme=dark">
+    <img alt="Star history" src="https://api.star-history.com/svg?repos=rumoii/streamfirefly&type=Date" width="600">
+  </picture>
+</a>
 
 ## Acknowledgements
 

@@ -6,7 +6,14 @@
 
 本地优先的网页媒体发现与下载工具
 
-简体中文 | [English](README.en.md)
+[![版本](https://img.shields.io/github/v/release/rumoii/streamfirefly?label=%E7%89%88%E6%9C%AC&color=2a8f7b)](https://github.com/rumoii/streamfirefly/releases/latest)
+[![下载量](https://img.shields.io/github/downloads/rumoii/streamfirefly/total?label=%E4%B8%8B%E8%BD%BD%E9%87%8F&color=2a8f7b)](https://github.com/rumoii/streamfirefly/releases)
+[![Stars](https://img.shields.io/github/stars/rumoii/streamfirefly?label=Stars&color=2a8f7b)](https://github.com/rumoii/streamfirefly/stargazers)
+[![许可证](https://img.shields.io/github/license/rumoii/streamfirefly?label=%E8%AE%B8%E5%8F%AF%E8%AF%81)](LICENSE)
+![浏览器](https://img.shields.io/badge/%E6%B5%8F%E8%A7%88%E5%99%A8-Chrome%20%C2%B7%20Edge%20%C2%B7%20Firefox-4b6b8a)
+![系统](https://img.shields.io/badge/%E7%B3%BB%E7%BB%9F-Windows%2011-4b6b8a)
+
+**[下载](https://github.com/rumoii/streamfirefly/releases/latest)** · [安装指南](INSTALL.md) · [使用说明](#使用) · [隐私政策](PRIVACY.md) · [English](README.en.md)
 
 </div>
 
@@ -18,6 +25,14 @@
 
 - **通用版**：不限制网站，通过 GitHub Release 分发，包含 Chrome/Edge 扩展、签名 Firefox 扩展和 Windows 本地助手。能否识别和下载仍取决于网站本身。
 - **Chrome 应用商店版**：根据 Chrome 应用商店政策，不识别和下载 YouTube 内容。（当前还在审核中，所以应用商店可能搜索不到流萤）
+
+## 亮点
+
+<p align="center">
+  <img src="docs/images/readme/card-download.jpg" width="270" alt="看中哪个，点下载就行：16 路并发、切片自动重试、断点续传、FFmpeg 合并">
+  <img src="docs/images/readme/card-install.jpg" width="270" alt="三步装好，复制粘贴就行：下载扩展、加载扩展、复制安装命令">
+  <img src="docs/images/readme/card-hls.jpg" width="270" alt="HLS 解析页：清晰度、音轨、字幕自己挑，还能按时间截取">
+</p>
 
 ## 功能
 
@@ -32,21 +47,16 @@
 
 ## 截图
 
-<p align="center">
-  <img src="store-assets/screenshot-popup.png" width="820" alt="资源列表"><br>资源列表
-</p>
-
-<p align="center">
-  <img src="store-assets/screenshot-downloads.png" width="820" alt="下载任务"><br>下载任务
-</p>
-
-<p align="center">
-  <img src="store-assets/screenshot-workspace.png" width="820" alt="悬浮工作区"><br>悬浮工作区
-</p>
-
-<p align="center">
-  <img src="store-assets/screenshot-hls.png" width="820" alt="HLS 解析"><br>HLS 解析
-</p>
+<table>
+  <tr>
+    <td align="center"><img src="store-assets/screenshot-popup.png" width="420" alt="资源列表"><br>资源列表</td>
+    <td align="center"><img src="store-assets/screenshot-downloads.png" width="420" alt="下载任务"><br>下载任务</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="store-assets/screenshot-workspace.png" width="420" alt="悬浮工作区"><br>悬浮工作区</td>
+    <td align="center"><img src="store-assets/screenshot-hls.png" width="420" alt="HLS 解析"><br>HLS 解析</td>
+  </tr>
+</table>
 
 截图来自自动化界面测试，资源为测试数据。
 
@@ -118,7 +128,7 @@ cargo build --release --manifest-path native-host/Cargo.toml
 
 ### 悬浮窗口操作
 
-- 面板初始尺寸为 420×640px；展开的工作区初始宽 1120px、高为可见网页的 80%，空间不够时自动缩小。
+- 面板初始尺寸为 480×640px；展开的工作区初始宽 1120px、高为可见网页的 80%，空间不够时自动缩小。
 - 拖动标题栏移动窗口，拖动边缘或角落调整大小；收起后的小入口会贴靠最近的左右边缘。尺寸和位置保存在扩展本地配置 `floatingUiLayout` 中。
 - 收起后保留小入口并继续嗅探，面板中的预览会停止；关闭后入口消失，已经开始的下载继续进行。
 - 标题栏的“返回面板”回到快速面板，最大化后可以还原。在窗口内按 Escape，会依次关闭菜单或筛选弹层、对话框，再还原、返回面板或收起；不会拦截网页自己的 Escape。
@@ -127,14 +137,9 @@ cargo build --release --manifest-path native-host/Cargo.toml
 
 ## 工作原理
 
-```mermaid
-flowchart LR
-  Page["网页<br>内容脚本与页面探针"] --> BG["扩展后台<br>嗅探与识别"]
-  BG <--> UI["悬浮面板 / 工作区"]
-  BG <-- "Native Messaging" --> Host["本地助手（Rust）"]
-  Host --> Curl["curl"]
-  Host --> FFmpeg["FFmpeg"]
-```
+<p align="center">
+  <img src="docs/images/architecture.svg" width="900" alt="工作原理：网页中的内容脚本与页面探针交给浏览器扩展嗅探识别；扩展与悬浮面板双向通信，并通过 Native Messaging 与 Rust 本地助手通信；本地助手调用 curl 下载、FFmpeg 合并">
+</p>
 
 | 目录 | 内容 |
 | --- | --- |
@@ -222,6 +227,15 @@ npm run package:firefox              # Firefox 测试用 XPI（未签名）
 ## 隐私
 
 Cookie 和 Authorization 只在下载过程中保存在内存里，不写入任务记录。缓存捕捉只保存开始捕捉之后的数据，不读取浏览器缓存。详见[隐私政策](PRIVACY.md)。
+
+## Star 趋势
+
+<a href="https://star-history.com/#rumoii/streamfirefly&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=rumoii/streamfirefly&type=Date&theme=dark">
+    <img alt="Star 趋势" src="https://api.star-history.com/svg?repos=rumoii/streamfirefly&type=Date" width="600">
+  </picture>
+</a>
 
 ## 致谢
 
