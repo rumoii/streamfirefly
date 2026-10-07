@@ -1,5 +1,5 @@
 use crate::capture_catalog::{load, save_index};
-use crate::capture_diagnostics::record;
+use crate::capture_diagnostics::{collect, record};
 use crate::capture_merge::finalize;
 use crate::capture_model::{Session, Snapshot};
 use crate::capture_socket::receive;
@@ -194,6 +194,30 @@ impl CaptureManager {
         let mut entries = snapshots.iter().map(|snapshot| json!(snapshot)).collect::<Vec<_>>();
         entries.extend(self.errors.clone());
         json!(entries)
+    }
+
+    /// Returns the newest sessions with their diagnostic files for a user-requested report.
+    pub(crate) fn diagnostics(&self, payload: &Value) -> Value {
+        let limit = payload["limit"].as_u64().map_or(10, |value| value.clamp(1, 20)) as usize;
+        let mut sessions = self
+            .sessions
+            .lock()
+            .unwrap()
+            .values()
+            .filter_map(|session| {
+                session
+                    .lock()
+                    .ok()
+                    .map(|value| (value.snapshot.clone(), value.directory.clone()))
+            })
+            .collect::<Vec<_>>();
+        sessions.sort_by(|a, b| b.0.created_at.cmp(&a.0.created_at).then_with(|| a.0.id.cmp(&b.0.id)));
+        let captures = sessions
+            .into_iter()
+            .take(limit)
+            .map(|(snapshot, directory)| json!({"snapshot":snapshot,"diagnostics":collect(&directory, 32 * 1024)}))
+            .collect::<Vec<_>>();
+        json!({"captures":captures,"catalogErrors":self.errors})
     }
 
     /// Removes a finished session together with its directory, including saved outputs.
@@ -410,6 +434,48 @@ mod tests {
         );
         assert!(newer_directory.exists());
         active.lock().unwrap().worker_active = false;
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn diagnostics_report_newest_sessions_and_catalog_errors() {
+        let root = std::env::temp_dir().join(format!("capture-test-{}", Uuid::new_v4()));
+        let write = |created_at: u64| {
+            let id = Uuid::new_v4().to_string();
+            let directory = root.join(format!("capture-{id}"));
+            fs::create_dir_all(&directory).unwrap();
+            let snapshot = Snapshot {
+                version: 1,
+                id: id.clone(),
+                state: "partial".into(),
+                bytes: 0,
+                tracks: Vec::new(),
+                output: None,
+                outputs: Vec::new(),
+                error: Some("capture_disconnected".into()),
+                created_at,
+                page_title: None,
+                page_url: None,
+            };
+            fs::write(directory.join("capture.json"), serde_json::to_vec(&snapshot).unwrap())
+                .unwrap();
+            fs::write(
+                directory.join("diagnostics.json"),
+                json!([{"stage":"receive-ended","atMs":created_at,"details":{}}]).to_string(),
+            )
+            .unwrap();
+            id
+        };
+        let ids = [write(1), write(3), write(2)];
+        fs::create_dir_all(root.join(format!("capture-{}", Uuid::new_v4()))).unwrap();
+        let manager = CaptureManager::new(root.clone());
+        let report = manager.diagnostics(&json!({"limit":2}));
+        let captures = report["captures"].as_array().unwrap();
+        assert_eq!(captures.len(), 2);
+        assert_eq!(captures[0]["snapshot"]["id"], ids[1]);
+        assert_eq!(captures[1]["snapshot"]["id"], ids[2]);
+        assert_eq!(captures[0]["diagnostics"]["records"][0]["stage"], "receive-ended");
+        assert_eq!(report["catalogErrors"][0]["error"], "capture_checkpoint_unreadable");
         drop(manager);
         fs::remove_dir_all(root).unwrap();
     }

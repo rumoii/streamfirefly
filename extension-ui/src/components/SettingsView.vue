@@ -12,6 +12,7 @@ import SfSelect from "../ui/SfSelect.vue";
 import type { IconName } from "../ui/icons";
 import { EDITION, EDITION_LABEL } from "../edition";
 import NativeHelperCard from "./NativeHelperCard.vue";
+import FeedbackCard from "./FeedbackCard.vue";
 
 const props = defineProps<{ settings: AppSettings }>();
 const emit = defineEmits<{ save: [settings: typeof props.settings]; reset: [] }>();
@@ -63,6 +64,7 @@ defineExpose({ hasUnsavedChanges });
           <p v-if="EDITION === 'chrome-store'" class="settings-note">根据 Chrome 应用商店政策，此版本不识别和下载 YouTube 内容。</p>
           <p v-else class="settings-note">通用版不限制网站；能否识别和下载取决于网站本身，DRM 加密内容不受支持。</p>
         </section>
+        <FeedbackCard v-if="trusted" />
         <footer class="settings-footer"><span class="save-state" :class="{ dirty: hasUnsavedChanges }" role="status">{{ hasUnsavedChanges ? '有未保存的修改' : '已保存' }}</span><button class="button" type="button" @click="emit('reset')">恢复默认</button><button class="button primary" type="button" :disabled="Boolean(proxyError)" @click="emit('save', { ...form })">验证并保存</button></footer>
       </section>
       <KeepAlive><component :is="currentPanel" v-if="trusted && currentPanel" :key="section" /></KeepAlive>

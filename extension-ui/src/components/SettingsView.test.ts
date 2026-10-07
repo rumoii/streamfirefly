@@ -89,4 +89,29 @@ describe("unified settings navigation", () => {
     }
     wrapper.unmount();
   });
+  it("exports and copies a diagnostics report from the feedback card", async () => {
+    const report = { reportVersion: 1, downloads: [{ id: "t1" }, { id: "t2" }], captures: { captures: [{ snapshot: { id: "c1" } }] }, errors: [] };
+    send.mockImplementation(async (message: any) => message.type === "diagnostics.export" ? { ok: true, value: report } : message.type === "native.connect" ? { ok: true } : { ok: true, value: { config: defaultDiscovery(), disabled: {}, error: "" } });
+    const createObjectURL = vi.fn(() => "blob:report"), revokeObjectURL = vi.fn(), click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const writeText = vi.fn(async (_text: string) => {});
+    const originalUrl = { createObjectURL: URL.createObjectURL, revokeObjectURL: URL.revokeObjectURL };
+    Object.assign(URL, { createObjectURL, revokeObjectURL }); vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    const wrapper = mount(SettingsView, { props: { settings } });
+    try {
+      const card = wrapper.get('[aria-labelledby="settings-feedback-title"]');
+      await card.findAll("button").find(button => button.text() === "导出诊断报告")!.trigger("click"); await flushPromises();
+      expect(click).toHaveBeenCalledTimes(1);
+      expect((click.mock.contexts[0] as HTMLAnchorElement).download).toMatch(/^streamfirefly-diagnostics-\d{8}-\d{6}\.json$/);
+      expect(card.text()).toContain("已导出诊断报告：2 个下载任务、1 次录制");
+      await card.findAll("button").find(button => button.text() === "复制到剪贴板")!.trigger("click"); await flushPromises();
+      expect(JSON.parse(writeText.mock.calls[0][0])).toEqual(report);
+      send.mockImplementation(async (message: any) => message.type === "diagnostics.export" ? { ok: false, error: "请从扩展设置页执行此操作" } : { ok: true });
+      await card.findAll("button").find(button => button.text() === "导出诊断报告")!.trigger("click"); await flushPromises();
+      expect(card.get('[role="alert"]').text()).toBe("导出失败：请从扩展设置页执行此操作");
+    } finally { wrapper.unmount(); click.mockRestore(); Object.assign(URL, originalUrl); vi.unstubAllGlobals(); }
+  });
+  it("hides the feedback card in the page workspace", () => {
+    surface.mockReturnValue("workspace"); const wrapper = mount(SettingsView, { props: { settings } });
+    expect(wrapper.find('[aria-labelledby="settings-feedback-title"]').exists()).toBe(false); wrapper.unmount();
+  });
 });

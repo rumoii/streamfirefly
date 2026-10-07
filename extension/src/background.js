@@ -6,6 +6,7 @@ import { createIntegrations } from './integrations.js';
 import { createDispatchIntents } from './dispatch-intents.js';
 import { createDeepSearch } from './deep-search.js';
 import { createCaptureCoordinator } from './capture-coordinator.js';
+import { createDiagnostics } from './diagnostics.js';
 import { createOutputTemplates } from './output-templates.js';
 import { createNative } from './native.js';
 import { createResources } from './resources.js';
@@ -35,6 +36,7 @@ resources.subscribeCandidates((tabId, candidateId) => sniffing.allowed(tabId) ? 
 const dispatchIntents = createDispatchIntents(api, resources);
 const deepSearch = createDeepSearch(api, settings);
 const capture = createCaptureCoordinator(api, nativeRequestPromise, evaluation, resources);
+const diagnostics = createDiagnostics(api, nativeRequestPromise, { captures: () => capture.list(), receipts: async () => (await integrations.read()).receipts });
 const outputTemplates = createOutputTemplates(api, evaluation.run);
 const requestHeadersById = new Map();
 const navigationCleanups = new Map();
@@ -230,7 +232,7 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!Number.isInteger(sender.tab?.id)) { sendResponse({ ok: false, error: "page_close_unavailable" }); return false; }
     api.tabs.remove(sender.tab.id).then(() => sendResponse({ ok: true }), () => sendResponse({ ok: false, error: "page_close_unavailable" })); return true;
   }
-  const administrative = ["extraction.get", "extraction.save", "extraction.test", "discovery.get", "discovery.save", "discovery.test", "template.render", "templates.get", "templates.save", "integration.preview", "integration.get", "integration.save", "integration.test", "integration.invoke", "integration.secret", "integration.intent", "capture.sources", "capture.open", "capture.close", "capture.list", "capture.recover", "capture.restart", "capture.restart.status", "capture.replay", "capture.delete"];
+  const administrative = ["extraction.get", "extraction.save", "extraction.test", "discovery.get", "discovery.save", "discovery.test", "template.render", "templates.get", "templates.save", "integration.preview", "integration.get", "integration.save", "integration.test", "integration.invoke", "integration.secret", "integration.intent", "capture.sources", "capture.open", "capture.close", "capture.list", "capture.recover", "capture.restart", "capture.restart.status", "capture.replay", "capture.delete", "diagnostics.export"];
   if (administrative.includes(message?.type)) {
     if (typeof sender.url !== "string" || sender.url.split(/[?#]/, 1)[0] !== api.runtime.getURL("dist/app.html")) { sendResponse({ ok: false, error: "请从扩展设置页执行此操作" }); return false; }
     const operations = {
@@ -258,7 +260,8 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
       "capture.close": () => capture.close(message.payload.tabId, message.payload.id),
       "capture.list": () => capture.list(),
       "capture.recover": () => capture.recover(message.payload.id),
-      "capture.delete": () => capture.remove(message.payload.id)
+      "capture.delete": () => capture.remove(message.payload.id),
+      "diagnostics.export": () => diagnostics.exportReport()
     };
     Promise.resolve().then(operations[message.type]).then(value => sendResponse({ ok: true, value }), error => sendResponse({ ok: false, error: error.message }));
     return true;
