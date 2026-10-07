@@ -8,7 +8,7 @@ export function createCaptureState(context: Ref<UiContext | null>, trusted: bool
   const sessions = ref<CaptureSnapshot[]>([]), catalog = ref<CaptureSources>({ sources: [], frames: [] });
   const error = ref(""), message = ref(""), busy = ref(false), selected = ref(""), acknowledged = ref(false), directory = ref("");
   let revision = 0, disposed = false, refreshing = false;
-  let connectionFailure = "";
+  let connectionFailure = "", recovering = "";
   const restarting = ref(false), renewed = ref(false), restartPhase = ref("");
   let restartOperation = "", restartContext = "", restartTab = -1;
   const quickCandidate = computed<MediaCandidate | undefined>(() => {
@@ -35,7 +35,7 @@ export function createCaptureState(context: Ref<UiContext | null>, trusted: bool
     refreshing = true; clearTimeout(timer);
     try {
       const result = await sessionRequest("capture.list", undefined);
-      if (!disposed) { sessions.value = result; if (error.value === connectionFailure) error.value = ""; connectionFailure = ""; }
+      if (!disposed) { sessions.value = result; if (error.value === connectionFailure) error.value = ""; connectionFailure = ""; reportRecovery(result); }
       if (!disposed && restarting.value && restartOperation) {
         // A lapsed restart is a final outcome, so its error must outlive the next successful list refresh.
         const status = await sessionRequest("capture.restart.status", { tabId: restartTab, operationId: restartOperation }).catch(reason => {
@@ -126,11 +126,19 @@ export function createCaptureState(context: Ref<UiContext | null>, trusted: bool
     }
     try { await refresh(); } finally { if (!disposed) { busy.value = false; if (failures.length) error.value = `有 ${failures.length} 条记录未能删除：${failures[0]}`; } }
   }
+  function reportRecovery(result: CaptureSnapshot[]) {
+    const session = recovering ? result.find(item => item.id === recovering) : undefined;
+    if (!recovering || session && ["stopping", "finalizing"].includes(session.state)) return;
+    recovering = "";
+    if (!session) { message.value = ""; return; }
+    if (session.outputs.length) message.value = `文件已重新生成：${session.outputs[0]}${session.state === "complete" ? "" : "。录制中途中断过，文件只包含中断前录到的内容。"}`;
+    else { message.value = ""; error.value = `重新生成没有得到可用文件：${sessionError(session.error || "capture_merge_failed")}`; }
+  }
   async function recover(id: string) {
     if (busy.value) return;
-    busy.value = true;
-    try { await sessionRequest("capture.recover", { id }); await refresh(); }
-    catch (reason) { if (!disposed) error.value = sessionError(reason); }
+    busy.value = true; error.value = ""; message.value = "正在重新生成文件，请稍等。";
+    try { await sessionRequest("capture.recover", { id }); recovering = id; await refresh(); }
+    catch (reason) { if (!disposed) { message.value = ""; error.value = sessionError(reason); } }
     finally { if (!disposed) busy.value = false; }
   }
   watch([() => context.value?.sourceContextId, () => targetObjectUrl?.value || ""], () => {

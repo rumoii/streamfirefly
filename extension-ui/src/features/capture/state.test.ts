@@ -165,6 +165,32 @@ describe("capture page guidance and records", () => {
       expect(wrapper.findAll(".capture-session")).toHaveLength(0);
     } finally { wrapper.unmount(); }
   });
+  it("reports the outcome of regenerating an interrupted record", async () => {
+    vi.useFakeTimers();
+    let current: Record<string, unknown> = record("cut", "interrupted", 1, { error: "capture_disconnected" });
+    send.mockImplementation(async message => {
+      if (message.type === "capture.list") return { ok: true, value: [current] };
+      if (message.type === "capture.recover") { current = { ...current, state: "finalizing" }; return { ok: true, value: current }; }
+      throw Error(message.type);
+    });
+    const wrapper = mount(CapturePanel, { props: { context } });
+    const regenerate = () => wrapper.findAll("button").find(button => button.text() === "重新生成文件")!.trigger("click");
+    try {
+      await flushPromises();
+      await regenerate(); await flushPromises();
+      expect(wrapper.text()).toContain("正在重新生成文件");
+      current = { ...current, state: "partial", outputs: ["C:\\captures\\cut\\capture-0.mkv"] };
+      await vi.advanceTimersByTimeAsync(1600); await flushPromises();
+      expect(wrapper.text()).toContain("文件已重新生成：C:\\captures\\cut\\capture-0.mkv。录制中途中断过");
+      expect(wrapper.get(".capture-session .inline-error").text()).toContain("已生成的文件可能不完整");
+      current = record("empty", "interrupted", 2, { error: "capture_disconnected" });
+      await vi.advanceTimersByTimeAsync(1600); await flushPromises();
+      await regenerate(); await flushPromises();
+      current = { ...current, state: "partial", error: "capture_no_media_data" };
+      await vi.advanceTimersByTimeAsync(1600); await flushPromises();
+      expect(wrapper.get('[role="alert"]').text()).toContain("重新生成没有得到可用文件：录制期间视频没有加载新内容");
+    } finally { wrapper.unmount(); vi.useRealTimers(); }
+  });
   it("sends users to the expanded quick-download resource of the source tab", async () => {
     const candidates = [{ id: "blob", url: "blob:https://main.test/v", type: "video" }, { id: "audio", url: "https://main.test/a.m4a", type: "audio" }, { id: "hls", url: "https://main.test/v.m3u8", type: "hls" }];
     send.mockImplementation(async message => message.type === "capture.list" ? { ok: true, value: [] } : { ok: true });

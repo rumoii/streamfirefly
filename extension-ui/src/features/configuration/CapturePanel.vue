@@ -20,7 +20,7 @@ const guidance = computed(() => {
   if (phase.value === "recording") return `正在录制，已收到 ${((active.value?.bytes || 0) / 1048576).toFixed(1)} MiB。让视频播放到结尾会自动保存，也可以随时点“停止并保存”。`;
   if (phase.value === "saving") return "正在生成视频文件，请稍等。";
   if (phase.value === "done") return `录制完成，视频已保存${lastSession.value?.outputs.length ? `：${lastSession.value.outputs[0]}` : ""}。可以在下方录制记录里复制路径。`;
-  if (phase.value === "failed") return `这次录制没有成功：${sessionError(lastSession.value?.error || "capture_disconnected")}`;
+  if (phase.value === "failed") return lastSession.value?.outputs.length ? `这次录制没有完整结束，已录到的部分已保存：${lastSession.value.outputs[0]}。${failure(lastSession.value)}` : `这次录制没有成功：${sessionError(lastSession.value?.error || "capture_disconnected")}`;
   return acknowledged.value ? "点“一键捕捉”后，来源页会自动刷新并从头录制。" : "先勾选下面的授权说明，再点“一键捕捉”。";
 });
 const fallbackDirectory = "%LOCALAPPDATA%\\StreamFirefly\\captures", defaultDirectory = ref("");
@@ -31,6 +31,7 @@ const pendingDelete = ref<CaptureSnapshot | null>(null);
 const pendingCleanup = ref(false);
 const notice = ref("");
 const finished = (session: CaptureSnapshot) => ["complete", "partial", "interrupted"].includes(session.state);
+function failure(session: CaptureSnapshot) { return session.outputs.length ? `已生成的文件可能不完整。原因：${sessionError(session.error)}` : sessionError(session.error); }
 function title(session: CaptureSnapshot) { return session.pageTitle || hostOf(session.pageUrl || session.source?.url) || "未知页面"; }
 function hostOf(url?: string) { try { return url ? new URL(url).hostname : ""; } catch { return ""; } }
 function when(session: CaptureSnapshot) { return session.createdAt ? new Date(session.createdAt).toLocaleString("zh-CN", { hour12: false }) : ""; }
@@ -90,7 +91,7 @@ defineExpose({ scan });
       <div class="dispatch-item-head"><span class="dispatch-state" :data-state="session.state">{{ labels[session.state] || session.state }}</span><strong class="capture-session-title" :title="session.pageUrl || session.source?.url">{{ title(session) }}</strong><small class="capture-session-meta">{{ when(session) }}<template v-if="session.state !== 'unavailable'"> · {{ (session.bytes / 1048576).toFixed(1) }} MiB</template></small></div>
       <p v-if="session.ended && session.state === 'complete'" class="feature-note">视频已播放到结尾。</p>
       <div v-for="output in session.outputs" :key="output" class="capture-output-row"><p class="capture-output">{{ output }}</p><button class="button sm" type="button" @click="copyPath(output)"><SfIcon name="copy" /><span>复制路径</span></button></div>
-      <p v-if="session.error" class="inline-error">{{ sessionError(session.error) }}</p>
+      <p v-if="session.error" class="inline-error">{{ failure(session) }}</p>
       <details v-if="session.tracks.length" class="capture-tracks"><summary>技术信息</summary><p v-for="track in session.tracks" :key="track.id" class="feature-note">轨道 {{ track.id }} · {{ track.mime }} · {{ track.initialized ? '含初始化片段' : '缺少初始化片段' }}</p></details>
       <div v-if="finished(session)" class="feature-row">
         <button v-if="['partial', 'interrupted'].includes(session.state)" class="button sm" :disabled="busy" @click="recover(session.id)"><SfIcon name="refresh" /><span>重新生成文件</span></button>

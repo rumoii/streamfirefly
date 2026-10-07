@@ -140,7 +140,8 @@ impl CaptureManager {
                         json!({"error":result.as_ref().err()}),
                     );
                     if let Err(error) = result {
-                        session.snapshot.error = Some(error);
+                        // An extension abort reason or host shutdown recorded first explains the close better.
+                        session.snapshot.error.get_or_insert(error);
                         session.snapshot.state = "interrupted".into();
                     } else if session.snapshot.state != "interrupted" {
                         session.snapshot.state = "finalizing".into();
@@ -273,11 +274,29 @@ impl CaptureManager {
             self.track_worker(worker);
             return Ok(snapshot);
         }
-        if ["armed", "capturing", "stopping"].contains(&current.snapshot.state.as_str())
-            || aborted && current.snapshot.state == "finalizing"
-        {
+        let active = ["armed", "capturing", "stopping"].contains(&current.snapshot.state.as_str())
+            || aborted && current.snapshot.state == "finalizing";
+        let mut changed = false;
+        if active {
             current.stop = true;
             current.snapshot.state = if aborted { "interrupted" } else { "stopping" }.into();
+            changed = true;
+        }
+        if let Some(reason) = aborted.then(|| bounded_text(&payload["reason"], 160)).flatten() {
+            record(
+                &current,
+                "extension-abort",
+                json!({"reason":reason,"state":current.snapshot.state,"error":current.snapshot.error}),
+            );
+            // The socket close can reach the receiver before this abort; its generic error hides the cause.
+            if (active || current.snapshot.state == "interrupted")
+                && current.snapshot.error.as_deref().is_none_or(|error| error == "capture_disconnected")
+            {
+                current.snapshot.error = Some(reason);
+                changed = true;
+            }
+        }
+        if changed {
             save(&current).map_err(|_| "capture_checkpoint_failed")?;
         }
         Ok(json!(current.snapshot))
@@ -391,6 +410,118 @@ mod tests {
         );
         assert!(newer_directory.exists());
         active.lock().unwrap().worker_active = false;
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn abort_reason_replaces_generic_disconnect_and_is_recorded() {
+        let root = std::env::temp_dir().join(format!("capture-test-{}", Uuid::new_v4()));
+        let manager = CaptureManager::new(root.clone());
+        let insert = |state: &str, error: Option<&str>| {
+            let id = Uuid::new_v4().to_string();
+            let directory = root.join(format!("capture-{id}"));
+            fs::create_dir_all(&directory).unwrap();
+            let session = Arc::new(Mutex::new(Session {
+                directory,
+                stop: false,
+                worker_active: false,
+                snapshot: Snapshot {
+                    version: 1,
+                    id: id.clone(),
+                    state: state.into(),
+                    bytes: 0,
+                    tracks: Vec::new(),
+                    output: None,
+                    outputs: Vec::new(),
+                    error: error.map(Into::into),
+                    created_at: 0,
+                    page_title: None,
+                    page_url: None,
+                },
+            }));
+            manager.sessions.lock().unwrap().insert(id.clone(), session.clone());
+            (id, session)
+        };
+        let diagnostics = |session: &Arc<Mutex<Session>>| {
+            let directory = session.lock().unwrap().directory.clone();
+            serde_json::from_slice::<Value>(&fs::read(directory.join("diagnostics.json")).unwrap()).unwrap()
+        };
+        let (closed, closed_session) = insert("interrupted", Some("capture_disconnected"));
+        let value = manager
+            .stop(&json!({"id":closed,"reason":"capture_ack_timeout"}), true)
+            .unwrap();
+        assert_eq!(value["error"], "capture_ack_timeout");
+        let records = diagnostics(&closed_session);
+        assert_eq!(records[0]["stage"], "extension-abort");
+        assert_eq!(records[0]["details"]["reason"], "capture_ack_timeout");
+        assert_eq!(records[0]["details"]["error"], "capture_disconnected");
+        let (capturing, capturing_session) = insert("capturing", None);
+        let value = manager
+            .stop(&json!({"id":capturing,"reason":"capture_source_unavailable"}), true)
+            .unwrap();
+        assert_eq!(value["state"], "interrupted");
+        assert_eq!(value["error"], "capture_source_unavailable");
+        assert!(capturing_session.lock().unwrap().stop);
+        let (stopped, _) = insert("interrupted", Some("capture_host_stopped"));
+        let value = manager
+            .stop(&json!({"id":stopped,"reason":"capture_ack_timeout"}), true)
+            .unwrap();
+        assert_eq!(value["error"], "capture_host_stopped");
+        let (finished, _) = insert("partial", Some("capture_disconnected"));
+        let value = manager
+            .stop(&json!({"id":finished,"reason":"capture_ack_timeout"}), true)
+            .unwrap();
+        assert_eq!(value["error"], "capture_disconnected");
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn abort_reason_survives_either_order_of_abort_and_socket_close() {
+        use tungstenite::client::IntoClientRequest;
+        let root = std::env::temp_dir().join(format!("capture-test-{}", Uuid::new_v4()));
+        let manager = CaptureManager::new(root.clone());
+        let origin = "chrome-extension://abcdefghijklmnop";
+        let connect = || {
+            let opened = manager.open(&json!({"origin":origin})).unwrap();
+            let endpoint = opened["endpoint"].as_str().unwrap();
+            let mut request = endpoint.into_client_request().unwrap();
+            request.headers_mut().insert("origin", origin.parse().unwrap());
+            let stream =
+                std::net::TcpStream::connect(endpoint.trim_start_matches("ws://")).unwrap();
+            let (mut socket, _) = tungstenite::client(request, stream).unwrap();
+            socket
+                .send(tungstenite::Message::Text(
+                    json!({"token":opened["token"]}).to_string().into(),
+                ))
+                .unwrap();
+            assert!(socket.read().unwrap().to_text().unwrap().contains("ready"));
+            (opened["id"].as_str().unwrap().to_owned(), socket)
+        };
+        let ended = |id: &str| {
+            let session = manager.sessions.lock().unwrap()[id].clone();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while session.lock().unwrap().worker_active {
+                assert!(std::time::Instant::now() < deadline, "capture worker did not end");
+                thread::sleep(std::time::Duration::from_millis(20));
+            }
+            let snapshot = session.lock().unwrap().snapshot.clone();
+            snapshot
+        };
+        let (first, _socket) = connect();
+        manager
+            .stop(&json!({"id":first,"reason":"capture_source_unavailable"}), true)
+            .unwrap();
+        let snapshot = ended(&first);
+        assert_eq!(snapshot.state, "interrupted");
+        assert_eq!(snapshot.error.as_deref(), Some("capture_source_unavailable"));
+        let (second, mut socket) = connect();
+        socket.close(None).unwrap();
+        let _ = socket.flush();
+        assert_eq!(ended(&second).error.as_deref(), Some("capture_disconnected"));
+        manager
+            .stop(&json!({"id":second,"reason":"capture_ack_timeout"}), true)
+            .unwrap();
+        assert_eq!(ended(&second).error.as_deref(), Some("capture_ack_timeout"));
         drop(manager);
         fs::remove_dir_all(root).unwrap();
     }

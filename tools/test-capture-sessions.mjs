@@ -25,7 +25,8 @@ const api = {
 const native = async (type, payload) => {
   calls.push({ type, payload });
   if (type === 'capture.open') { openArrivals++; if (releaseOpen) await releaseOpen; const id = `session-${++next}`; snapshots.set(id, { id, state: 'armed', bytes: 0, tracks: [], outputs: [] }); return { ok: true, value: { id, endpoint: 'ws://127.0.0.1:9999', token: 'a'.repeat(64) } }; }
-  if (type === 'capture.abort') snapshots.get(payload.id).state = 'interrupted';
+  // The WebSocket close can win the race, leaving only the generic native error.
+  if (type === 'capture.abort') Object.assign(snapshots.get(payload.id), { state: 'interrupted', error: 'capture_disconnected' });
   return { ok: true, value: type === 'capture.list' ? [...snapshots.values()] : undefined };
 };
 const factory = load('../extension/src/capture-coordinator.js', { setTimeout: callback => { timers.set(callback, callback); return callback; }, clearTimeout: callback => timers.delete(callback) }).createCaptureCoordinator;
@@ -60,6 +61,8 @@ assert.equal([...snapshots.values()].at(-1).state, 'interrupted'); assert.equal(
 const nextSession = await coordinator.open(payload); documentToken = 'replaced'; await [...timers.values()][0]();
 await new Promise(resolve => setImmediate(resolve));
 assert.equal((await coordinator.list()).find(item => item.id === nextSession.id).state, 'interrupted');
+assert.equal(calls.filter(call => call.type === 'capture.abort' && call.payload).at(-1).payload.reason, 'capture_source_unavailable');
+assert.equal((await coordinator.list()).find(item => item.id === nextSession.id).error, 'capture_source_unavailable');
 documentToken = 'frame-document';
 releaseOpen = new Promise(resolve => { unblock = resolve; });
 const arrivals = openArrivals, fresh = coordinator.open(payload);

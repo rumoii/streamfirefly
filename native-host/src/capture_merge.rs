@@ -82,7 +82,8 @@ pub(crate) fn finalize(session: &Arc<Mutex<Session>>) {
     .into();
     current.snapshot.output = outputs.first().cloned();
     current.snapshot.outputs = outputs;
-    if !complete && current.snapshot.error.is_none() {
+    // Without any output the merge failure matters more than an earlier interruption, which diagnostics keep.
+    if !complete && (current.snapshot.error.is_none() || current.snapshot.outputs.is_empty()) {
         current.snapshot.error = Some(failure.into());
     }
     if save(&current).is_err() {

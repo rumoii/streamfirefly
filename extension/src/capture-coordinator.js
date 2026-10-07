@@ -44,7 +44,7 @@ export function createCaptureCoordinator(api, nativeRequest, evaluation, resourc
   const send = (session, type) => api.tabs.sendMessage(session.tabId, { type: `capture.${type}`, id: session.id, documentToken: session.source.documentToken, sourceId: session.source.id, restart: Boolean(session.restartOperation) }, { frameId: session.source.frameId });
   async function cleanup(session) {
     clearTimeout(session.timer);
-    const results = await Promise.allSettled([nativeRequest("capture.abort", { id: session.id }), transport("abort", { id: session.id }), send(session, "abort")]);
+    const results = await Promise.allSettled([nativeRequest("capture.abort", { id: session.id, reason: session.error }), transport("abort", { id: session.id }), send(session, "abort")]);
     if (results.some(result => result.status === "rejected" || result.value?.ok === false)) session.cleanupFailed = true;
   }
   async function interrupted(tabId, frameId, documentToken, id, reason = "capture_source_unavailable") {
@@ -130,7 +130,7 @@ export function createCaptureCoordinator(api, nativeRequest, evaluation, resourc
   async function list() {
     const result = await nativeRequest("capture.list"); if (!result.ok) throw new Error(result.error || "capture_host_disconnected");
     for (const snapshot of result.value) if (history.get(snapshot.id)?.ended) snapshot.ended = true;
-    return result.value.map(snapshot => { const session = history.get(snapshot.id); return { ...snapshot, bytes: snapshot.bytes ?? 0, tracks: snapshot.tracks || [], outputs: snapshot.outputs || [], tabId: session?.tabId, source: session?.source, state: session?.state === "stopping" && ["armed", "capturing"].includes(snapshot.state) ? "stopping" : snapshot.state, error: snapshot.error || (snapshot.state !== "complete" ? session?.error || (session?.cleanupFailed ? "capture_cleanup_failed" : undefined) : undefined) }; });
+    return result.value.map(snapshot => { const session = history.get(snapshot.id); return { ...snapshot, bytes: snapshot.bytes ?? 0, tracks: snapshot.tracks || [], outputs: snapshot.outputs || [], tabId: session?.tabId, source: session?.source, state: session?.state === "stopping" && ["armed", "capturing"].includes(snapshot.state) ? "stopping" : snapshot.state, error: snapshot.error === "capture_disconnected" && session?.error ? session.error : snapshot.error || (snapshot.state !== "complete" ? session?.error || (session?.cleanupFailed ? "capture_cleanup_failed" : undefined) : undefined) }; });
   }
   function openControl(tabId, objectUrl = "") {
     if (objectUrl && (!String(objectUrl).startsWith("blob:") || String(objectUrl).length > 16384)) throw new Error("capture_object_url_invalid");
