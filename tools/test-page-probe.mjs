@@ -71,6 +71,13 @@ if (messages.length !== beforeNamespace) throw new Error(`Namespace-like script 
 context.__streamFireflyProbeApi.scanValue({ file: 'clip.ogv' }, context.location.href, 'json-test');
 if (!messages.some(item => item.url === 'https://page.example/watch/clip.ogv')) throw new Error('Ordinary relative media filename was filtered');
 
+const beforeIdentifiers = messages.length;
+for (const text of ['window.webAbTest={"enable_fast_switch_qn_v2":"true","webplayer":"7","enable_qn_calibrate_non_vip":"false","in_aa":"1","in_bb":"3",', 'if(window.webAbTest.pageVersion){window.webAbTest.videoGoOldVersion=1}', 'clip.mp4Backup clip.mp4.bak']) context.__streamFireflyProbeApi.scanValue(text, context.location.href, 'identifier-test');
+assert.deepEqual(messages.slice(beforeIdentifiers).map(item => item.url), [], 'Media suffix inside a longer script identifier was reported');
+const beforeBoundaries = messages.length;
+context.__streamFireflyProbeApi.scanValue('{"audio":"../media/voice.weba","video":"https:\\/\\/cdn.example\\/v\\/clip.MP4?sig=a\\/b","seek":"/media/seek.mp4#t=10","part":"https://cdn.example/a.mp4&sig=1"}\nhttps://cdn.example/one.m3u8\nhttps://cdn.example/two.m3u8', context.location.href, 'boundary-test');
+assert.deepEqual(messages.slice(beforeBoundaries).map(item => item.url), ['https://page.example/media/voice.weba', 'https://cdn.example/v/clip.MP4?sig=a/b', 'https://page.example/media/seek.mp4', 'https://cdn.example/a.mp4', 'https://cdn.example/one.m3u8', 'https://cdn.example/two.m3u8']);
+
 const emitted = context.__streamFireflyProbeApi.emitInlineManifest('#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI="key.bin"\n#EXTINF:2,\nsegment-1.ts\n', 'https://cdn.example/path/master.m3u8', 'blob:https://page.example/generated', 'blob-test');
 if (!emitted) throw new Error('Valid inline HLS manifest was rejected');
 const inline = messages.find(item => item.source === 'blob-test' && item.inlineManifest);

@@ -12,7 +12,7 @@
   const decoder = new TextDecoder();
   const joinLines = Array.prototype.join;
   const mediaExtension = /\.(?:m3u8?|mpd|mp4|webm|mov|mkv|flv|f4v|m4v|mpeg|mpg|avi|wmv|asf|ogv|3gp|mp3|m4a|aac|wav|flac|ogg|opus|wma|weba|ts|m4s|key)(?:$|[?#&])/i;
-  const quotedMediaUrl = /(?:https?:\\?\/\\?\/|\/|\.\.\/|\.\/)?[^\s"'<>\\]+\.(?:m3u8?|mpd|mp4|webm|mov|mkv|flv|f4v|m4v|mpeg|mpg|avi|wmv|asf|ogv|3gp|mp3|m4a|aac|wav|flac|ogg|opus|wma|weba|ts|m4s|key)(?:\?[^\s"'<>\\]*)?/gi;
+  const quotedMediaUrl = /(?:https?:\\?\/\\?\/|\/|\.\.\/|\.\/)?(?:\\\/|[^\s"'<>\\])+\.(?:m3u8?|mpd|mp4|webm|mov|mkv|flv|f4v|m4v|mpeg|mpg|avi|wmv|asf|ogv|3gp|mp3|m4a|aac|wav|flac|ogg|opus|wma|weba|ts|m4s|key)(?=$|[\s"'<>\\?#&])(?:\?(?:\\\/|[^\s"'<>\\])*)?/gi;
   const namespaceMediaReference = /^(?:[a-z_][a-z0-9_]*\.){4,}(?:m3u8?|mpd|mp4|webm|mov|mkv|flv|f4v|m4v|mpeg|mpg|avi|wmv|asf|ogv|3gp|mp3|m4a|aac|wav|flac|ogg|opus|wma|weba|ts|m4s|key)$/;
   let scannedScriptBytes = 0;
   let generatedManifestBytes = 0;
