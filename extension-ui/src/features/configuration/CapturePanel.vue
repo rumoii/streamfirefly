@@ -96,7 +96,8 @@ defineExpose({ scan });
       <p v-if="liveCodecNotice" class="tool-notice">{{ liveCodecNotice }}</p>
       <p v-if="active?.speedOverridden" class="tool-notice">{{ sessionError("capture_speed_overridden") }}</p>
       <label class="feature-check"><input v-model="acknowledged" type="checkbox">我有权保存此视频，并了解只能录到开始之后播放的内容</label>
-      <label class="feature-check"><input :checked="compatibleCodecs" type="checkbox" @change="setCompatibleCodecs(($event.target as HTMLInputElement).checked)">一键捕捉时优先录制兼容格式（H.264），录出来系统自带播放器就能直接播放</label>
+      <label class="feature-check"><input :checked="compatibleCodecs" type="checkbox" @change="setCompatibleCodecs(($event.target as HTMLInputElement).checked)">一键捕捉时优先录制兼容格式（H.264）</label>
+      <p class="feature-note capture-codec-note">怎么选：更看重画质，就关掉，用支持的播放器播放；只想下载下来就能直接播，保持开启。{{ compatibleCodecs ? "当前已开启：网站会优先提供 H.264，录好的视频用系统自带播放器就能直接打开；部分网站的高清晰度只有 AV1/HEVC，清晰度可能会降低。" : "当前已关闭：保留网站原本的画质和编码（常见 AV1/HEVC），播放时需要支持这些编码的播放器，比如 VLC、PotPlayer，或者在微软商店安装对应的视频扩展。" }}</p>
       <div class="feature-row capture-actions">
         <button class="button primary large" :disabled="busy || restarting || !context?.supported || !acknowledged || !!active" @click="restart"><SfIcon name="capture" /><span>一键捕捉</span></button>
         <button v-if="phase === 'waiting' || phase === 'recording'" class="button" type="button" @click="returnToSource"><SfIcon name="arrow-back-up" /><span>去来源页播放</span></button>
