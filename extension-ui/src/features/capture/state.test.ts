@@ -191,6 +191,15 @@ describe("capture page guidance and records", () => {
     expect(wrapper.text()).toContain("本地助手版本较旧");
     expect(wrapper.text()).toContain("AV1 Video Extension"); wrapper.unmount(); vi.unstubAllGlobals();
   });
+  it("warns while recording AV1 and explains playback for every saved video", async () => {
+    const av1 = [{ id: 1, mime: 'video/mp4;codecs="av01.0.08M.08"', bytes: 1, initialized: true }];
+    send.mockImplementation(async message => { if (message.type === "capture.list") return { ok: true, value: [record("live", "capturing", 3, { tabId: 1, tracks: av1 }), record("plain", "complete", 2, { outputs: ["D:/v/a.mkv"], tracks: [{ id: 1, mime: 'video/mp4;codecs="avc1.640033"', bytes: 1, initialized: true }] })] }; throw Error(message.type); });
+    const wrapper = mount(CapturePanel, { props: { context } }); await flushPromises();
+    expect(wrapper.get(".tool-notice").text()).toContain("这个网站没有按兼容格式提供视频，录到的是 AV1");
+    expect(wrapper.text()).toContain("打不开或只有声音？通常是播放器不支持这个视频的编码格式");
+    await wrapper.findAll("label.feature-check").find(label => label.text().includes("H.264"))!.get("input").setValue(false); await flushPromises();
+    expect(wrapper.text()).toContain("当前录到的是 AV1，Windows 自带播放器打不开。想要能直接播放的文件，请使用支持的应用程序或者请勾选“优先录制兼容格式”后重新一键捕捉。"); wrapper.unmount();
+  });
   it("marks records that are still recording or generating the file as busy", async () => {
     send.mockImplementation(async message => { if (message.type === "capture.list") return { ok: true, value: [record("recording", "capturing", 3), record("saving", "finalizing", 2), record("done", "complete", 1)] }; throw Error(message.type); });
     const wrapper = mount(CapturePanel, { props: { context } }); await flushPromises();

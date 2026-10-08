@@ -56,12 +56,24 @@ async function revealOutput(session: CaptureSnapshot, path: string) {
   try { await sessionRequest("capture.reveal", { id: session.id, path }); notice.value = ""; }
   catch (reason) { notice.value = reason instanceof Error && reason.message === "unsupported_message" ? "本地助手版本较旧，更新后才能直接打开文件夹；可以先用“复制文件夹路径”。" : sessionError(reason); }
 }
-function codecHint(session: CaptureSnapshot) {
+// Stock Windows players lack AV1 and HEVC decoders, so recordings in these codecs open with sound only.
+function modernCodec(session: CaptureSnapshot) {
   const mimes = session.tracks.map(track => track.mime.toLowerCase());
-  if (mimes.some(mime => mime.includes("av01"))) return "视频是 AV1 编码。Windows 自带的媒体播放器要先在微软商店安装免费的“AV1 Video Extension”，也可以用 VLC 或 PotPlayer 播放。";
-  if (mimes.some(mime => /hvc1|hev1/.test(mime))) return "视频是 HEVC（H.265）编码。Windows 自带的媒体播放器要先在微软商店安装“HEVC 视频扩展”，也可以用 VLC 或 PotPlayer 播放。";
-  return "";
+  return mimes.some(mime => mime.includes("av01")) ? "AV1" : mimes.some(mime => /hvc1|hev1/.test(mime)) ? "HEVC" : "";
 }
+function codecHint(session: CaptureSnapshot) {
+  const codec = modernCodec(session);
+  if (codec === "AV1") return "视频是 AV1 编码。Windows 自带的媒体播放器要先在微软商店安装免费的“AV1 Video Extension”，也可以用 VLC 或 PotPlayer 播放。";
+  if (codec === "HEVC") return "视频是 HEVC（H.265）编码。Windows 自带的媒体播放器要先在微软商店安装“HEVC 视频扩展”，也可以用 VLC 或 PotPlayer 播放。";
+  return "打不开或只有声音？通常是播放器不支持这个视频的编码格式，换用 VLC 或 PotPlayer 一般就能播放。";
+}
+const liveCodecNotice = computed(() => {
+  const codec = active.value ? modernCodec(active.value) : "";
+  if (!codec) return "";
+  return compatibleCodecs.value
+    ? `这个网站没有按兼容格式提供视频，录到的是 ${codec}。可以继续录，录完用 VLC 或 PotPlayer 播放，或在微软商店安装对应的视频扩展。`
+    : `当前录到的是 ${codec}，Windows 自带播放器打不开。想要能直接播放的文件，请使用支持的应用程序或者请勾选“优先录制兼容格式”后重新一键捕捉。`;
+});
 async function confirmDelete() { const session = pendingDelete.value; pendingDelete.value = null; if (session) await remove(session.id); }
 async function confirmCleanup() { pendingCleanup.value = false; await removeFailed(); }
 defineExpose({ scan });
@@ -81,6 +93,7 @@ defineExpose({ scan });
       <p class="capture-guidance" role="status" :data-tone="phase === 'done' ? 'success' : phase === 'failed' ? 'danger' : undefined">{{ guidance }}</p>
       <div class="capture-speed-row"><div class="field"><span>录制速度</span><SfSelect :model-value="speed" :options="speedOptions" label="录制速度" @update:model-value="setSpeed" /></div><p class="feature-note">加速时静音播放，长视频不用等它实时播完。网速跟不上时视频会停下来缓冲，不影响录到的内容；部分网站会把速度改回去。建议 2–4 倍。</p></div>
       <p v-if="Number(speed) >= 8" class="tool-notice">倍速太高时，网站可能自动降低清晰度，录出来的视频也可能分成几段。</p>
+      <p v-if="liveCodecNotice" class="tool-notice">{{ liveCodecNotice }}</p>
       <p v-if="active?.speedOverridden" class="tool-notice">{{ sessionError("capture_speed_overridden") }}</p>
       <label class="feature-check"><input v-model="acknowledged" type="checkbox">我有权保存此视频，并了解只能录到开始之后播放的内容</label>
       <label class="feature-check"><input :checked="compatibleCodecs" type="checkbox" @change="setCompatibleCodecs(($event.target as HTMLInputElement).checked)">一键捕捉时优先录制兼容格式（H.264），录出来系统自带播放器就能直接播放</label>
@@ -108,7 +121,7 @@ defineExpose({ scan });
       <div class="dispatch-item-head"><span class="dispatch-state" :data-state="session.state">{{ labels[session.state] || session.state }}</span><strong class="capture-session-title" :title="session.pageUrl || session.source?.url">{{ title(session) }}</strong><small class="capture-session-meta">{{ when(session) }}<template v-if="session.state !== 'unavailable'"> · {{ (session.bytes / 1048576).toFixed(1) }} MiB</template></small></div>
       <p v-if="session.ended && session.state === 'complete'" class="feature-note">视频已播放到结尾。</p>
       <div v-for="output in session.outputs" :key="output" class="capture-output-row"><p class="capture-output">{{ output }}</p><button class="button sm" type="button" @click="copyFolder(output)"><SfIcon name="copy" /><span>复制文件夹路径</span></button><button class="button sm" type="button" @click="revealOutput(session, output)"><SfIcon name="folder" /><span>打开文件夹</span></button></div>
-      <p v-if="session.outputs.length && codecHint(session)" class="feature-note">{{ codecHint(session) }}</p>
+      <p v-if="session.outputs.length" class="feature-note">{{ codecHint(session) }}</p>
       <p v-if="session.outputs.length > 1" class="feature-note">播放中切换过清晰度或拖动过进度，视频分成了 {{ session.outputs.length }} 段。</p>
       <p v-if="session.error" class="inline-error">{{ failure(session) }}</p>
       <details v-if="session.tracks.length" class="capture-tracks"><summary>技术信息</summary><p v-for="track in session.tracks" :key="track.id" class="feature-note">轨道 {{ track.id }} · {{ track.mime }} · {{ track.initialized ? '含初始化片段' : '缺少初始化片段' }}</p></details>
