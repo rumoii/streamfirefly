@@ -156,4 +156,19 @@ for (const compatible of [true, false]) {
   otherStorage.setItem('player-codecs', 'av01'); assert.equal(otherStorage.getItem('player-codecs'), 'av01', 'Only the page storages are affected');
   assert.equal(storageMethods.every((method, index) => method === [Storage.prototype.getItem, Storage.prototype.setItem, Storage.prototype.removeItem][index]), !compatible);
 }
-console.log('Capture probe: passive mode, source selection, bounded queue, ACK drain, restart, failed append, fast recording, compatible codecs and coordinator cleanup passed');
+{
+  // The content bridge must pair each speed request with its own reply when requests overlap.
+  const windowListeners = new Map(), controls = [];
+  let runtimeListener;
+  const window = { postMessage: message => controls.push(message), addEventListener: (name, listener) => windowListeners.set(name, listener) };
+  const api = { runtime: { onMessage: { addListener: listener => { runtimeListener = listener; } }, sendMessage: async () => ({}) } };
+  vm.runInNewContext(fs.readFileSync(new URL('../extension/capture-content.js', import.meta.url), 'utf8'), { window, chrome: api, crypto: { randomUUID: () => 'doc-token' }, sessionStorage: { getItem: () => null, setItem() {}, removeItem() {} }, setTimeout, clearTimeout, btoa, Date });
+  const request = message => new Promise(resolve => { if (!runtimeListener({ documentToken: 'doc-token', ...message }, {}, resolve)) resolve(undefined); });
+  const fromProbe = data => windowListeners.get('message')({ source: window, data: { source: 'streamfirefly-capture', ...data } });
+  const started = request({ type: 'capture.start', id: 'live', sourceId: '1' }); fromProbe({ type: 'started', id: 'live' }); assert.equal((await started).ok, true);
+  const first = request({ type: 'capture.speed', id: 'live', speed: 2 }), second = request({ type: 'capture.speed', id: 'live', speed: 8 });
+  assert.deepEqual(controls.filter(message => message.type === 'speed').map(message => message.rate), [2, 8]);
+  fromProbe({ type: 'speed-set', id: 'live', rate: 2 }); fromProbe({ type: 'speed-set', id: 'live', rate: 8 });
+  assert.deepEqual([(await first).value.rate, (await second).value.rate], [2, 8]);
+}
+console.log('Capture probe: passive mode, source selection, bounded queue, ACK drain, restart, failed append, fast recording, speed reply pairing, compatible codecs and coordinator cleanup passed');

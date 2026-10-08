@@ -3,7 +3,9 @@
   const documentToken = crypto.randomUUID();
   let id = "", awaiting = false, opened = null, closed = null, bytes = 0, count = 0, resetAt = Date.now();
   const control = message => window.postMessage({ source: "streamfirefly-capture-control", id, ...message }, "*");
-  let stageDecision = null, replayed = null, speedSet = null, stageToken = "", confirming = false;
+  let stageDecision = null, replayed = null, stageToken = "", confirming = false;
+  // The probe answers speed requests in order, so replies are matched first in, first out.
+  const speedReplies = [];
   function confirmStage(marker) {
     if (confirming || stageDecision !== null) return;
     if (!marker?.token) { stageDecision = false; control({ type: "stage", enabled: false }); return; }
@@ -15,7 +17,7 @@
     if (event.source !== window || event.data?.source !== "streamfirefly-capture" || event.data.id !== id || !id) return;
     const message = event.data;
     if (message.type === "ended") { void api.runtime.sendMessage({ type: "capture.ended", payload: { id, documentToken } }).catch(() => {}); return; }
-    if (message.type === "speed-set") { speedSet?.({ ok: true, value: { rate: message.rate } }); speedSet = null; return; }
+    if (message.type === "speed-set") { speedReplies.shift()?.({ ok: true, value: { rate: message.rate } }); return; }
     if (message.type === "speed-overridden") { void api.runtime.sendMessage({ type: "capture.speed.overridden", payload: { id, documentToken } }).catch(() => {}); return; }
     if (message.type === "replayed") { replayed?.({ ok: !message.error, error: message.error }); replayed = null; return; }
     if (message.type === "started") { opened?.({ ok: true }); opened = null; return; }
@@ -64,7 +66,7 @@
       control({ type: "start", sourceId: message.sourceId, restart: message.restart, speed: message.speed }); return true;
     }
     if (message?.type === "capture.replay" && message.id === id) { const timer = setTimeout(() => { replayed = null; respond({ ok: false, error: "capture_video_unavailable" }); }, 5000); replayed = result => { clearTimeout(timer); respond(result); }; control({ type: "replay" }); return true; }
-    if (message?.type === "capture.speed" && message.id === id) { const timer = setTimeout(() => { speedSet = null; respond({ ok: false, error: "capture_speed_unavailable" }); }, 5000); speedSet = result => { clearTimeout(timer); respond(result); }; control({ type: "speed", rate: message.speed }); return true; }
+    if (message?.type === "capture.speed" && message.id === id) { const reply = result => { clearTimeout(timer); const index = speedReplies.indexOf(reply); if (index >= 0) speedReplies.splice(index, 1); respond(result); }; const timer = setTimeout(() => reply({ ok: false, error: "capture_speed_unavailable" }), 5000); speedReplies.push(reply); control({ type: "speed", rate: message.speed }); return true; }
     if (message?.type === "capture.abort" && message.id === id) { control({ type: "abort", error: "capture_interrupted" }); opened?.({ ok: false, error: "capture_interrupted" }); opened = null; closed?.({ ok: false, error: "capture_interrupted" }); closed = null; id = ""; respond({ ok: true }); return false; }
     if (message?.type === "capture.stop" && message.id === id) { const timer = setTimeout(() => { closed = null; control({ type: "abort", error: "capture_drain_timeout" }); respond({ ok: false, error: "capture_drain_timeout" }); }, 30000); closed = result => { clearTimeout(timer); respond(result); }; control({ type: "stop" }); return true; }
     return false;
