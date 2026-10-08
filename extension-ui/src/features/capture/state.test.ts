@@ -314,6 +314,30 @@ describe("capture page guidance and records", () => {
       expect(wrapper.get('.capture-steps [data-state="current"]').text()).toContain("勾选授权");
     } finally { wrapper.unmount(); vi.useRealTimers(); }
   });
+  it("moves from waiting straight to recording after the restart is claimed and keeps consent", async () => {
+    vi.useFakeTimers();
+    let restartPhase = "waiting", listed = false, releaseOpen = () => {};
+    send.mockImplementation(async message => {
+      if (message.type === "capture.list") return { ok: true, value: listed ? [{ id: "session", tabId: 1, state: "capturing", bytes: 0, tracks: [], outputs: [], source }] : [] };
+      if (message.type === "capture.restart") return { ok: true, value: { operationId: "op" } };
+      if (message.type === "capture.restart.status") return { ok: true, value: { phase: restartPhase, sourceContextId: "reloaded", sources: restartPhase === "claimed" ? [source] : [], frames: [] } };
+      if (message.type === "capture.open") { await new Promise<void>(resolve => { releaseOpen = resolve; }); listed = true; return { ok: true, value: { id: "session" } }; }
+      throw Error(message.type);
+    });
+    const wrapper = mount(CapturePanel, { props: { context } });
+    const current = () => wrapper.get('.capture-steps [data-state="current"]').text();
+    const consent = () => (wrapper.find('input[type="checkbox"]').element as HTMLInputElement).checked;
+    try {
+      await flushPromises(); await wrapper.find('input[type="checkbox"]').setValue(true);
+      await wrapper.findAll("button").find(button => button.text() === "一键捕捉")!.trigger("click"); await flushPromises();
+      restartPhase = "claimed"; await vi.advanceTimersByTimeAsync(1600); await flushPromises();
+      // The reloaded page context can arrive after the claim; it belongs to this restart.
+      await wrapper.setProps({ context: { ...context, sourceContextId: "reloaded" } }); await flushPromises();
+      expect(current()).toContain("到来源页播放视频"); expect(consent()).toBe(true);
+      releaseOpen(); await flushPromises();
+      expect(current()).toContain("录制中"); expect(consent()).toBe(true);
+    } finally { wrapper.unmount(); vi.useRealTimers(); }
+  });
   it("guides the one-click capture through authorization and source refresh", async () => {
     send.mockImplementation(async message => {
       if (message.type === "capture.list") return { ok: true, value: [] };

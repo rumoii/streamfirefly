@@ -12,7 +12,8 @@ export function createCaptureState(context: Ref<UiContext | null>, trusted: bool
   const error = ref(""), message = ref(""), busy = ref(false), selected = ref(""), acknowledged = ref(false), directory = ref("");
   let revision = 0, disposed = false, refreshing = false;
   let connectionFailure = "", recovering = "";
-  const restarting = ref(false), renewed = ref(false), restartPhase = ref("");
+  // starting bridges a claimed one-click restart until its new session is listed, so the steps never fall back.
+  const restarting = ref(false), renewed = ref(false), restartPhase = ref(""), starting = ref(false);
   const speed = ref<CaptureSpeed>("1"), compatibleCodecs = ref(true);
   let restartOperation = "", restartContext = "", restartTab = -1;
   const quickCandidate = computed<MediaCandidate | undefined>(() => {
@@ -28,7 +29,7 @@ export function createCaptureState(context: Ref<UiContext | null>, trusted: bool
   const active = computed(() => sessions.value.find(session => session.tabId === context.value?.sourceTabId && ["armed", "capturing", "stopping", "finalizing"].includes(session.state)));
   const lastSessionId = ref("");
   const lastSession = computed(() => lastSessionId.value ? sessions.value.find(session => session.id === lastSessionId.value) : undefined);
-  const phase = computed(() => active.value ? (["stopping", "finalizing"].includes(active.value.state) ? "saving" : "recording") : restarting.value ? "waiting" : lastSession.value?.state === "complete" ? "done" : lastSession.value && ["partial", "interrupted"].includes(lastSession.value.state) ? "failed" : "ready");
+  const phase = computed(() => active.value ? (["stopping", "finalizing"].includes(active.value.state) ? "saving" : "recording") : restarting.value || starting.value ? "waiting" : lastSession.value?.state === "complete" ? "done" : lastSession.value && ["partial", "interrupted"].includes(lastSession.value.state) ? "failed" : "ready");
   const selectionLocked = computed(() => Boolean(!renewed.value && targetObjectUrl?.value && catalog.value.sources.length === 1 && catalog.value.sources[0].objectUrls.includes(targetObjectUrl.value)));
   const blobUnconfirmed = computed(() => {
     const objectUrl = targetObjectUrl?.value;
@@ -51,7 +52,11 @@ export function createCaptureState(context: Ref<UiContext | null>, trusted: bool
           restartContext = status.sourceContextId; catalog.value = status; renewed.value = true; restarting.value = false;
           selected.value = status.sources.length === 1 ? sourceKey(status.sources[0]) : "";
           message.value = status.sources.length === 1 ? "已开始录制。让视频播放到结尾，播完会自动保存；也可以随时点“停止并保存”。" : "页面上有多个视频，请在“高级选项”里选择要录制的那个，再点“开始捕捉”。";
-          if (status.sources.length === 1) { acknowledged.value = true; await start(true); }
+          if (status.sources.length === 1) {
+            acknowledged.value = true; starting.value = true;
+            try { await start(true); if (!disposed) sessions.value = await sessionRequest("capture.list", undefined); }
+            finally { starting.value = false; }
+          }
         }
       }
     }
@@ -167,12 +172,15 @@ export function createCaptureState(context: Ref<UiContext | null>, trusted: bool
     catch (reason) { if (!disposed) { message.value = ""; error.value = sessionError(reason); } }
     finally { if (!disposed) busy.value = false; }
   }
-  watch([() => context.value?.sourceContextId, () => targetObjectUrl?.value || ""], () => {
+  watch([() => context.value?.sourceContextId, () => targetObjectUrl?.value || ""], (next, previous) => {
+    // The one-click restart reloads the source page itself; keep its claimed selection and consent.
+    if (restartContext && next[0] === restartContext && next[1] === previous?.[1]) return;
     revision++; catalog.value = { sources: [], frames: [] }; selected.value = ""; acknowledged.value = false; busy.value = false; error.value = ""; message.value = "";
     if (context.value?.supported && targetObjectUrl?.value) void scan();
   }, { immediate: true });
-  watch(selected, () => { acknowledged.value = false; });
+  // Consent covers one chosen source; picking another one asks for it again.
+  function chooseSource(value: string) { selected.value = value; acknowledged.value = false; }
   onBeforeUnmount(() => { disposed = true; revision++; clearTimeout(timer); });
   void refresh(); void loadSpeed();
-  return { speed, setSpeed, compatibleCodecs, setCompatibleCodecs, lastSession, restartPhase, sessions, orderedSessions, failedSessions, phase, quickCandidate, remove, removeFailed, catalog, error, message, busy, selected, acknowledged, directory, active, selectionLocked, blobUnconfirmed, sourceKey, scan, start, stop, recover, refresh, restarting, renewed, quickDownloadAvailable, restart, replay };
+  return { chooseSource, speed, setSpeed, compatibleCodecs, setCompatibleCodecs, lastSession, restartPhase, sessions, orderedSessions, failedSessions, phase, quickCandidate, remove, removeFailed, catalog, error, message, busy, selected, acknowledged, directory, active, selectionLocked, blobUnconfirmed, sourceKey, scan, start, stop, recover, refresh, restarting, renewed, quickDownloadAvailable, restart, replay };
 }
