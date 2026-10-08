@@ -443,6 +443,8 @@ code.feature-result { display: block; }
 .capture-actions { flex-wrap: wrap; }
 .capture-speed-row { display: grid; grid-template-columns: minmax(160px, 220px) minmax(0, 1fr); gap: 12px; align-items: end; }
 .capture-speed-row .feature-note { margin: 0; }
+/* Notes sit under the checkbox text (16px box + 7px gap) so they read as part of that option. */
+.capture-option .feature-note { margin: 2px 0 0 23px; }
 .capture-advanced { border-top: 1px solid var(--sf-border); padding-top: 10px; }
 .capture-advanced > summary, .capture-tracks > summary { cursor: pointer; color: var(--sf-text-2); font-size: var(--sf-text-sm); font-weight: 600; }
 .capture-advanced-body { display: grid; gap: 12px; margin-top: 12px; }

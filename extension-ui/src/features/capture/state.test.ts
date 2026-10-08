@@ -25,10 +25,10 @@ describe("capture and deep-search session state", () => {
     const wrapper = mount(CapturePanel, { props: { context } }); await flushPromises();
     const toggle = () => wrapper.findAll("label.feature-check").find(label => label.text().includes("H.264"))!.get("input");
     expect((toggle().element as HTMLInputElement).checked).toBe(true);
-    const note = () => wrapper.get(".capture-codec-note").text();
-    expect(note()).toContain("怎么选：更看重画质，就关掉"); expect(note()).toContain("清晰度可能会降低");
+    const notes = () => wrapper.get(".capture-option").findAll(".feature-note").map(note => note.text());
+    expect(notes()[0]).toMatch(/^已开启：.*清晰度可能会降低/); expect(notes()[1]).toMatch(/^怎么选：/);
     await toggle().setValue(false); await flushPromises();
-    expect(note()).toContain("怎么选：更看重画质，就关掉"); expect(note()).toContain("播放时需要支持这些编码的播放器");
+    expect(notes()[0]).toMatch(/^已关闭：.*播放时需要支持这些编码的播放器/); expect(notes()[1]).toMatch(/^怎么选：/);
     expect(storage.saved.captureCompatibleCodecs).toBe(false); wrapper.unmount();
     const reopened = mount(CapturePanel, { props: { context } }); await flushPromises();
     expect((reopened.findAll("label.feature-check").find(label => label.text().includes("H.264"))!.get("input").element as HTMLInputElement).checked).toBe(false); reopened.unmount();
