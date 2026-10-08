@@ -26,15 +26,17 @@
     if (element?.canPlayType) { const original = element.canPlayType; element.canPlayType = function(type) { return modern.test(String(type)) ? "" : Reflect.apply(original, this, [type]); }; }
     const capabilities = window.navigator?.mediaCapabilities;
     if (capabilities?.decodingInfo) { const original = capabilities.decodingInfo; capabilities.decodingInfo = function(configuration) { return modern.test(String(configuration?.video?.contentType || "")) ? Promise.resolve({ supported: false, smooth: false, powerEfficient: false }) : Reflect.apply(original, this, [configuration]); }; }
-    // Players that cache codec probes skip the checks above. For this load, stored values that mention
-    // these codecs are invisible and writes touching them are dropped, so the user's normal viewing keeps
-    // its own results. Matching on content covers any site; bpcc_persisted is Bilibili's known cache key.
+    // Players that cache codec probes skip the checks above. For this load, stored probe results for these
+    // codecs are invisible and writes touching them are dropped, so the user's normal viewing keeps its own
+    // results. A probe result names a codec and carries decodingInfo fields; other values that merely
+    // mention a codec stay untouched. bpcc_persisted is Bilibili's known cache key.
     const codecCaches = new Set(["bpcc_persisted"]), storage = window.Storage?.prototype, own = "streamfirefly:capture-restart";
     let local = null, session = null;
     try { local = window.localStorage; } catch {}
     try { session = window.sessionStorage; } catch {}
     const read = storage?.getItem;
-    const hidden = (target, key, value) => (target === local || target === session) && String(key) !== own && (codecCaches.has(String(key)) || modern.test(String(value ?? "")));
+    const probeResult = /["']?(supported|smooth|powerEfficient)["']?\s*:/;
+    const hidden = (target, key, value) => (target === local || target === session) && String(key) !== own && (codecCaches.has(String(key)) || modern.test(String(value ?? "")) && probeResult.test(String(value ?? "")));
     const stored = (target, key) => { try { return Reflect.apply(read, target, [key]); } catch { return null; } };
     if (read) storage.getItem = function(key) { const value = Reflect.apply(read, this, [key]); return hidden(this, key, value) ? null : value; };
     if (storage?.setItem) { const original = storage.setItem; storage.setItem = function(key, value) { if (!hidden(this, key, value) && !hidden(this, key, stored(this, key))) return Reflect.apply(original, this, [key, value]); }; }

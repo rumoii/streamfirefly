@@ -126,7 +126,8 @@ for (const compatible of [true, false]) {
   const localStorage = new Storage(), tabStorage = new Storage(), otherStorage = new Storage();
   localStorage.items.set('bpcc_persisted', '{"supported":true}');
   localStorage.items.set('player-codecs', '{"v2:av01.0.08M.08":{"supported":true}}');
-  tabStorage.items.set('probe', 'hvc1.1.6.L120.90=yes'); tabStorage.items.set('streamfirefly:capture-restart', '[{"codec":"av01"}]');
+  tabStorage.items.set('probe', '{"hvc1.1.6.L120.90":{"smooth":true}}');
+  localStorage.items.set('player-settings', '{"codec":"av01","volume":0.5}'); tabStorage.items.set('streamfirefly:capture-restart', '[{"codec":"av01"}]');
   const stored = new Map([['streamfirefly:capture-restart', JSON.stringify([{ token: '00000000-0000-4000-8000-000000000000', expires: Date.now() + 60000, compatible }])]]);
   const sessionStorage = { getItem: key => stored.get(key) ?? null, setItem: (key, value) => stored.set(key, value), removeItem: key => stored.delete(key) };
   const window = { MediaSource, SourceBuffer, HTMLMediaElement, Storage, localStorage, sessionStorage: tabStorage, navigator: { mediaCapabilities: { decodingInfo } }, URL: { createObjectURL: () => 'blob:x' }, postMessage() {}, addEventListener() {} };
@@ -149,6 +150,8 @@ for (const compatible of [true, false]) {
   assert.equal(localStorage.items.get('player-codecs'), compatible ? '{"v2:av01.0.08M.08":{"supported":true}}' : '{}', 'Writes during the compatible load must not reach the user cache');
   assert.equal(localStorage.items.has('bpcc_persisted'), compatible);
   assert.equal(localStorage.items.has('fresh'), !compatible, 'New values naming hidden codecs are not stored');
+  assert.equal(localStorage.getItem('player-settings'), '{"codec":"av01","volume":0.5}', 'Values that only mention a codec are not probe results');
+  localStorage.setItem('player-settings', '{"codec":"av01","volume":0.8}'); assert.equal(localStorage.items.get('player-settings'), '{"codec":"av01","volume":0.8}');
   localStorage.setItem('other', 'avc1.64001F'); assert.equal(localStorage.getItem('other'), 'avc1.64001F', 'H.264 values are untouched');
   otherStorage.setItem('player-codecs', 'av01'); assert.equal(otherStorage.getItem('player-codecs'), 'av01', 'Only the page storages are affected');
   assert.equal(storageMethods.every((method, index) => method === [Storage.prototype.getItem, Storage.prototype.setItem, Storage.prototype.removeItem][index]), !compatible);
