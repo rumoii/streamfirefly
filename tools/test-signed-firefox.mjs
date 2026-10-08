@@ -25,7 +25,7 @@ async function request(method,route,body){
 }
 async function start(){
  const value=await request('POST','/session',{capabilities:{alwaysMatch:{browserName:'firefox','moz:firefoxOptions':{binary:firefox,args:['-headless','-profile',profile],prefs:{'xpinstall.signatures.required':true,'remote.prefs.recommended':false,'extensions.update.enabled':false}}}}});
- session=value.sessionId;assert.ok(Number.parseInt(value.capabilities.browserVersion)>=142,'Firefox must be 142+');return value.capabilities.browserVersion;
+ session=value.sessionId;assert.ok(Number.parseInt(value.capabilities.browserVersion)>=140,'Firefox must be 140+');return value.capabilities.browserVersion;
 }
 async function execute(script,args=[]){return request('POST',`/session/${session}/execute/async`,{script,args});}
 async function inspect(){

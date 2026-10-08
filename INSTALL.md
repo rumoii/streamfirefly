@@ -10,7 +10,7 @@
 ## 开始前确认
 
 - **系统**：Windows 11（64 位或 ARM64）。
-- **浏览器**：Chrome 或 Edge 141 及以上，或 Firefox 142 及以上。查看版本：在浏览器地址栏输入 `chrome://settings/help`（Edge 输入 `edge://settings/help`，Firefox 在“帮助 → 关于 Firefox”）。
+- **浏览器**：Chrome 或 Edge 116 及以上，或 Firefox 140 及以上。查看版本：在浏览器地址栏输入 `chrome://settings/help`（Edge 输入 `edge://settings/help`，Firefox 在“帮助 → 关于 Firefox”）。
 - **网络**：安装包放在 GitHub 上。国内网络访问 GitHub 可能很慢或打不开，**建议先打开代理工具**（系统代理或 TUN 模式都可以，安装命令会自动使用系统代理）。
 
 ## 第一步：安装浏览器扩展

@@ -14,7 +14,7 @@
 
 商店版内的一键安装命令指向同版本的 GitHub Release 附件，因此须先公开发布对应版本的 Release，再提交商店审核。
 
-当前 Chromium 清单没有 `update_url`，名称和描述无需浏览器品牌替换。使用的 `sidePanel`、`offscreen`、`scripting`、`declarativeNetRequest` 等 API 在 Microsoft 的[支持列表](https://learn.microsoft.com/en-us/microsoft-edge/extensions/developer-guide/api-support)中；实际浏览器行为仍须通过项目测试。最低浏览器版本为 Chrome／Edge 141。
+当前 Chromium 清单没有 `update_url`，名称和描述无需浏览器品牌替换。使用的 `sidePanel`、`offscreen`、`scripting`、`declarativeNetRequest` 等 API 在 Microsoft 的[支持列表](https://learn.microsoft.com/en-us/microsoft-edge/extensions/developer-guide/api-support)中；实际浏览器行为仍须通过项目测试。最低浏览器版本为 Chrome／Edge 116，依据见 [放低最低浏览器版本](../decisions/proposed/2026-10-08-lower-browser-minimum.md)。
 
 ## Chrome 草稿
 

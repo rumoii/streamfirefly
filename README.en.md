@@ -90,7 +90,7 @@ Download the Windows bundle for your architecture from [Releases](https://github
 
 ### Build from source
 
-You need Node.js, a Rust toolchain, and Chrome/Edge 141+ or Firefox 142+. The helper downloads with the `curl` that ships with Windows; HLS/DASH merging needs FFmpeg.
+You need Node.js, a Rust toolchain, and Chrome/Edge 116+ or Firefox 140+. The helper downloads with the `curl` that ships with Windows; HLS/DASH merging needs FFmpeg.
 
 ```powershell
 npm install

@@ -13,14 +13,15 @@ const missing = required.filter(file => !fs.existsSync(path.join(root, file)));
 const appHtmlPath = path.join(root, 'dist', 'app.html');
 const appScriptPath = path.join(root, 'dist', 'assets', 'app.js');
 if (manifest.manifest_version !== 3) throw new Error('manifest_version must be 3');
-if (manifest.minimum_chrome_version !== '141') throw new Error('minimum_chrome_version must be 141 for sidePanel.close');
+if (manifest.minimum_chrome_version !== '116') throw new Error('minimum_chrome_version must be 116 for runtime.getContexts');
 if (!manifest.background?.service_worker) throw new Error('background service worker missing');
 if (!manifest.permissions?.includes('nativeMessaging')) throw new Error('nativeMessaging permission missing');
 if (!manifest.permissions?.includes('declarativeNetRequest')) throw new Error('declarativeNetRequest permission missing');
 if (!manifest.permissions?.includes('webNavigation')) throw new Error('webNavigation permission missing');
 if (manifest.version !== JSON.parse(fs.readFileSync(path.join(root, '..', 'package.json'), 'utf8')).version) throw new Error(`unexpected extension version: ${manifest.version}`);
 if (!manifest.permissions?.includes('sidePanel')) throw new Error('Chrome sidePanel permission missing');
-if (manifest.side_panel?.default_path !== 'dist/app.html?surface=sidebar#/resources') throw new Error('Chrome side panel entry missing');
+// Chrome 116 resolves default_path as a file and rejects a query or fragment; the page defaults to the sidebar surface.
+if (manifest.side_panel?.default_path !== 'dist/app.html') throw new Error('Chrome side panel entry missing');
 if (manifest.options_ui?.page !== 'dist/app.html?surface=options#/settings') throw new Error('Vue settings entry missing');
 if (/\btabs\.create\s*\(/.test(readBackgroundSource(['background.js', 'workspace.js']))) throw new Error('Toolbar entry must not create an application tab');
 if (/AppSession|app\.session\.|appTabId/.test(background)) throw new Error('Obsolete application session lifecycle is still present');

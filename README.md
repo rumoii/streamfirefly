@@ -98,7 +98,7 @@
 
 ### 从源码构建
 
-需要 Node.js、Rust 工具链，以及 Chrome/Edge 141+ 或 Firefox 142+。本地助手使用 Windows 自带的 `curl` 下载，HLS/DASH 合并需要 FFmpeg。
+需要 Node.js、Rust 工具链，以及 Chrome/Edge 116+ 或 Firefox 140+。本地助手使用 Windows 自带的 `curl` 下载，HLS/DASH 合并需要 FFmpeg。
 
 ```powershell
 npm install

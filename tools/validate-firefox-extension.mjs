@@ -20,7 +20,8 @@ if (!manifest.permissions?.includes('nativeMessaging')) throw new Error('Firefox
 if (!manifest.permissions?.includes('declarativeNetRequest')) throw new Error('Firefox declarativeNetRequest permission missing');
 if (!manifest.permissions?.includes('webNavigation')) throw new Error('Firefox webNavigation permission missing');
 if (gecko?.id !== 'streamfirefly@example.invalid') throw new Error(`Unexpected Firefox extension ID: ${gecko?.id}`);
-if (Number.parseFloat(gecko?.strict_min_version) < 142) throw new Error('Firefox strict_min_version must be at least 142');
+if (Number.parseFloat(gecko?.strict_min_version) < 140) throw new Error('Firefox strict_min_version must be at least 140 for data_collection_permissions');
+if (Number.parseFloat(manifest.browser_specific_settings?.gecko_android?.strict_min_version) < 142) throw new Error('Firefox for Android strict_min_version must be at least 142 for data_collection_permissions');
 if (JSON.stringify(gecko?.data_collection_permissions?.required) !== JSON.stringify(['none'])) throw new Error('Firefox data collection declaration must be required: ["none"]');
 if (manifest.version !== JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'package.json'), 'utf8')).version) throw new Error(`Unexpected Firefox extension version: ${manifest.version}`);
 if (manifest.sidebar_action?.default_panel !== 'dist/app.html?surface=sidebar#/resources') throw new Error('Firefox sidebar entry missing');

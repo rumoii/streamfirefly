@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "minimum_chrome_version": "141",
+  "minimum_chrome_version": "116",
   "name": "流萤 StreamFirefly",
   "version": "1.0.5",
   "description": "本地优先的网页媒体发现与下载工具",
@@ -12,7 +12,7 @@
     "default_title": "流萤 StreamFirefly",
     "default_icon": { "16": "icon16.png", "32": "icon32.png", "48": "icon48.png" }
   },
-  "side_panel": { "default_path": "dist/app.html?surface=sidebar#/resources" },
+  "side_panel": { "default_path": "dist/app.html" },
   "content_scripts": [
     {
       "matches": ["http://*/*", "https://*/*"],
