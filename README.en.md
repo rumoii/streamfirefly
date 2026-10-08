@@ -19,7 +19,7 @@ Local-first media discovery and download for the web
 
 StreamFirefly has two parts: a browser extension and a native helper for Windows. The extension finds video, audio, images and HLS/DASH manifests on web pages. The helper, written in Rust, handles downloading, queueing, recovery and FFmpeg merging. Tasks and settings stay on your machine.
 
-The current version is 1.0.5. The interface is currently in Simplified Chinese. StreamFirefly does not circumvent DRM; only download content you own or are authorized to download.
+The current version is 1.0.6. The interface is currently in Simplified Chinese. StreamFirefly does not circumvent DRM; only download content you own or are authorized to download.
 
 StreamFirefly ships in two editions built from the same source:
 
@@ -72,7 +72,7 @@ Screenshots come from the automated UI tests and show test data.
 - Output templates: separate copy templates for HLS, DASH and other resources, plus a file name template. Templates only transform strings; they never run scripts.
 - External tools: a confirmation page shows the expanded arguments before sending and reports the result for each item. Clear failures can be retried by hand; unknown results are never resent automatically. Automatic sending applies only to sites you configured and to HTTP/Aria2 tools.
 - Deep search: off by default, enabled per page, and can be remembered per site. Watches for complete HLS/MPD text passing through JSON.parse, Base64, text decoding and same-origin Workers. Possible AES-128 keys are kept in memory only and can be chosen in the HLS parser.
-- Cache capture: pick a media source on the page and save MediaSource data from that point on. Seeks and codec changes start a new segment, each saved as its own MKV. Data buffered before capture started cannot be recovered.
+- Cache capture: pick a media source on the page and save MediaSource data from that point on. Seeks and codec changes start a new segment, each saved as its own MKV. Data buffered before capture started cannot be recovered. Recording can play muted at 2–16x speed; one-click capture prefers H.264 by default so the saved video, named after the page title in the save folder, plays in stock Windows players (some sites may offer lower resolution in H.264; the option can be turned off).
 
 </details>
 
