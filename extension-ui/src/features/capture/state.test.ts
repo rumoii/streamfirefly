@@ -191,6 +191,11 @@ describe("capture page guidance and records", () => {
     expect(wrapper.text()).toContain("本地助手版本较旧");
     expect(wrapper.text()).toContain("AV1 Video Extension"); wrapper.unmount(); vi.unstubAllGlobals();
   });
+  it("marks records that are still recording or generating the file as busy", async () => {
+    send.mockImplementation(async message => { if (message.type === "capture.list") return { ok: true, value: [record("recording", "capturing", 3), record("saving", "finalizing", 2), record("done", "complete", 1)] }; throw Error(message.type); });
+    const wrapper = mount(CapturePanel, { props: { context } }); await flushPromises();
+    expect(wrapper.findAll(".capture-session").map(item => item.classes("busy"))).toEqual([true, true, false]); wrapper.unmount();
+  });
   it("lists records newest first and deletes only after confirmation", async () => {
     let records = [record("old", "complete", 1, { outputs: ["C:\captures\old.mkv"] }), record("new", "partial", 3), record("mid", "interrupted", 2)];
     send.mockImplementation(async message => {

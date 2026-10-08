@@ -434,6 +434,12 @@ code.feature-result { display: block; }
 .capture-guidance[data-tone="success"] { padding: 10px 12px; border-radius: var(--sf-radius-md); background: var(--sf-success-soft); color: var(--sf-success); font-weight: 600; }
 .capture-guidance[data-tone="danger"] { padding: 10px 12px; border-radius: var(--sf-radius-md); background: var(--sf-danger-soft); color: var(--sf-danger); }
 .capture-session.latest { border-color: var(--sf-success); box-shadow: 0 0 0 2px var(--sf-success-soft); }
+/* A slow breath on records still receiving data or generating the file, so a long recording visibly progresses. */
+.capture-session.busy { border-color: var(--sf-info); animation: capture-breathe 1.6s ease-in-out infinite; }
+.capture-session.busy .dispatch-state { display: inline-flex; align-items: center; gap: 6px; }
+.capture-session.busy .dispatch-state::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: capture-dot 1.6s ease-in-out infinite; }
+@keyframes capture-breathe { 0%, 100% { box-shadow: 0 0 0 1px var(--sf-info-soft); } 50% { box-shadow: 0 0 0 5px var(--sf-info-soft); } }
+@keyframes capture-dot { 0%, 100% { opacity: .35; transform: scale(.8); } 50% { opacity: 1; transform: scale(1.15); } }
 .capture-actions { flex-wrap: wrap; }
 .capture-speed-row { display: grid; grid-template-columns: minmax(160px, 220px) minmax(0, 1fr); gap: 12px; align-items: end; }
 .capture-speed-row .feature-note { margin: 0; }
