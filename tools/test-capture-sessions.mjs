@@ -49,6 +49,8 @@ coordinator.speedOverridden({ ...speedSender, frameId: 0 }, { id: opened.id, doc
 coordinator.speedOverridden(speedSender, { id: opened.id, documentToken: 'stale-document' });
 assert.equal((await coordinator.list())[0].speedOverridden, false, 'Only the recording document may report an overridden speed');
 coordinator.speedOverridden(speedSender, { id: opened.id, documentToken: 'frame-document' }); assert.equal((await coordinator.list())[0].speedOverridden, true);
+coordinator.playback({ ...speedSender, frameId: 0 }, { id: opened.id, documentToken: 'frame-document', paused: true }); coordinator.playback(speedSender, { id: opened.id, documentToken: 'stale-document', paused: true }); assert.equal((await coordinator.list())[0].paused, undefined, 'Only the recording document may report a paused video');
+coordinator.playback(speedSender, { id: opened.id, documentToken: 'frame-document', paused: true }); assert.equal((await coordinator.list())[0].paused, true);
 await assert.rejects(coordinator.open(payload), /capture_already_open/);
 await coordinator.interrupted(1, 0); assert.equal((await coordinator.list())[0].state, 'armed');
 await coordinator.interrupted(1, 2, 'stale-document', opened.id); assert.equal((await coordinator.list())[0].state, 'armed');

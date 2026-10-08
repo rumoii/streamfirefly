@@ -433,6 +433,7 @@ code.feature-result { display: block; }
 .capture-guidance { margin: 0; color: var(--sf-text); font-size: var(--sf-text-md); overflow-wrap: anywhere; }
 .capture-guidance[data-tone="success"] { padding: 10px 12px; border-radius: var(--sf-radius-md); background: var(--sf-success-soft); color: var(--sf-success); font-weight: 600; }
 .capture-guidance[data-tone="danger"] { padding: 10px 12px; border-radius: var(--sf-radius-md); background: var(--sf-danger-soft); color: var(--sf-danger); }
+.capture-guidance[data-tone="warning"] { padding: 10px 12px; border-radius: var(--sf-radius-md); background: var(--sf-warning-soft); color: var(--sf-warning); font-weight: 600; }
 .capture-session.latest { border-color: var(--sf-success); box-shadow: 0 0 0 2px var(--sf-success-soft); }
 /* A slow breath on records still receiving data or generating the file, so a long recording visibly progresses. */
 .capture-session.busy { border-color: var(--sf-info); animation: capture-breathe 1.6s ease-in-out infinite; }

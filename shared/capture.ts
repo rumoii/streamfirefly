@@ -28,6 +28,7 @@ export interface CaptureSnapshot {
   ended?: boolean;
   speed?: number;
   speedOverridden?: boolean;
+  paused?: boolean;
   tracks: { id: number; mime: string; bytes: number; initialized: boolean }[];
   createdAt?: number;
   pageTitle?: string;

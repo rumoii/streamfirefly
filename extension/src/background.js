@@ -188,6 +188,7 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message?.type === "capture.ended" && sender.tab) { capture.ended(sender, message.payload || {}).then(() => sendResponse({ ok: true }), error => sendResponse({ ok: false, error: error.message })); return true; }
   if (message?.type === "capture.speed.overridden" && sender.tab) { capture.speedOverridden(sender, message.payload || {}); sendResponse({ ok: true }); return false; }
+  if (message?.type === "capture.playback" && sender.tab) { capture.playback(sender, message.payload || {}); sendResponse({ ok: true }); return false; }
   if (message?.type === "capture.transport.push" && capture.isLocal) { capture.push(message.payload, sender).then(value => sendResponse({ ok: true, value }), error => sendResponse({ ok: false, error: error.message })); return true; }
   if (message?.type === "capture.interrupted" && sender.tab) { if (!message.payload?.id || !message.payload?.documentToken) return false; capture.interrupted(sender.tab.id, sender.frameId ?? 0, message.payload.documentToken, message.payload.id, message.payload.error).then(() => sendResponse({ ok: true }), () => sendResponse({ ok: false })); return true; }
   if (message?.type === "deep.key.add") { deepSearch.addKey(sender, message.payload).then(ok => sendResponse({ ok }), () => sendResponse({ ok: false })); return true; }

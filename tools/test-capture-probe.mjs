@@ -18,7 +18,7 @@ const URLApi = { createObjectURL: () => { const value = `blob:https://page.test/
 const window = { MediaSource, SourceBuffer, URL: URLApi, postMessage: message => posted.push(message), addEventListener: (name, listener) => listeners.set(name, listener) };
 const documentListeners = new Map();
 vm.runInNewContext(fs.readFileSync(new URL('../extension/capture-initialization.js', import.meta.url), 'utf8'), { window, Uint8Array, DataView });
-vm.runInNewContext(fs.readFileSync(new URL('../extension/capture-probe.js', import.meta.url), 'utf8'), { window, document: { addEventListener: (name, listener) => documentListeners.set(name, listener) }, Uint8Array, WeakRef, setTimeout: () => 1, clearTimeout() {} });
+vm.runInNewContext(fs.readFileSync(new URL('../extension/capture-probe.js', import.meta.url), 'utf8'), { window, document: { addEventListener: (name, listener) => documentListeners.set(name, listener), querySelectorAll: () => [] }, Uint8Array, WeakRef, setTimeout: () => 1, clearTimeout() {} });
 const control = message => listeners.get('message')({ source: window, data: { source: 'streamfirefly-capture-control', ...message } });
 assert.equal(posted.pop().type, 'probe-ready');
 control({ type: 'stage', enabled: false });
@@ -90,11 +90,11 @@ await coordinator.interrupted(1);
   }
   let sequence = 0;
   const window = { MediaSource, SourceBuffer, URL: { createObjectURL: () => `blob:https://speed.test/${++sequence}` }, postMessage: message => posted.push(message), addEventListener: (name, listener) => listeners.set(name, listener) };
-  const document = { addEventListener: (name, listener) => documentListeners.set(name, listener), querySelectorAll: () => videos };
+  const document = { addEventListener: (name, listener) => { const list = documentListeners.get(name) || []; list.push(listener); documentListeners.set(name, list); }, querySelectorAll: () => videos };
   vm.runInNewContext(fs.readFileSync(new URL('../extension/capture-initialization.js', import.meta.url), 'utf8'), { window, Uint8Array, DataView });
   vm.runInNewContext(fs.readFileSync(new URL('../extension/capture-probe.js', import.meta.url), 'utf8'), { window, document, Uint8Array, WeakRef, Date, setTimeout: () => 1, clearTimeout() {} });
   const control = message => listeners.get('message')({ source: window, data: { source: 'streamfirefly-capture-control', ...message } });
-  const event = (name, target) => documentListeners.get(name)({ target });
+  const event = (name, target) => { for (const listener of documentListeners.get(name) || []) listener({ target }); };
   control({ type: 'stage', enabled: false }); posted.length = 0;
   const source = new MediaSource(), url = window.URL.createObjectURL(source), buffer = source.addSourceBuffer('video/mp4');
   const video = new Video(url, 8), unrelated = new Video('blob:https://speed.test/other');
@@ -114,6 +114,34 @@ await coordinator.interrupted(1);
   control({ type: 'stop', id: 'fast' }); assert.equal(posted.pop().type, 'stopped');
   for (const item of [video, late]) { assert.equal(item.playbackRate, 1); assert.equal(item.muted, false); }
   control({ type: 'speed', id: 'fast', rate: 8 }); assert.equal(posted.pop().rate, 0, 'A finished recording does not change the rate'); assert.equal(video.playbackRate, 1);
+}
+{
+  // A paused source page appends nothing, so the probe reports pause and resume of the recorded video.
+  const listeners = new Map(), posted = [], documentListeners = new Map(), videos = [];
+  class SourceBuffer { appendBuffer() {} }
+  class MediaSource { constructor() { this.sourceBuffers = []; this.readyState = 'open'; } addSourceBuffer() { const buffer = new SourceBuffer(); this.sourceBuffers.push(buffer); return buffer; } }
+  class Video { constructor(src) { this.currentSrc = src; this.paused = true; this.ended = false; this.muted = false; this.playbackRate = 1; } }
+  let sequence = 0;
+  const window = { MediaSource, SourceBuffer, URL: { createObjectURL: () => `blob:https://pause.test/${++sequence}` }, postMessage: message => posted.push(message), addEventListener: (name, listener) => listeners.set(name, listener) };
+  const document = { addEventListener: (name, listener) => { const list = documentListeners.get(name) || []; list.push(listener); documentListeners.set(name, list); }, querySelectorAll: () => videos };
+  vm.runInNewContext(fs.readFileSync(new URL('../extension/capture-initialization.js', import.meta.url), 'utf8'), { window, Uint8Array, DataView });
+  vm.runInNewContext(fs.readFileSync(new URL('../extension/capture-probe.js', import.meta.url), 'utf8'), { window, document, Uint8Array, WeakRef, Date, setTimeout: () => 1, clearTimeout() {} });
+  const control = message => listeners.get('message')({ source: window, data: { source: 'streamfirefly-capture-control', ...message } });
+  const event = (name, target) => { for (const listener of documentListeners.get(name) || []) listener({ target }); };
+  control({ type: 'stage', enabled: false }); posted.length = 0;
+  const source = new MediaSource(), url = window.URL.createObjectURL(source); source.addSourceBuffer('video/mp4');
+  const video = new Video(url), unrelated = new Video('blob:https://pause.test/other');
+  videos.push(video, unrelated);
+  control({ type: 'start', id: 'paused', sourceId: '1' });
+  assert.deepEqual(posted.splice(0).map(message => [message.type, message.paused]), [['started', undefined], ['playback', true]], 'A recording that starts on a paused video reports it at once');
+  video.paused = false; event('play', video); event('playing', video);
+  assert.deepEqual(posted.splice(0).map(message => message.paused), [false], 'Only a change is reported');
+  unrelated.paused = true; event('pause', unrelated); assert.equal(posted.length, 0, 'Other videos on the page are ignored');
+  video.paused = true; event('pause', video); assert.equal(posted.pop().paused, true);
+  video.ended = true; event('pause', video); assert.equal(posted.pop().paused, false, 'A finished video is not waiting for the user');
+  control({ type: 'stop', id: 'paused' }); posted.length = 0;
+  video.ended = false; video.paused = false; event('play', video); assert.equal(posted.length, 0, 'Nothing is reported after the recording stops');
+  control({ type: 'start', id: 'playing', sourceId: '1' }); assert.deepEqual(posted.splice(0).map(message => message.type), ['started'], 'A recording that starts while playing reports nothing');
 }
 for (const compatible of [true, false]) {
   // A one-click capture reload hides AV1/HEVC only when its marker asks for compatible codecs.
@@ -171,4 +199,4 @@ for (const compatible of [true, false]) {
   fromProbe({ type: 'speed-set', id: 'live', rate: 2 }); fromProbe({ type: 'speed-set', id: 'live', rate: 8 });
   assert.deepEqual([(await first).value.rate, (await second).value.rate], [2, 8]);
 }
-console.log('Capture probe: passive mode, source selection, bounded queue, ACK drain, restart, failed append, fast recording, speed reply pairing, compatible codecs and coordinator cleanup passed');
+console.log('Capture probe: passive mode, source selection, bounded queue, ACK drain, restart, failed append, fast recording, paused playback, speed reply pairing, compatible codecs and coordinator cleanup passed');

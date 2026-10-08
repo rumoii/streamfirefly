@@ -18,6 +18,7 @@ const steps = [{ key: "ready", label: "勾选授权，点一键捕捉" }, { key:
 const stepIndex = computed(() => phase.value === "done" ? steps.length : phase.value === "failed" ? 0 : steps.findIndex(step => step.key === phase.value));
 const guidance = computed(() => {
   if (phase.value === "waiting") return restartPhase.value === "claimed" ? "来源页已加载。如果视频没有自动播放，请切到来源页点击播放，录制会自动开始。" : "来源页正在重新加载，快慢取决于网速和网站，请稍等。视频如果自动播放，录制会自动开始。";
+  if (phase.value === "recording" && active.value?.paused) return `已收到 ${((active.value.bytes || 0) / 1048576).toFixed(1)} MiB，但来源页的视频暂停了，录不到新内容。请点“去来源页播放”，在来源页继续播放。`;
   if (phase.value === "recording") return `正在录制，已收到 ${((active.value?.bytes || 0) / 1048576).toFixed(1)} MiB。让视频播放到结尾会自动保存，也可以随时点“停止并保存”。`;
   if (phase.value === "saving") return "正在生成视频文件，请稍等。";
   if (phase.value === "done") return `录制完成，视频已保存${lastSession.value?.outputs.length ? `：${lastSession.value.outputs[0]}` : ""}。可以在下方录制记录里复制路径。`;
@@ -90,7 +91,7 @@ defineExpose({ scan });
       <ol class="capture-steps">
         <li v-for="(step, index) in steps" :key="step.key" :data-state="index < stepIndex ? 'done' : index === stepIndex ? 'current' : 'todo'"><i>{{ index < stepIndex ? '✓' : index + 1 }}</i><span>{{ step.label }}</span></li>
       </ol>
-      <p class="capture-guidance" role="status" :data-tone="phase === 'done' ? 'success' : phase === 'failed' ? 'danger' : undefined">{{ guidance }}</p>
+      <p class="capture-guidance" role="status" :data-tone="phase === 'done' ? 'success' : phase === 'failed' ? 'danger' : phase === 'recording' && active?.paused ? 'warning' : undefined">{{ guidance }}</p>
       <div class="capture-speed-row"><div class="field"><span>录制速度</span><SfSelect :model-value="speed" :options="speedOptions" label="录制速度" @update:model-value="setSpeed" /></div><p class="feature-note">加速时静音播放，长视频不用等它实时播完。网速跟不上时视频会停下来缓冲，不影响录到的内容；部分网站会把速度改回去。建议 2–4 倍。</p></div>
       <p v-if="Number(speed) >= 8" class="tool-notice">倍速太高时，网站可能自动降低清晰度，录出来的视频也可能分成几段。</p>
       <p v-if="liveCodecNotice" class="tool-notice">{{ liveCodecNotice }}</p>

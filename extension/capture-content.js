@@ -18,6 +18,7 @@
     const message = event.data;
     if (message.type === "ended") { void api.runtime.sendMessage({ type: "capture.ended", payload: { id, documentToken } }).catch(() => {}); return; }
     if (message.type === "speed-set") { speedReplies.shift()?.({ ok: true, value: { rate: message.rate } }); return; }
+    if (message.type === "playback") { void api.runtime.sendMessage({ type: "capture.playback", payload: { id, documentToken, paused: message.paused === true } }).catch(() => {}); return; }
     if (message.type === "speed-overridden") { void api.runtime.sendMessage({ type: "capture.speed.overridden", payload: { id, documentToken } }).catch(() => {}); return; }
     if (message.type === "replayed") { replayed?.({ ok: !message.error, error: message.error }); replayed = null; return; }
     if (message.type === "started") { opened?.({ ok: true }); opened = null; return; }

@@ -135,7 +135,7 @@ export function createCaptureCoordinator(api, nativeRequest, evaluation, resourc
   async function list() {
     const result = await nativeRequest("capture.list"); if (!result.ok) throw new Error(result.error || "capture_host_disconnected");
     for (const snapshot of result.value) if (history.get(snapshot.id)?.ended) snapshot.ended = true;
-    return result.value.map(snapshot => { const session = history.get(snapshot.id); return { ...snapshot, bytes: snapshot.bytes ?? 0, tracks: snapshot.tracks || [], outputs: snapshot.outputs || [], tabId: session?.tabId, source: session?.source, speed: session?.speed, speedOverridden: session?.speedOverridden, state: session?.state === "stopping" && ["armed", "capturing"].includes(snapshot.state) ? "stopping" : snapshot.state, error: snapshot.error === "capture_disconnected" && session?.error ? session.error : snapshot.error || (snapshot.state !== "complete" ? session?.error || (session?.cleanupFailed ? "capture_cleanup_failed" : undefined) : undefined) }; });
+    return result.value.map(snapshot => { const session = history.get(snapshot.id); return { ...snapshot, bytes: snapshot.bytes ?? 0, tracks: snapshot.tracks || [], outputs: snapshot.outputs || [], tabId: session?.tabId, source: session?.source, speed: session?.speed, speedOverridden: session?.speedOverridden, paused: session?.paused, state: session?.state === "stopping" && ["armed", "capturing"].includes(snapshot.state) ? "stopping" : snapshot.state, error: snapshot.error === "capture_disconnected" && session?.error ? session.error : snapshot.error || (snapshot.state !== "complete" ? session?.error || (session?.cleanupFailed ? "capture_cleanup_failed" : undefined) : undefined) }; });
   }
   function openControl(tabId, objectUrl = "") {
     if (objectUrl && (!String(objectUrl).startsWith("blob:") || String(objectUrl).length > 16384)) throw new Error("capture_object_url_invalid");
@@ -153,6 +153,7 @@ export function createCaptureCoordinator(api, nativeRequest, evaluation, resourc
     session.ended = true; await close(session.tabId, session.id);
   }
   function speedOverridden(sender, payload) { const session = senderSession(sender, payload); if (session) session.speedOverridden = true; }
+  function playback(sender, payload) { const session = senderSession(sender, payload); if (session) session.paused = payload.paused === true; }
   async function speed(payload) {
     const session = sessions.get(payload.tabId);
     if (!session || session.id !== payload.id || session.state === "stopping") throw Error("capture_session_changed");
@@ -166,5 +167,5 @@ export function createCaptureCoordinator(api, nativeRequest, evaluation, resourc
     if (!session || session.id !== payload.id || session.state === "stopping") throw Error("capture_session_changed");
     const response = await send(session, "replay"); if (!response?.ok) throw Error(response?.error || "capture_video_unavailable");
   }
-  return { open, close, sources, interrupted, list, openControl, replay, speed, speedOverridden, ended, restart, recover: async id => { const result = await nativeRequest("capture.close", { id }); if (!result.ok) throw new Error(result.error); return result.value; }, reveal: async payload => { const result = await nativeRequest("capture.reveal", { id: payload.id, path: payload.path }); if (!result.ok) throw new Error(result.error || "capture_reveal_failed"); return result.value; }, remove: async id => { const result = await nativeRequest("capture.delete", { id }); if (!result.ok) throw new Error(result.error || "capture_delete_failed"); history.delete(id); return result.value; }, push: (payload, sender) => local ? local.push(payload, sender) : null, isLocal: Boolean(local) };
+  return { open, close, sources, interrupted, list, openControl, replay, speed, speedOverridden, playback, ended, restart, recover: async id => { const result = await nativeRequest("capture.close", { id }); if (!result.ok) throw new Error(result.error); return result.value; }, reveal: async payload => { const result = await nativeRequest("capture.reveal", { id: payload.id, path: payload.path }); if (!result.ok) throw new Error(result.error || "capture_reveal_failed"); return result.value; }, remove: async id => { const result = await nativeRequest("capture.delete", { id }); if (!result.ok) throw new Error(result.error || "capture_delete_failed"); history.delete(id); return result.value; }, push: (payload, sender) => local ? local.push(payload, sender) : null, isLocal: Boolean(local) };
 }

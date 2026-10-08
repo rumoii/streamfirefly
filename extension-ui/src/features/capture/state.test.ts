@@ -33,10 +33,10 @@ describe("capture and deep-search session state", () => {
     const reopened = mount(CapturePanel, { props: { context } }); await flushPromises();
     expect((reopened.findAll("label.feature-check").find(label => label.text().includes("H.264"))!.get("input").element as HTMLInputElement).checked).toBe(false); reopened.unmount();
   });
-  it("remembers the recording speed and applies it to a running recording only", async () => {
-    let active = false, overridden = false;
+  it("remembers the recording speed, applies it to a running recording only and flags a paused source", async () => {
+    let active = false, overridden = false, paused = false;
     send.mockImplementation(async message => {
-      if (message.type === "capture.list") return { ok: true, value: active ? [{ id: "session", tabId: 1, state: "capturing", bytes: 0, tracks: [], outputs: [], source, speedOverridden: overridden }] : [] };
+      if (message.type === "capture.list") return { ok: true, value: active ? [{ id: "session", tabId: 1, state: "capturing", bytes: 0, tracks: [], outputs: [], source, speedOverridden: overridden, paused }] : [] };
       if (message.type === "capture.speed") return { ok: true, value: { rate: message.payload.speed } };
       throw Error(message.type);
     });
@@ -52,7 +52,12 @@ describe("capture and deep-search session state", () => {
     expect(send.mock.calls.find(([message]) => message.type === "capture.speed")?.[0].payload).toEqual({ tabId: 1, id: "session", speed: 2 });
     expect(wrapper.text()).toContain("正在以 2 倍速静音播放");
     overridden = true; await wrapper.findAll("button").find(item => item.text() === "刷新会话")!.trigger("click"); await flushPromises();
-    expect(wrapper.text()).toContain("网站把播放速度改回去了"); wrapper.unmount();
+    expect(wrapper.text()).toContain("网站把播放速度改回去了");
+    const refresh = async () => { await wrapper.findAll("button").find(item => item.text() === "刷新会话")!.trigger("click"); await flushPromises(); };
+    paused = true; await refresh();
+    expect(wrapper.get(".capture-guidance").text()).toContain("来源页的视频暂停了"); expect(wrapper.get(".capture-guidance").attributes("data-tone")).toBe("warning");
+    paused = false; await refresh();
+    expect(wrapper.get(".capture-guidance").text()).toMatch(/^正在录制/); expect(wrapper.get(".capture-guidance").attributes("data-tone")).toBeUndefined(); wrapper.unmount();
   });
   it("selects a single iframe and preserves the source identity in start and stop", async () => {
     let active = false;

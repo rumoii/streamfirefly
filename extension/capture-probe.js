@@ -95,6 +95,13 @@
     speedVideos.clear(); speedOverrides = []; speedLost = false;
   }
   function selectedVideos() { return [...document.querySelectorAll("video")].filter(selectedVideo); }
+  // A paused source page appends no new media, so the panel tells the user to resume playback there.
+  let paused = false;
+  function reportPlayback() {
+    if (!running) return;
+    const videos = selectedVideos(), now = videos.length > 0 && videos.every(video => video.paused && !video.ended);
+    if (now !== paused) { paused = now; post({ type: "playback", id: sessionId, paused }); }
+  }
   function fail(reason) { restoreSpeed(); if (!running && !busy) return; running = false; busy = false; finishing = null; failed = reason; queue.length = 0; bytes = 0; discardEarly(); post({ type: "failed", id: sessionId, error: reason }); }
   function split() {
     if (!running || !selected) return;
@@ -178,6 +185,7 @@
   if (sourcePrototype.removeSourceBuffer) { const remove = sourcePrototype.removeSourceBuffer; sourcePrototype.removeSourceBuffer = function(buffer) { const result = Reflect.apply(remove, this, [buffer]); buffers.get(buffer)?.initialization.reset(); buffers.delete(buffer); for (const reference of bufferRefs) if (reference.deref() === buffer) bufferRefs.delete(reference); return result; }; }
   document.addEventListener("seeking", event => { if (selectedVideo(event.target)) split(); }, true);
   for (const name of ["play", "loadedmetadata"]) document.addEventListener(name, event => { applySpeed(event.target); }, true);
+  for (const name of ["play", "playing", "pause"]) document.addEventListener(name, event => { if (selectedVideo(event.target)) reportPlayback(); }, true);
   document.addEventListener("ratechange", event => {
     const state = speedVideos.get(event.target);
     if (!running || speed === 1 || !state || event.target.playbackRate === state.applied) return;
@@ -207,8 +215,9 @@
       selected = message.sourceId ? sources.get(message.sourceId)?.deref() : null;
       if (message.sourceId && !selected) { post({ type: "failed", id: sessionId, error: "capture_source_unavailable" }); return; }
       if (message.restart && (staging !== "enabled" || stagingError)) { post({ type: "failed", id: sessionId, error: stagingError || "capture_restart_timeout" }); return; }
-      running = true; failed = ""; nextTrack = 0; generation = 0; sequences.clear(); speed = normalizedSpeed(message.speed); post({ type: "started", id: sessionId });
+      running = true; failed = ""; nextTrack = 0; generation = 0; sequences.clear(); speed = normalizedSpeed(message.speed); paused = false; post({ type: "started", id: sessionId });
       if (speed > 1) for (const video of selectedVideos()) applySpeed(video);
+      reportPlayback();
       clearTimeout(stagingTimer);
       if (message.restart) {
         const ended = earlyEnded.has(selected);
