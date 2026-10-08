@@ -74,7 +74,7 @@ export function createDeepSearch(api, settings) {
           const after = await api.tabs.sendMessage(tabId, { type: "probe.identity" }, { frameId: frame.frameId });
           if (after?.documentToken !== entry.documentToken || sessions.get(tabId) !== current || current.revision !== revision) throw new Error("来源文档已变化");
           entry.documentId = result[0]?.documentId; entry.state = enabled ? "ready" : "disabled";
-        } catch (error) { entry.state = "failed"; entry.error = error.message; }
+        } catch (error) { entry.state = "failed"; entry.error = /Receiving end does not exist/.test(error.message) ? "框架探针未运行，请刷新来源页面" : error.message; }
       })));
       return status(tabId);
     } finally { current.changing = false; }

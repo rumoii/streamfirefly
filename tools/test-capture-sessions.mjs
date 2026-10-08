@@ -117,5 +117,9 @@ assert.equal(await deep.addKey(sender, { documentToken: deepToken, hex: '00'.rep
 deep.clear(1, 2); assert.equal((await deep.status(1)).keys.length, 0);
 failInjection = true; const failedStatus = await deep.set(1, true, true); assert.ok(failedStatus.frames.some(frame => frame.state === 'failed')); assert.equal(failedStatus.siteRemembered, true);
 failInjection = false; const disabled = await deep.set(1, false, true); assert.equal(disabled.enabled, false); assert.equal(disabled.keys.length, 0); assert.equal(disabled.siteRemembered, false);
+// After the extension reloads, tabs opened earlier have no content script until they are refreshed.
+const sendDeep = deepApi.tabs.sendMessage; deepApi.tabs.sendMessage = async () => { throw Error('Could not establish connection. Receiving end does not exist.'); };
+const orphaned = await deep.set(1, true, false); assert.ok(orphaned.frames.filter(frame => frame.state === 'failed').every(frame => frame.error === '框架探针未运行，请刷新来源页面')); assert.ok(orphaned.frames.some(frame => frame.state === 'failed'));
+deepApi.tabs.sendMessage = sendDeep; await deep.set(1, false, false);
 assert.ok(!JSON.stringify(saved).includes('00000000000000000000000000000000'));
 console.log('Capture sessions: iframe selection, stale identity rejection, duplicate stop, startup cancellation, source loss, transport ownership and deep-search state passed');
