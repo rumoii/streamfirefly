@@ -1,6 +1,7 @@
 import { createCaptureTransport } from "./capture-transport.js";
 import { assertSiteAllowed, pageTitleFor } from "./platform.js";
 import { createCaptureRestart } from "./capture-restart.js";
+export const CAPTURE_SPEEDS = [1, 2, 4, 8, 16];
 export function createCaptureCoordinator(api, nativeRequest, evaluation, resources) {
   const local = typeof Worker === "function" ? createCaptureTransport(api) : null;
   const sessions = new Map(), opening = new Map(), history = new Map();
@@ -15,6 +16,10 @@ export function createCaptureCoordinator(api, nativeRequest, evaluation, resourc
   async function savedDirectory() {
     try { const stored = await api.storage?.local?.get("saveDir"); return typeof stored?.saveDir === "string" ? stored.saveDir.trim() : ""; }
     catch { return ""; }
+  }
+  async function savedSpeed() {
+    try { const stored = await api.storage?.local?.get("captureSpeed"); return CAPTURE_SPEEDS.includes(stored?.captureSpeed) ? stored.captureSpeed : 1; }
+    catch { return 1; }
   }
   async function identity(tabId, frameId) {
     const result = await api.tabs.sendMessage(tabId, { type: "capture.identity" }, { frameId });
@@ -41,7 +46,7 @@ export function createCaptureCoordinator(api, nativeRequest, evaluation, resourc
     }));
     return { sources: result.flatMap(item => item.sources), frames: result.map(item => item.status) };
   }
-  const send = (session, type) => api.tabs.sendMessage(session.tabId, { type: `capture.${type}`, id: session.id, documentToken: session.source.documentToken, sourceId: session.source.id, restart: Boolean(session.restartOperation) }, { frameId: session.source.frameId });
+  const send = (session, type) => api.tabs.sendMessage(session.tabId, { type: `capture.${type}`, id: session.id, documentToken: session.source.documentToken, sourceId: session.source.id, restart: Boolean(session.restartOperation), speed: session.speed }, { frameId: session.source.frameId });
   async function cleanup(session) {
     clearTimeout(session.timer);
     const results = await Promise.allSettled([nativeRequest("capture.abort", { id: session.id, reason: session.error }), transport("abort", { id: session.id }), send(session, "abort")]);
@@ -96,7 +101,7 @@ export function createCaptureCoordinator(api, nativeRequest, evaluation, resourc
       const directory = (typeof payload.directory === "string" ? payload.directory.trim() : "") || await savedDirectory();
       const result = await nativeRequest("capture.open", { origin: api.runtime.getURL("").replace(/\/$/, ""), directory, pageTitle: pageTitleFor(tab) || "", pageUrl: page.pageUrl || "" });
       if (!result.ok) throw new Error(result.error || "capture_open_failed");
-      session = { ...result.value, tabId: payload.tabId, source: found, state: "armed", restartOperation: payload.restartOperation };
+      session = { ...result.value, tabId: payload.tabId, source: found, state: "armed", restartOperation: payload.restartOperation, speed: await savedSpeed() };
       operation.id = session.id;
       sessions.set(payload.tabId, session); history.set(session.id, session);
       while (history.size > 100) history.delete(history.keys().next().value);
@@ -130,7 +135,7 @@ export function createCaptureCoordinator(api, nativeRequest, evaluation, resourc
   async function list() {
     const result = await nativeRequest("capture.list"); if (!result.ok) throw new Error(result.error || "capture_host_disconnected");
     for (const snapshot of result.value) if (history.get(snapshot.id)?.ended) snapshot.ended = true;
-    return result.value.map(snapshot => { const session = history.get(snapshot.id); return { ...snapshot, bytes: snapshot.bytes ?? 0, tracks: snapshot.tracks || [], outputs: snapshot.outputs || [], tabId: session?.tabId, source: session?.source, state: session?.state === "stopping" && ["armed", "capturing"].includes(snapshot.state) ? "stopping" : snapshot.state, error: snapshot.error === "capture_disconnected" && session?.error ? session.error : snapshot.error || (snapshot.state !== "complete" ? session?.error || (session?.cleanupFailed ? "capture_cleanup_failed" : undefined) : undefined) }; });
+    return result.value.map(snapshot => { const session = history.get(snapshot.id); return { ...snapshot, bytes: snapshot.bytes ?? 0, tracks: snapshot.tracks || [], outputs: snapshot.outputs || [], tabId: session?.tabId, source: session?.source, speed: session?.speed, speedOverridden: session?.speedOverridden, state: session?.state === "stopping" && ["armed", "capturing"].includes(snapshot.state) ? "stopping" : snapshot.state, error: snapshot.error === "capture_disconnected" && session?.error ? session.error : snapshot.error || (snapshot.state !== "complete" ? session?.error || (session?.cleanupFailed ? "capture_cleanup_failed" : undefined) : undefined) }; });
   }
   function openControl(tabId, objectUrl = "") {
     if (objectUrl && (!String(objectUrl).startsWith("blob:") || String(objectUrl).length > 16384)) throw new Error("capture_object_url_invalid");
@@ -138,15 +143,28 @@ export function createCaptureCoordinator(api, nativeRequest, evaluation, resourc
     if (objectUrl) params.set("captureBlob", String(objectUrl));
     return api.tabs.create({ url: api.runtime.getURL(`dist/app.html?${params}`) });
   }
-  async function ended(sender, payload) {
+  function senderSession(sender, payload) {
     const session = sessions.get(sender.tab?.id);
-    if (!session || session.id !== payload.id || session.source.frameId !== (sender.frameId ?? 0) || session.source.documentToken !== payload.documentToken || session.source.documentId && session.source.documentId !== sender.documentId) return;
+    if (!session || session.id !== payload.id || session.source.frameId !== (sender.frameId ?? 0) || session.source.documentToken !== payload.documentToken || session.source.documentId && session.source.documentId !== sender.documentId) return null;
+    return session;
+  }
+  async function ended(sender, payload) {
+    const session = senderSession(sender, payload); if (!session) return;
     session.ended = true; await close(session.tabId, session.id);
+  }
+  function speedOverridden(sender, payload) { const session = senderSession(sender, payload); if (session) session.speedOverridden = true; }
+  async function speed(payload) {
+    const session = sessions.get(payload.tabId);
+    if (!session || session.id !== payload.id || session.state === "stopping") throw Error("capture_session_changed");
+    if (!CAPTURE_SPEEDS.includes(payload.speed)) throw Error("capture_speed_invalid");
+    session.speed = payload.speed; session.speedOverridden = false;
+    const response = await send(session, "speed"); if (!response?.ok) throw Error(response?.error || "capture_speed_unavailable");
+    return response.value;
   }
   async function replay(payload) {
     const session = sessions.get(payload.tabId);
     if (!session || session.id !== payload.id || session.state === "stopping") throw Error("capture_session_changed");
     const response = await send(session, "replay"); if (!response?.ok) throw Error(response?.error || "capture_video_unavailable");
   }
-  return { open, close, sources, interrupted, list, openControl, replay, ended, restart, recover: async id => { const result = await nativeRequest("capture.close", { id }); if (!result.ok) throw new Error(result.error); return result.value; }, remove: async id => { const result = await nativeRequest("capture.delete", { id }); if (!result.ok) throw new Error(result.error || "capture_delete_failed"); history.delete(id); return result.value; }, push: (payload, sender) => local ? local.push(payload, sender) : null, isLocal: Boolean(local) };
+  return { open, close, sources, interrupted, list, openControl, replay, speed, speedOverridden, ended, restart, recover: async id => { const result = await nativeRequest("capture.close", { id }); if (!result.ok) throw new Error(result.error); return result.value; }, remove: async id => { const result = await nativeRequest("capture.delete", { id }); if (!result.ok) throw new Error(result.error || "capture_delete_failed"); history.delete(id); return result.value; }, push: (payload, sender) => local ? local.push(payload, sender) : null, isLocal: Boolean(local) };
 }

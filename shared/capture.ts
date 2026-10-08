@@ -26,6 +26,8 @@ export interface CaptureSnapshot {
   tabId?: number;
   source?: CaptureSource;
   ended?: boolean;
+  speed?: number;
+  speedOverridden?: boolean;
   tracks: { id: number; mime: string; bytes: number; initialized: boolean }[];
   createdAt?: number;
   pageTitle?: string;
@@ -44,6 +46,7 @@ export interface CaptureRequests {
   "capture.restart": { payload: { tabId: number; sourceContextId: string }; value: { operationId: string } };
   "capture.restart.status": { payload: { tabId: number; operationId: string }; value: CaptureSources & { phase: string; sourceContextId: string } };
   "capture.replay": { payload: { tabId: number; id: string }; value: void };
+  "capture.speed": { payload: { tabId: number; id: string; speed: number }; value: { rate: number } };
   "capture.close": { payload: { tabId: number; id: string }; value: void };
   "capture.list": { payload: undefined; value: CaptureSnapshot[] };
   "capture.recover": { payload: { id: string }; value: unknown };

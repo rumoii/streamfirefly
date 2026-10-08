@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, toRef, watch } from "vue";
 import type { UiContext } from "../../types";
 import type { CaptureSnapshot } from "../../../../shared/capture";
-import { createCaptureState } from "../capture/state";
+import { CAPTURE_SPEEDS, createCaptureState } from "../capture/state";
 import { sessionError } from "../session-client";
 import { configurationRequest } from "./client";
 import { readSettings } from "../settings/state";
@@ -10,7 +10,8 @@ import SfIcon from "../../ui/SfIcon.vue";
 import SfSelect from "../../ui/SfSelect.vue";
 import SfDialog from "../../ui/SfDialog.vue";
 const props = defineProps<{ context: UiContext | null; targetObjectUrl?: string }>();
-const { lastSession, restartPhase, orderedSessions, failedSessions, phase, quickCandidate, remove, removeFailed, catalog, error, message, busy, selected, acknowledged, directory, active, selectionLocked, blobUnconfirmed, sourceKey, scan, start, stop, recover, refresh, restarting, renewed, restart, replay } = createCaptureState(toRef(props, "context"), true, toRef(props, "targetObjectUrl"));
+const { speed, setSpeed, lastSession, restartPhase, orderedSessions, failedSessions, phase, quickCandidate, remove, removeFailed, catalog, error, message, busy, selected, acknowledged, directory, active, selectionLocked, blobUnconfirmed, sourceKey, scan, start, stop, recover, refresh, restarting, renewed, restart, replay } = createCaptureState(toRef(props, "context"), true, toRef(props, "targetObjectUrl"));
+const speedOptions = CAPTURE_SPEEDS.map(value => ({ value, label: value === "1" ? "正常速度" : `${value} 倍速（静音）` }));
 const labels: Record<string, string> = { armed: "等待数据", capturing: "录制中", stopping: "正在停止", finalizing: "正在生成文件", complete: "已保存", partial: "未完成", interrupted: "已中断", unavailable: "记录损坏" };
 const sourceOptions = computed(() => [{ value: "", label: props.targetObjectUrl ? "尚未定位对应媒体源" : "请选择媒体源" }, ...catalog.value.sources.map(source => ({ value: sourceKey(source), label: `${source.frameId === 0 ? "主页面" : `框架 ${source.frameId}`} · 媒体源 ${source.id} · ${source.url} · ${source.tracks.join(", ")} · ${source.state}` }))]);
 const steps = [{ key: "ready", label: "勾选授权，点一键捕捉" }, { key: "waiting", label: "到来源页播放视频" }, { key: "recording", label: "录制中，播完自动保存" }, { key: "saving", label: "生成视频文件" }];
@@ -66,6 +67,9 @@ defineExpose({ scan });
         <li v-for="(step, index) in steps" :key="step.key" :data-state="index < stepIndex ? 'done' : index === stepIndex ? 'current' : 'todo'"><i>{{ index < stepIndex ? '✓' : index + 1 }}</i><span>{{ step.label }}</span></li>
       </ol>
       <p class="capture-guidance" role="status" :data-tone="phase === 'done' ? 'success' : phase === 'failed' ? 'danger' : undefined">{{ guidance }}</p>
+      <div class="capture-speed-row"><div class="field"><span>录制速度</span><SfSelect :model-value="speed" :options="speedOptions" label="录制速度" @update:model-value="setSpeed" /></div><p class="feature-note">加速时静音播放，长视频不用等它实时播完。网速跟不上时视频会停下来缓冲，不影响录到的内容；部分网站会把速度改回去。建议 2–4 倍。</p></div>
+      <p v-if="Number(speed) >= 8" class="tool-notice">倍速太高时，网站可能自动降低清晰度，录出来的视频也可能分成几段。</p>
+      <p v-if="active?.speedOverridden" class="tool-notice">{{ sessionError("capture_speed_overridden") }}</p>
       <label class="feature-check"><input v-model="acknowledged" type="checkbox">我有权保存此视频，并了解只能录到开始之后播放的内容</label>
       <div class="feature-row capture-actions">
         <button class="button primary large" :disabled="busy || restarting || !context?.supported || !acknowledged || !!active" @click="restart"><SfIcon name="capture" /><span>一键捕捉</span></button>
@@ -91,6 +95,7 @@ defineExpose({ scan });
       <div class="dispatch-item-head"><span class="dispatch-state" :data-state="session.state">{{ labels[session.state] || session.state }}</span><strong class="capture-session-title" :title="session.pageUrl || session.source?.url">{{ title(session) }}</strong><small class="capture-session-meta">{{ when(session) }}<template v-if="session.state !== 'unavailable'"> · {{ (session.bytes / 1048576).toFixed(1) }} MiB</template></small></div>
       <p v-if="session.ended && session.state === 'complete'" class="feature-note">视频已播放到结尾。</p>
       <div v-for="output in session.outputs" :key="output" class="capture-output-row"><p class="capture-output">{{ output }}</p><button class="button sm" type="button" @click="copyPath(output)"><SfIcon name="copy" /><span>复制路径</span></button></div>
+      <p v-if="session.outputs.length > 1" class="feature-note">播放中切换过清晰度或拖动过进度，视频分成了 {{ session.outputs.length }} 段。</p>
       <p v-if="session.error" class="inline-error">{{ failure(session) }}</p>
       <details v-if="session.tracks.length" class="capture-tracks"><summary>技术信息</summary><p v-for="track in session.tracks" :key="track.id" class="feature-note">轨道 {{ track.id }} · {{ track.mime }} · {{ track.initialized ? '含初始化片段' : '缺少初始化片段' }}</p></details>
       <div v-if="finished(session)" class="feature-row">

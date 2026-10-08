@@ -4,7 +4,7 @@ import DeepSearchPanel from "../configuration/DeepSearchPanel.vue";
 import type { UiContext } from "../../types";
 const send = vi.fn();
 const storage = vi.hoisted(() => ({ saved: {} as Record<string, unknown> }));
-vi.mock("../../api", () => ({ sendMessage: (message: unknown) => send(message), surfaceFromUrl: () => "options", extensionApi: () => ({ storage: { local: { get: async () => storage.saved } } }) }));
+vi.mock("../../api", () => ({ sendMessage: (message: unknown) => send(message), surfaceFromUrl: () => "options", extensionApi: () => ({ storage: { local: { get: async () => storage.saved, set: async (values: Record<string, unknown>) => { Object.assign(storage.saved, values); } } } }) }));
 const context = { sourceTabId: 1, sourceContextId: "page", pageUrl: "https://main.test", supported: true } as UiContext;
 const source = { id: "1", frameId: 2, documentToken: "doc", url: "https://frame.test", tracks: ["video/mp4"], state: "open", objectUrls: ["blob:https://main.test/video"] };
 const deepState = { enabled: false, siteRemembered: true, requiresReload: false, frames: [{ frameId: 2, url: source.url, state: "disabled" }], keys: [] };
@@ -19,6 +19,27 @@ describe("capture and deep-search session state", () => {
     const configured = mount(CapturePanel, { props: { context } }); await flushPromises();
     expect(directoryInput(configured).attributes("placeholder")).toBe("D:\\Media");
     expect((directoryInput(configured).element as HTMLInputElement).value).toBe(""); configured.unmount();
+  });
+  it("remembers the recording speed and applies it to a running recording only", async () => {
+    let active = false, overridden = false;
+    send.mockImplementation(async message => {
+      if (message.type === "capture.list") return { ok: true, value: active ? [{ id: "session", tabId: 1, state: "capturing", bytes: 0, tracks: [], outputs: [], source, speedOverridden: overridden }] : [] };
+      if (message.type === "capture.speed") return { ok: true, value: { rate: message.payload.speed } };
+      throw Error(message.type);
+    });
+    storage.saved = { captureSpeed: 4 };
+    const wrapper = mount(CapturePanel, { props: { context } }); await flushPromises();
+    const choose = async (label: string) => { await wrapper.get('[aria-label="录制速度"]').trigger("click"); await flushPromises(); await wrapper.findAll('[role="option"]').find(item => item.text() === label)!.trigger("click"); await flushPromises(); };
+    expect(wrapper.get('[aria-label="录制速度"]').attributes("data-value")).toBe("4");
+    await choose("8 倍速（静音）");
+    expect(storage.saved.captureSpeed).toBe(8); expect(send.mock.calls.some(([message]) => message.type === "capture.speed")).toBe(false);
+    expect(wrapper.text()).toContain("网站可能自动降低清晰度");
+    active = true; await wrapper.findAll("button").find(item => item.text() === "刷新会话")!.trigger("click"); await flushPromises();
+    await choose("2 倍速（静音）");
+    expect(send.mock.calls.find(([message]) => message.type === "capture.speed")?.[0].payload).toEqual({ tabId: 1, id: "session", speed: 2 });
+    expect(wrapper.text()).toContain("正在以 2 倍速静音播放");
+    overridden = true; await wrapper.findAll("button").find(item => item.text() === "刷新会话")!.trigger("click"); await flushPromises();
+    expect(wrapper.text()).toContain("网站把播放速度改回去了"); wrapper.unmount();
   });
   it("selects a single iframe and preserves the source identity in start and stop", async () => {
     let active = false;

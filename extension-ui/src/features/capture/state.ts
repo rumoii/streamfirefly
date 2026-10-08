@@ -4,12 +4,16 @@ import type { CaptureSnapshot, CaptureSources } from "../../../../shared/capture
 import { sessionError, sessionRequest } from "../session-client";
 import { isBlobCandidate } from "../../media";
 import type { MediaCandidate } from "../../types";
+import { extensionApi } from "../../api";
+export const CAPTURE_SPEEDS = ["1", "2", "4", "8", "16"] as const;
+export type CaptureSpeed = typeof CAPTURE_SPEEDS[number];
 export function createCaptureState(context: Ref<UiContext | null>, trusted: boolean, targetObjectUrl?: Ref<string | undefined>) {
   const sessions = ref<CaptureSnapshot[]>([]), catalog = ref<CaptureSources>({ sources: [], frames: [] });
   const error = ref(""), message = ref(""), busy = ref(false), selected = ref(""), acknowledged = ref(false), directory = ref("");
   let revision = 0, disposed = false, refreshing = false;
   let connectionFailure = "", recovering = "";
   const restarting = ref(false), renewed = ref(false), restartPhase = ref("");
+  const speed = ref<CaptureSpeed>("1");
   let restartOperation = "", restartContext = "", restartTab = -1;
   const quickCandidate = computed<MediaCandidate | undefined>(() => {
     const downloadable = (context.value?.candidates || []).filter(item => !isBlobCandidate(item) && ["hls", "dash", "video", "audio"].includes(item.type));
@@ -102,6 +106,19 @@ export function createCaptureState(context: Ref<UiContext | null>, trusted: bool
     catch (reason) { error.value = sessionError(reason); }
     finally { busy.value = false; }
   }
+  async function loadSpeed() {
+    try { const stored = await extensionApi()?.storage?.local?.get("captureSpeed"); const value = String(stored?.captureSpeed ?? "1"); if (!disposed && (CAPTURE_SPEEDS as readonly string[]).includes(value)) speed.value = value as CaptureSpeed; } catch {}
+  }
+  // The choice is remembered for the next recording and applied at once to a running one.
+  async function setSpeed(value: CaptureSpeed) {
+    speed.value = value; const rate = Number(value); error.value = "";
+    try { await extensionApi()?.storage?.local?.set({ captureSpeed: rate }); } catch {}
+    if (!context.value || !active.value || !["armed", "capturing"].includes(active.value.state)) return;
+    try {
+      const result = await sessionRequest("capture.speed", { tabId: context.value.sourceTabId, id: active.value.id, speed: rate });
+      if (!disposed) message.value = rate === 1 ? "已恢复正常速度播放。" : result.rate ? `正在以 ${result.rate} 倍速静音播放。` : `视频开始播放后会以 ${rate} 倍速静音播放。`;
+    } catch (reason) { if (!disposed) error.value = sessionError(reason); }
+  }
   async function stop() {
     if (!active.value || busy.value || !context.value) return;
     const current = revision; busy.value = true; error.value = ""; message.value = "正在停止并等待落盘确认，尚未完成保存。";
@@ -147,6 +164,6 @@ export function createCaptureState(context: Ref<UiContext | null>, trusted: bool
   }, { immediate: true });
   watch(selected, () => { acknowledged.value = false; });
   onBeforeUnmount(() => { disposed = true; revision++; clearTimeout(timer); });
-  void refresh();
-  return { lastSession, restartPhase, sessions, orderedSessions, failedSessions, phase, quickCandidate, remove, removeFailed, catalog, error, message, busy, selected, acknowledged, directory, active, selectionLocked, blobUnconfirmed, sourceKey, scan, start, stop, recover, refresh, restarting, renewed, quickDownloadAvailable, restart, replay };
+  void refresh(); void loadSpeed();
+  return { speed, setSpeed, lastSession, restartPhase, sessions, orderedSessions, failedSessions, phase, quickCandidate, remove, removeFailed, catalog, error, message, busy, selected, acknowledged, directory, active, selectionLocked, blobUnconfirmed, sourceKey, scan, start, stop, recover, refresh, restarting, renewed, quickDownloadAvailable, restart, replay };
 }

@@ -5,6 +5,9 @@
   let nextTrack = 0, nextSource = 0, generation = 0;
   const bufferRefs = new Set(), early = [];
   let restartMarker = null;
+  // Fast recording plays the selected video muted at a higher rate; originals are restored when recording ends.
+  let speed = 1, speedOverrides = [], speedLost = false;
+  const speedVideos = new Map(), speedRates = [16, 8, 4, 2];
   try {
     const value = sessionStorage.getItem("streamfirefly:capture-restart");
     const markers = value ? JSON.parse(value) : [];
@@ -51,7 +54,22 @@
       sourceUrls.delete(id);
     }
   }
-  function fail(reason) { if (!running && !busy) return; running = false; busy = false; finishing = null; failed = reason; queue.length = 0; bytes = 0; discardEarly(); post({ type: "failed", id: sessionId, error: reason }); }
+  const normalizedSpeed = value => [1, ...speedRates].includes(value) ? value : 1;
+  function applySpeed(video) {
+    if (!running || speed === 1 || !selectedVideo(video)) return 0;
+    if (!speedVideos.has(video)) speedVideos.set(video, { rate: video.playbackRate, muted: video.muted, applied: 0 });
+    const state = speedVideos.get(video);
+    video.muted = true;
+    // Browsers reject rates outside their supported range, so fall back to the next lower one.
+    for (const rate of speedRates.filter(value => value <= speed)) { try { video.playbackRate = rate; state.applied = rate; return rate; } catch {} }
+    return 0;
+  }
+  function restoreSpeed() {
+    for (const [video, state] of speedVideos) { try { video.playbackRate = state.rate; video.muted = state.muted; } catch {} }
+    speedVideos.clear(); speedOverrides = []; speedLost = false;
+  }
+  function selectedVideos() { return [...document.querySelectorAll("video")].filter(selectedVideo); }
+  function fail(reason) { restoreSpeed(); if (!running && !busy) return; running = false; busy = false; finishing = null; failed = reason; queue.length = 0; bytes = 0; discardEarly(); post({ type: "failed", id: sessionId, error: reason }); }
   function split() {
     if (!running || !selected) return;
     if (++generation >= 32) { fail("capture_generation_limit"); return; }
@@ -133,11 +151,19 @@
   if (bufferPrototype.changeType) { const changeType = bufferPrototype.changeType; bufferPrototype.changeType = function(...args) { const result = Reflect.apply(changeType, this, args); const metadata = buffers.get(this); if (metadata) { metadata.initialization.reset(); metadata.initialization = window.__streamFireflyCaptureInitialization.create(args[0]); metadata.mime = args[0]; if (early.some(item => item.metadata === metadata)) { stagingError = "capture_codec_changed"; staging = "discarded"; discardEarly(); } if (running && metadata.source === selected) split(); } return result; }; }
   if (sourcePrototype.removeSourceBuffer) { const remove = sourcePrototype.removeSourceBuffer; sourcePrototype.removeSourceBuffer = function(buffer) { const result = Reflect.apply(remove, this, [buffer]); buffers.get(buffer)?.initialization.reset(); buffers.delete(buffer); for (const reference of bufferRefs) if (reference.deref() === buffer) bufferRefs.delete(reference); return result; }; }
   document.addEventListener("seeking", event => { if (selectedVideo(event.target)) split(); }, true);
+  for (const name of ["play", "loadedmetadata"]) document.addEventListener(name, event => { applySpeed(event.target); }, true);
+  document.addEventListener("ratechange", event => {
+    const state = speedVideos.get(event.target);
+    if (!running || speed === 1 || !state || event.target.playbackRate === state.applied) return;
+    const now = Date.now(); speedOverrides = speedOverrides.filter(at => now - at < 10000);
+    if (speedOverrides.length >= 5) { if (!speedLost) { speedLost = true; post({ type: "speed-overridden", id: sessionId }); } return; }
+    speedOverrides.push(now); applySpeed(event.target);
+  }, true);
   document.addEventListener("encrypted", event => { for (const reference of bufferRefs) { const metadata = buffers.get(reference.deref()); metadata?.initialization.reset(); } discardEarly(); staging = "discarded"; if (running && selectedVideo(event.target)) fail("capture_drm_unsupported"); }, true);
   const originalEnd = sourcePrototype.endOfStream;
   if (originalEnd) sourcePrototype.endOfStream = function(...args) {
     const result = Reflect.apply(originalEnd, this, args);
-    if (args[0] == null) { earlyEnded.add(this); if (running && selected === this) { running = false; post({ type: "ended", id: sessionId }); pump(); } }
+    if (args[0] == null) { earlyEnded.add(this); if (running && selected === this) { restoreSpeed(); running = false; post({ type: "ended", id: sessionId }); pump(); } }
     return result;
   };
   window.addEventListener("message", event => {
@@ -155,7 +181,8 @@
       selected = message.sourceId ? sources.get(message.sourceId)?.deref() : null;
       if (message.sourceId && !selected) { post({ type: "failed", id: sessionId, error: "capture_source_unavailable" }); return; }
       if (message.restart && (staging !== "enabled" || stagingError)) { post({ type: "failed", id: sessionId, error: stagingError || "capture_restart_timeout" }); return; }
-      running = true; failed = ""; nextTrack = 0; generation = 0; sequences.clear(); post({ type: "started", id: sessionId });
+      running = true; failed = ""; nextTrack = 0; generation = 0; sequences.clear(); speed = normalizedSpeed(message.speed); post({ type: "started", id: sessionId });
+      if (speed > 1) for (const video of selectedVideos()) applySpeed(video);
       clearTimeout(stagingTimer);
       if (message.restart) {
         const ended = earlyEnded.has(selected);
@@ -166,15 +193,20 @@
       } else { discardEarly(); staging = "discarded"; for (const buffer of selected?.sourceBuffers || []) { const metadata = buffers.get(buffer); if (metadata) prepend(metadata); } pump(); }
     }
     if (message.id !== sessionId) return;
+    if (message.type === "speed") {
+      restoreSpeed(); speed = normalizedSpeed(message.rate);
+      const applied = speed > 1 ? selectedVideos().map(applySpeed).find(Boolean) : 1;
+      post({ type: "speed-set", id: sessionId, rate: applied || 0 });
+    }
     if (message.type === "replay") {
-      const videos = [...document.querySelectorAll("video")].filter(selectedVideo);
+      const videos = selectedVideos();
       if (videos.length !== 1) { post({ type: "replayed", id: sessionId, error: "capture_video_unavailable" }); return; }
       videos[0].currentTime = 0;
       Promise.resolve(videos[0].play()).then(() => post({ type: "replayed", id: sessionId }), () => post({ type: "replayed", id: sessionId, error: "capture_video_unavailable" }));
     }
     if (message.type === "ack" && busy) { const current = queue[0]; if (!current || current.sequence !== message.sequence || current.track !== message.track) return; queue.shift(); bytes -= current.data.length; busy = false; pump(); }
-    if (message.type === "stop") { running = false; finishing = true; pump(); }
-    if (message.type === "abort") { fail(message.error || "capture_disconnected"); busy = false; finishing = null; }
+    if (message.type === "stop") { restoreSpeed(); running = false; finishing = true; pump(); }
+    if (message.type === "abort") { restoreSpeed(); fail(message.error || "capture_disconnected"); busy = false; finishing = null; }
   });
   window.addEventListener("pagehide", () => { clearTimeout(stagingTimer); discardEarly(); for (const reference of bufferRefs) buffers.get(reference.deref())?.initialization.reset(); });
   window.__streamFireflyCaptureProbe = { installed: true, sources: () => { pruneSources(); return [...sources].flatMap(([id, reference]) => { const source = reference.deref(); return source ? [{ id, state: source.readyState, tracks: [...source.sourceBuffers].map(buffer => String(buffers.get(buffer)?.mime || "unknown").slice(0, 200)), objectUrls: [...(sourceUrls.get(id) || [])], initialization: [...source.sourceBuffers].map(buffer => Boolean(buffers.get(buffer)?.initialization.data)), stagingError }] : []; }); } };

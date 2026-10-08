@@ -12,6 +12,7 @@ const calls = [], snapshots = new Map(), timers = new Map();
 let next = 0, openArrivals = 0, documentToken = 'frame-document', context = 'page', rejectStart = false, frameVisible = true;
 let releaseOpen;
 const api = {
+  storage: { local: { get: async key => key === 'captureSpeed' ? { captureSpeed: 8 } : {} } },
   runtime: { getURL: () => 'chrome-extension://test/', sendMessage: async message => { calls.push(message); return { ok: true }; } },
   webNavigation: { getAllFrames: async () => [{ frameId: 0, url: 'https://main.test' }, ...(frameVisible ? [{ frameId: 2, url: 'https://frame.test' }] : []), { frameId: 3, url: 'about:blank' }] },
   tabs: { sendMessage: async (_tab, message, options) => {
@@ -39,6 +40,15 @@ const opened = await coordinator.open(payload);
 assert.equal(calls.find(call => call.type === 'capture.open').payload.directory, '');
 assert.equal(calls.find(call => call.type === 'capture.start').frameId, 2);
 assert.equal(calls.find(call => call.type === 'capture.transport.open').payload.documentToken, 'frame-document');
+assert.equal(calls.find(call => call.type === 'capture.start').speed, 8, 'The remembered recording speed goes out with start');
+await assert.rejects(coordinator.speed({ tabId: 1, id: opened.id, speed: 3 }), /capture_speed_invalid/);
+await assert.rejects(coordinator.speed({ tabId: 1, id: 'old-session', speed: 2 }), /capture_session_changed/);
+await coordinator.speed({ tabId: 1, id: opened.id, speed: 2 }); assert.equal(calls.filter(call => call.type === 'capture.speed').at(-1).speed, 2);
+const speedSender = { tab: { id: 1 }, frameId: 2, documentId: 'browser-document-2' };
+coordinator.speedOverridden({ ...speedSender, frameId: 0 }, { id: opened.id, documentToken: 'frame-document' });
+coordinator.speedOverridden(speedSender, { id: opened.id, documentToken: 'stale-document' });
+assert.equal((await coordinator.list())[0].speedOverridden, false, 'Only the recording document may report an overridden speed');
+coordinator.speedOverridden(speedSender, { id: opened.id, documentToken: 'frame-document' }); assert.equal((await coordinator.list())[0].speedOverridden, true);
 await assert.rejects(coordinator.open(payload), /capture_already_open/);
 await coordinator.interrupted(1, 0); assert.equal((await coordinator.list())[0].state, 'armed');
 await coordinator.interrupted(1, 2, 'stale-document', opened.id); assert.equal((await coordinator.list())[0].state, 'armed');
