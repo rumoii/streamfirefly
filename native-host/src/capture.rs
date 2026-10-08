@@ -1,5 +1,6 @@
 use crate::capture_catalog::{load, save_index};
 use crate::capture_diagnostics::{collect, record};
+use crate::capture_export::{exported_outputs, remove_exported};
 use crate::capture_merge::finalize;
 use crate::capture_model::{Session, Snapshot};
 use crate::capture_socket::receive;
@@ -9,7 +10,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
 use std::net::TcpListener;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use uuid::Uuid;
@@ -225,18 +226,30 @@ impl CaptureManager {
         let id = payload["id"].as_str().ok_or("capture_id_required")?;
         let mut sessions = self.sessions.lock().map_err(|_| "capture_unavailable")?;
         let session = sessions.get(id).cloned().ok_or("capture_not_found")?;
-        let directory = {
+        let (directory, outputs) = {
             let current = session.lock().map_err(|_| "capture_unavailable")?;
             if current.worker_active
                 || !["complete", "partial", "interrupted"].contains(&current.snapshot.state.as_str())
             {
                 return Err("capture_delete_active".into());
             }
-            current.directory.clone()
+            (current.directory.clone(), current.snapshot.outputs.clone())
         };
         let expected = format!("capture-{}", Uuid::parse_str(id).map_err(|_| "capture_not_found")?);
         if directory.file_name().and_then(|name| name.to_str()) != Some(expected.as_str()) {
             return Err("capture_delete_failed".into());
+        }
+        // Exported videos live beside the directory; a file still open in a player keeps the record.
+        for output in exported_outputs(&directory, &outputs) {
+            let shared = sessions.iter().any(|(other, entry)| {
+                other != id
+                    && entry.lock().is_ok_and(|value| {
+                        value.snapshot.outputs.iter().any(|path| Path::new(path) == output)
+                    })
+            });
+            if !shared {
+                remove_exported(output).map_err(|_| "capture_delete_failed")?;
+            }
         }
         match fs::symlink_metadata(&directory) {
             Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
@@ -414,13 +427,22 @@ mod tests {
         };
         let (older, older_directory) = write("complete", 1);
         let (newer, newer_directory) = write("partial", 2);
+        let exported = root.join("页面.mkv");
+        fs::write(&exported, b"media").unwrap();
+        let mut snapshot: Snapshot =
+            serde_json::from_slice(&fs::read(older_directory.join("capture.json")).unwrap()).unwrap();
+        snapshot.outputs = vec![exported.to_string_lossy().into_owned()];
+        fs::write(older_directory.join("capture.json"), serde_json::to_vec(&snapshot).unwrap()).unwrap();
         let manager = CaptureManager::new(root.clone());
         let listed = manager.list();
         assert_eq!(listed[0]["id"], newer);
         assert_eq!(listed[1]["id"], older);
         assert_eq!(listed[0]["pageTitle"], "页面");
+        let newer_session = manager.sessions.lock().unwrap()[&newer].clone();
+        newer_session.lock().unwrap().snapshot.outputs = vec![exported.to_string_lossy().into_owned()];
         manager.delete(&json!({"id":older})).unwrap();
         assert!(!older_directory.exists());
+        assert!(exported.exists(), "an output another record still references must survive");
         assert_eq!(manager.list().as_array().unwrap().len(), 1);
         assert_eq!(
             manager.delete(&json!({"id":older})).unwrap_err(),
@@ -434,6 +456,9 @@ mod tests {
         );
         assert!(newer_directory.exists());
         active.lock().unwrap().worker_active = false;
+        manager.delete(&json!({"id":newer})).unwrap();
+        assert!(!newer_directory.exists());
+        assert!(!exported.exists(), "the last record referencing an output deletes it");
         drop(manager);
         fs::remove_dir_all(root).unwrap();
     }

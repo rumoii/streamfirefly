@@ -1,6 +1,7 @@
 mod capture;
 mod capture_catalog;
 mod capture_diagnostics;
+mod capture_export;
 mod capture_format;
 mod capture_output;
 mod capture_merge;

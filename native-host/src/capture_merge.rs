@@ -1,4 +1,5 @@
 use crate::capture_diagnostics::{drain_stderr, record};
+use crate::capture_export::export;
 use crate::capture_model::{Session, Track};
 use crate::capture_storage::save;
 use crate::capture_format::inspect_file;
@@ -73,13 +74,12 @@ pub(crate) fn finalize(session: &Arc<Mutex<Session>>) {
     if current.snapshot.state == "interrupted" {
         return;
     }
-    complete &= !outputs.is_empty();
-    current.snapshot.state = if complete && current.snapshot.error.is_none() {
-        "complete"
-    } else {
-        "partial"
+    complete &= !outputs.is_empty() && current.snapshot.error.is_none();
+    current.snapshot.state = if complete { "complete" } else { "partial" }.into();
+    // Partial outputs stay in the session directory so that regenerating can replace them.
+    if complete {
+        outputs = export(&current, outputs);
     }
-    .into();
     current.snapshot.output = outputs.first().cloned();
     current.snapshot.outputs = outputs;
     // Without any output the merge failure matters more than an earlier interruption, which diagnostics keep.
