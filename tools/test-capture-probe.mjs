@@ -123,11 +123,13 @@ for (const compatible of [true, false]) {
   const decodingInfo = async () => ({ supported: true });
   class Storage { constructor() { this.items = new Map(); } getItem(key) { return this.items.has(key) ? this.items.get(key) : null; } setItem(key, value) { this.items.set(key, String(value)); } removeItem(key) { this.items.delete(key); } }
   const storageMethods = [Storage.prototype.getItem, Storage.prototype.setItem, Storage.prototype.removeItem];
-  const localStorage = new Storage(), otherStorage = new Storage();
-  localStorage.items.set('bpcc_persisted', '{"av01":{"supported":true}}');
+  const localStorage = new Storage(), tabStorage = new Storage(), otherStorage = new Storage();
+  localStorage.items.set('bpcc_persisted', '{"supported":true}');
+  localStorage.items.set('player-codecs', '{"v2:av01.0.08M.08":{"supported":true}}');
+  tabStorage.items.set('probe', 'hvc1.1.6.L120.90=yes'); tabStorage.items.set('streamfirefly:capture-restart', '[{"codec":"av01"}]');
   const stored = new Map([['streamfirefly:capture-restart', JSON.stringify([{ token: '00000000-0000-4000-8000-000000000000', expires: Date.now() + 60000, compatible }])]]);
   const sessionStorage = { getItem: key => stored.get(key) ?? null, setItem: (key, value) => stored.set(key, value), removeItem: key => stored.delete(key) };
-  const window = { MediaSource, SourceBuffer, HTMLMediaElement, Storage, localStorage, navigator: { mediaCapabilities: { decodingInfo } }, URL: { createObjectURL: () => 'blob:x' }, postMessage() {}, addEventListener() {} };
+  const window = { MediaSource, SourceBuffer, HTMLMediaElement, Storage, localStorage, sessionStorage: tabStorage, navigator: { mediaCapabilities: { decodingInfo } }, URL: { createObjectURL: () => 'blob:x' }, postMessage() {}, addEventListener() {} };
   vm.runInNewContext(fs.readFileSync(new URL('../extension/capture-initialization.js', import.meta.url), 'utf8'), { window, Uint8Array, DataView });
   vm.runInNewContext(fs.readFileSync(new URL('../extension/capture-probe.js', import.meta.url), 'utf8'), { window, document: { addEventListener() {} }, sessionStorage, Uint8Array, WeakRef, Date, Promise, Reflect, setTimeout: () => 1, clearTimeout() {} });
   const element = new HTMLMediaElement();
@@ -139,11 +141,16 @@ for (const compatible of [true, false]) {
   assert.equal((await window.navigator.mediaCapabilities.decodingInfo({ type: 'media-source', video: { contentType: 'video/mp4; codecs="av01.0.05M.08"' } })).supported, !compatible);
   assert.equal((await window.navigator.mediaCapabilities.decodingInfo({ type: 'media-source', video: { contentType: 'video/mp4; codecs="avc1.4d401f"' } })).supported, true);
   assert.equal(window.navigator.mediaCapabilities.decodingInfo === decodingInfo, !compatible, 'Without the marker request the page keeps the browser API');
-  assert.equal(localStorage.getItem('bpcc_persisted') === null, compatible, 'A cached codec probe would bypass the hidden codecs');
-  localStorage.setItem('bpcc_persisted', 'unsupported'); localStorage.removeItem('bpcc_persisted');
-  assert.equal(localStorage.items.get('bpcc_persisted'), compatible ? '{"av01":{"supported":true}}' : undefined, 'Writes during the compatible load must not reach the user cache');
-  localStorage.setItem('other', '1'); assert.equal(localStorage.getItem('other'), '1');
-  otherStorage.setItem('bpcc_persisted', 'session'); assert.equal(otherStorage.getItem('bpcc_persisted'), 'session', 'Only localStorage is affected');
+  assert.equal(localStorage.getItem('bpcc_persisted') === null, compatible, 'Bilibili keeps its codec cache under a known key');
+  assert.equal(localStorage.getItem('player-codecs') === null, compatible, 'Any stored value naming a modern codec would bypass the hidden codecs');
+  assert.equal(tabStorage.getItem('probe') === null, compatible, 'Session caches are hidden as well');
+  assert.equal(tabStorage.getItem('streamfirefly:capture-restart'), '[{"codec":"av01"}]', 'The capture marker stays readable');
+  localStorage.setItem('player-codecs', '{}'); localStorage.removeItem('bpcc_persisted'); localStorage.setItem('fresh', '{"av01":{"supported":false}}');
+  assert.equal(localStorage.items.get('player-codecs'), compatible ? '{"v2:av01.0.08M.08":{"supported":true}}' : '{}', 'Writes during the compatible load must not reach the user cache');
+  assert.equal(localStorage.items.has('bpcc_persisted'), compatible);
+  assert.equal(localStorage.items.has('fresh'), !compatible, 'New values naming hidden codecs are not stored');
+  localStorage.setItem('other', 'avc1.64001F'); assert.equal(localStorage.getItem('other'), 'avc1.64001F', 'H.264 values are untouched');
+  otherStorage.setItem('player-codecs', 'av01'); assert.equal(otherStorage.getItem('player-codecs'), 'av01', 'Only the page storages are affected');
   assert.equal(storageMethods.every((method, index) => method === [Storage.prototype.getItem, Storage.prototype.setItem, Storage.prototype.removeItem][index]), !compatible);
 }
 console.log('Capture probe: passive mode, source selection, bounded queue, ACK drain, restart, failed append, fast recording, compatible codecs and coordinator cleanup passed');
