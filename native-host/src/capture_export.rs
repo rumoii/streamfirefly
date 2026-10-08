@@ -81,6 +81,37 @@ pub(crate) fn remove_exported(path: &Path) -> io::Result<()> {
     }
 }
 
+/// Accepts only a saved output of the session that still exists as a regular file.
+pub(crate) fn reveal_target(outputs: &[String], path: &str) -> Result<PathBuf, &'static str> {
+    if !outputs.iter().any(|output| output == path) {
+        return Err("capture_output_unknown");
+    }
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => Ok(PathBuf::from(path)),
+        _ => Err("capture_output_missing"),
+    }
+}
+
+/// Opens Explorer with the file selected; Explorer's exit code carries no success signal.
+#[cfg(windows)]
+pub(crate) fn reveal_in_explorer(path: &Path) -> Result<(), &'static str> {
+    use std::os::windows::process::CommandExt;
+    let explorer = std::env::var_os("SystemRoot")
+        .map(|root| PathBuf::from(root).join("explorer.exe"))
+        .ok_or("capture_reveal_failed")?;
+    // Windows paths cannot contain quotes, so the quoted /select argument stays one token.
+    std::process::Command::new(explorer)
+        .raw_arg(format!("/select,\"{}\"", path.display()))
+        .spawn()
+        .map(|_| ())
+        .map_err(|_| "capture_reveal_failed")
+}
+
+#[cfg(not(windows))]
+pub(crate) fn reveal_in_explorer(_path: &Path) -> Result<(), &'static str> {
+    Err("capture_reveal_unsupported")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,6 +187,23 @@ mod tests {
         let records: serde_json::Value =
             serde_json::from_slice(&fs::read(current.directory.join("diagnostics.json")).unwrap()).unwrap();
         assert_eq!(records[0]["stage"], "output-export");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reveals_only_existing_outputs_of_the_session() {
+        let root = std::env::temp_dir().join(format!("capture-export-{}", Uuid::new_v4()));
+        let current = session(&root, None);
+        let saved = merged(&current, 0);
+        let outputs = vec![saved.clone()];
+        assert_eq!(reveal_target(&outputs, &saved).unwrap(), PathBuf::from(&saved));
+        let other = current.directory.join("track-0.mp4");
+        fs::write(&other, b"raw").unwrap();
+        assert_eq!(reveal_target(&outputs, &other.to_string_lossy()).unwrap_err(), "capture_output_unknown");
+        let directory = current.directory.to_string_lossy().into_owned();
+        assert_eq!(reveal_target(&[directory.clone()], &directory).unwrap_err(), "capture_output_missing");
+        fs::remove_file(&saved).unwrap();
+        assert_eq!(reveal_target(&outputs, &saved).unwrap_err(), "capture_output_missing");
         fs::remove_dir_all(root).unwrap();
     }
 

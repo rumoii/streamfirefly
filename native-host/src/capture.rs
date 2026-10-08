@@ -1,6 +1,6 @@
 use crate::capture_catalog::{load, save_index};
 use crate::capture_diagnostics::{collect, record};
-use crate::capture_export::{exported_outputs, remove_exported};
+use crate::capture_export::{exported_outputs, remove_exported, reveal_in_explorer, reveal_target};
 use crate::capture_merge::finalize;
 use crate::capture_model::{Session, Snapshot};
 use crate::capture_socket::receive;
@@ -219,6 +219,20 @@ impl CaptureManager {
             .map(|(snapshot, directory)| json!({"snapshot":snapshot,"diagnostics":collect(&directory, 32 * 1024)}))
             .collect::<Vec<_>>();
         json!({"captures":captures,"catalogErrors":self.errors})
+    }
+
+    /// Shows a saved output of a session in Explorer.
+    pub(crate) fn reveal(&self, payload: &Value) -> Result<Value, String> {
+        let id = payload["id"].as_str().ok_or("capture_id_required")?;
+        let path = payload["path"].as_str().ok_or("capture_output_unknown")?;
+        let outputs = {
+            let sessions = self.sessions.lock().map_err(|_| "capture_unavailable")?;
+            let session = sessions.get(id).cloned().ok_or("capture_not_found")?;
+            let outputs = session.lock().map_err(|_| "capture_unavailable")?.snapshot.outputs.clone();
+            outputs
+        };
+        reveal_in_explorer(&reveal_target(&outputs, path)?)?;
+        Ok(json!({"id":id}))
     }
 
     /// Removes a finished session together with its directory, including saved outputs.

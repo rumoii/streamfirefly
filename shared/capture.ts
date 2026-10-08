@@ -50,6 +50,7 @@ export interface CaptureRequests {
   "capture.close": { payload: { tabId: number; id: string }; value: void };
   "capture.list": { payload: undefined; value: CaptureSnapshot[] };
   "capture.recover": { payload: { id: string }; value: unknown };
+  "capture.reveal": { payload: { id: string; path: string }; value: { id: string } };
   "capture.delete": { payload: { id: string }; value: { id: string } };
   "deep.status": { payload: { tabId: number }; value: DeepSearchStatus };
   "deep.set": { payload: { tabId: number; enabled: boolean; remember: boolean }; value: DeepSearchStatus };

@@ -3,7 +3,7 @@ import { computed, onMounted, ref, toRef, watch } from "vue";
 import type { UiContext } from "../../types";
 import type { CaptureSnapshot } from "../../../../shared/capture";
 import { CAPTURE_SPEEDS, createCaptureState } from "../capture/state";
-import { sessionError } from "../session-client";
+import { sessionError, sessionRequest } from "../session-client";
 import { configurationRequest } from "./client";
 import { readSettings } from "../settings/state";
 import SfIcon from "../../ui/SfIcon.vue";
@@ -46,9 +46,21 @@ async function returnToSource() {
   try { await configurationRequest("ui.source.activate", { tabId: props.context.sourceTabId, closeCurrent: false }); notice.value = ""; }
   catch { notice.value = "来源标签页已关闭。"; }
 }
-async function copyPath(path: string) {
-  try { await navigator.clipboard.writeText(path); notice.value = "已复制文件路径。"; }
+// Users open the folder themselves and play the file from there, so copy its directory.
+function folderOf(path: string) { const index = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/")); return index > 0 ? path.slice(0, index) : path; }
+async function copyFolder(path: string) {
+  try { await navigator.clipboard.writeText(folderOf(path)); notice.value = "已复制文件夹路径。"; }
   catch { notice.value = "复制失败，请手动选中路径复制。"; }
+}
+async function revealOutput(session: CaptureSnapshot, path: string) {
+  try { await sessionRequest("capture.reveal", { id: session.id, path }); notice.value = ""; }
+  catch (reason) { notice.value = reason instanceof Error && reason.message === "unsupported_message" ? "本地助手版本较旧，更新后才能直接打开文件夹；可以先用“复制文件夹路径”。" : sessionError(reason); }
+}
+function codecHint(session: CaptureSnapshot) {
+  const mimes = session.tracks.map(track => track.mime.toLowerCase());
+  if (mimes.some(mime => mime.includes("av01"))) return "视频是 AV1 编码。Windows 自带的媒体播放器要先在微软商店安装免费的“AV1 Video Extension”，也可以用 VLC 或 PotPlayer 播放。";
+  if (mimes.some(mime => /hvc1|hev1/.test(mime))) return "视频是 HEVC（H.265）编码。Windows 自带的媒体播放器要先在微软商店安装“HEVC 视频扩展”，也可以用 VLC 或 PotPlayer 播放。";
+  return "";
 }
 async function confirmDelete() { const session = pendingDelete.value; pendingDelete.value = null; if (session) await remove(session.id); }
 async function confirmCleanup() { pendingCleanup.value = false; await removeFailed(); }
@@ -94,7 +106,8 @@ defineExpose({ scan });
     <article v-for="session in orderedSessions" :key="session.id" class="feature-rule capture-session" :class="{ latest: session.id === lastSession?.id }">
       <div class="dispatch-item-head"><span class="dispatch-state" :data-state="session.state">{{ labels[session.state] || session.state }}</span><strong class="capture-session-title" :title="session.pageUrl || session.source?.url">{{ title(session) }}</strong><small class="capture-session-meta">{{ when(session) }}<template v-if="session.state !== 'unavailable'"> · {{ (session.bytes / 1048576).toFixed(1) }} MiB</template></small></div>
       <p v-if="session.ended && session.state === 'complete'" class="feature-note">视频已播放到结尾。</p>
-      <div v-for="output in session.outputs" :key="output" class="capture-output-row"><p class="capture-output">{{ output }}</p><button class="button sm" type="button" @click="copyPath(output)"><SfIcon name="copy" /><span>复制路径</span></button></div>
+      <div v-for="output in session.outputs" :key="output" class="capture-output-row"><p class="capture-output">{{ output }}</p><button class="button sm" type="button" @click="copyFolder(output)"><SfIcon name="copy" /><span>复制文件夹路径</span></button><button class="button sm" type="button" @click="revealOutput(session, output)"><SfIcon name="folder" /><span>打开文件夹</span></button></div>
+      <p v-if="session.outputs.length && codecHint(session)" class="feature-note">{{ codecHint(session) }}</p>
       <p v-if="session.outputs.length > 1" class="feature-note">播放中切换过清晰度或拖动过进度，视频分成了 {{ session.outputs.length }} 段。</p>
       <p v-if="session.error" class="inline-error">{{ failure(session) }}</p>
       <details v-if="session.tracks.length" class="capture-tracks"><summary>技术信息</summary><p v-for="track in session.tracks" :key="track.id" class="feature-note">轨道 {{ track.id }} · {{ track.mime }} · {{ track.initialized ? '含初始化片段' : '缺少初始化片段' }}</p></details>

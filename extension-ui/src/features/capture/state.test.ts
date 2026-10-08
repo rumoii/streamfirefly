@@ -163,6 +163,24 @@ describe("capture and deep-search session state", () => {
 describe("capture page guidance and records", () => {
   afterEach(() => { send.mockReset(); document.body.replaceChildren(); });
   const record = (id: string, state: string, createdAt: number, extra = {}) => ({ id, state, bytes: 1048576, tracks: [], outputs: [], createdAt, pageTitle: `页面 ${id}`, ...extra });
+  it("copies the folder of a saved video, opens it through the helper and explains AV1 playback", async () => {
+    const writeText = vi.fn(async () => {}); vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    let revealError = "";
+    send.mockImplementation(async message => {
+      if (message.type === "capture.list") return { ok: true, value: [{ id: "saved", state: "complete", bytes: 1, outputs: ["C:\\Videos\\片头.mkv"], tracks: [{ id: 1, mime: 'video/mp4;codecs="av01.0.08M.08"', bytes: 1, initialized: true }] }] };
+      if (message.type === "capture.reveal") return revealError ? { ok: false, error: revealError } : { ok: true, value: { id: "saved" } };
+      throw Error(message.type);
+    });
+    const wrapper = mount(CapturePanel, { props: { context } }); await flushPromises();
+    const button = (name: string) => wrapper.findAll("button").find(item => item.text() === name)!;
+    await button("复制文件夹路径").trigger("click"); await flushPromises();
+    expect(writeText).toHaveBeenCalledWith(String.raw`C:\Videos`); expect(wrapper.text()).toContain("已复制文件夹路径");
+    await button("打开文件夹").trigger("click"); await flushPromises();
+    expect(send.mock.calls.find(([message]) => message.type === "capture.reveal")?.[0].payload).toEqual({ id: "saved", path: "C:\\Videos\\片头.mkv" });
+    revealError = "unsupported_message"; await button("打开文件夹").trigger("click"); await flushPromises();
+    expect(wrapper.text()).toContain("本地助手版本较旧");
+    expect(wrapper.text()).toContain("AV1 Video Extension"); wrapper.unmount(); vi.unstubAllGlobals();
+  });
   it("lists records newest first and deletes only after confirmation", async () => {
     let records = [record("old", "complete", 1, { outputs: ["C:\captures\old.mkv"] }), record("new", "partial", 3), record("mid", "interrupted", 2)];
     send.mockImplementation(async message => {
