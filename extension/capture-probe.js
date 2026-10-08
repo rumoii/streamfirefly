@@ -26,6 +26,13 @@
     if (element?.canPlayType) { const original = element.canPlayType; element.canPlayType = function(type) { return modern.test(String(type)) ? "" : Reflect.apply(original, this, [type]); }; }
     const capabilities = window.navigator?.mediaCapabilities;
     if (capabilities?.decodingInfo) { const original = capabilities.decodingInfo; capabilities.decodingInfo = function(configuration) { return modern.test(String(configuration?.video?.contentType || "")) ? Promise.resolve({ supported: false, smooth: false, powerEfficient: false }) : Reflect.apply(original, this, [configuration]); }; }
+    // Players that cache codec probes skip the checks above. Hide those caches for this load and drop
+    // its writes, so the user's normal viewing keeps its own results. bpcc_persisted is Bilibili's cache.
+    const codecCaches = new Set(["bpcc_persisted"]), storage = window.Storage?.prototype;
+    const cached = (target, key) => { try { return target === window.localStorage && codecCaches.has(String(key)); } catch { return false; } };
+    if (storage?.getItem) { const original = storage.getItem; storage.getItem = function(key) { return cached(this, key) ? null : Reflect.apply(original, this, [key]); }; }
+    if (storage?.setItem) { const original = storage.setItem; storage.setItem = function(key, value) { if (!cached(this, key)) return Reflect.apply(original, this, [key, value]); }; }
+    if (storage?.removeItem) { const original = storage.removeItem; storage.removeItem = function(key) { if (!cached(this, key)) return Reflect.apply(original, this, [key]); }; }
   }
   let staging = restartMarker ? "pending" : "disabled", stagingBytes = 0, stagingError = "", earlyEnded = new WeakSet();
   const discardEarly = () => { early.length = 0; stagingBytes = 0; earlyEnded = new WeakSet(); };
