@@ -115,4 +115,25 @@ await coordinator.interrupted(1);
   for (const item of [video, late]) { assert.equal(item.playbackRate, 1); assert.equal(item.muted, false); }
   control({ type: 'speed', id: 'fast', rate: 8 }); assert.equal(posted.pop().rate, 0, 'A finished recording does not change the rate'); assert.equal(video.playbackRate, 1);
 }
-console.log('Capture probe: passive mode, source selection, bounded queue, ACK drain, restart, failed append, fast recording and coordinator cleanup passed');
+for (const compatible of [true, false]) {
+  // A one-click capture reload hides AV1/HEVC only when its marker asks for compatible codecs.
+  class MediaSource { static isTypeSupported() { return true; } addSourceBuffer() { return {}; } }
+  class SourceBuffer { appendBuffer() {} }
+  class HTMLMediaElement { canPlayType() { return 'probably'; } }
+  const decodingInfo = async () => ({ supported: true });
+  const stored = new Map([['streamfirefly:capture-restart', JSON.stringify([{ token: '00000000-0000-4000-8000-000000000000', expires: Date.now() + 60000, compatible }])]]);
+  const sessionStorage = { getItem: key => stored.get(key) ?? null, setItem: (key, value) => stored.set(key, value), removeItem: key => stored.delete(key) };
+  const window = { MediaSource, SourceBuffer, HTMLMediaElement, navigator: { mediaCapabilities: { decodingInfo } }, URL: { createObjectURL: () => 'blob:x' }, postMessage() {}, addEventListener() {} };
+  vm.runInNewContext(fs.readFileSync(new URL('../extension/capture-initialization.js', import.meta.url), 'utf8'), { window, Uint8Array, DataView });
+  vm.runInNewContext(fs.readFileSync(new URL('../extension/capture-probe.js', import.meta.url), 'utf8'), { window, document: { addEventListener() {} }, sessionStorage, Uint8Array, WeakRef, Date, Promise, Reflect, setTimeout: () => 1, clearTimeout() {} });
+  const element = new HTMLMediaElement();
+  assert.equal(MediaSource.isTypeSupported('video/mp4; codecs="av01.0.08M.08"'), !compatible);
+  assert.equal(MediaSource.isTypeSupported('video/mp4; codecs="hvc1.1.6.L120.90"'), !compatible);
+  assert.equal(MediaSource.isTypeSupported('video/mp4; codecs="avc1.64001F"'), true, 'H.264 stays available');
+  assert.equal(MediaSource.isTypeSupported('video/webm; codecs="vp09.00.10.08"'), true, 'VP9 stays available');
+  assert.equal(element.canPlayType('video/mp4; codecs="hev1.1.6.L93.B0"'), compatible ? '' : 'probably');
+  assert.equal((await window.navigator.mediaCapabilities.decodingInfo({ type: 'media-source', video: { contentType: 'video/mp4; codecs="av01.0.05M.08"' } })).supported, !compatible);
+  assert.equal((await window.navigator.mediaCapabilities.decodingInfo({ type: 'media-source', video: { contentType: 'video/mp4; codecs="avc1.4d401f"' } })).supported, true);
+  assert.equal(window.navigator.mediaCapabilities.decodingInfo === decodingInfo, !compatible, 'Without the marker request the page keeps the browser API');
+}
+console.log('Capture probe: passive mode, source selection, bounded queue, ACK drain, restart, failed append, fast recording, compatible codecs and coordinator cleanup passed');

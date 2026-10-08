@@ -16,6 +16,17 @@
     else sessionStorage.removeItem("streamfirefly:capture-restart");
     if (typeof marker?.token === "string" && /^[0-9a-f-]{36}$/.test(marker.token) && Number.isFinite(marker.expires) && marker.expires > Date.now() && marker.expires <= Date.now() + 180000) restartMarker = marker;
   } catch {}
+  // Only the one-click capture reload may ask for this: the page then picks H.264, which stock Windows players decode.
+  if (restartMarker?.compatible === true) hideModernCodecs();
+  function hideModernCodecs() {
+    const modern = /(^|[^a-z0-9])(av01|hev1|hvc1|dvh1|dvhe)/i;
+    const media = window.MediaSource;
+    if (media?.isTypeSupported) { const original = media.isTypeSupported; media.isTypeSupported = function(type) { return modern.test(String(type)) ? false : Reflect.apply(original, this, [type]); }; }
+    const element = window.HTMLMediaElement?.prototype;
+    if (element?.canPlayType) { const original = element.canPlayType; element.canPlayType = function(type) { return modern.test(String(type)) ? "" : Reflect.apply(original, this, [type]); }; }
+    const capabilities = window.navigator?.mediaCapabilities;
+    if (capabilities?.decodingInfo) { const original = capabilities.decodingInfo; capabilities.decodingInfo = function(configuration) { return modern.test(String(configuration?.video?.contentType || "")) ? Promise.resolve({ supported: false, smooth: false, powerEfficient: false }) : Reflect.apply(original, this, [configuration]); }; }
+  }
   let staging = restartMarker ? "pending" : "disabled", stagingBytes = 0, stagingError = "", earlyEnded = new WeakSet();
   const discardEarly = () => { early.length = 0; stagingBytes = 0; earlyEnded = new WeakSet(); };
   let stagingTimer = restartMarker ? setTimeout(() => { staging = "discarded"; stagingError = "capture_restart_timeout"; discardEarly(); }, Math.min(5000, restartMarker.expires - Date.now())) : null;

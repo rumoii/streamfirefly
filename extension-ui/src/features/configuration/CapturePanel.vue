@@ -10,7 +10,7 @@ import SfIcon from "../../ui/SfIcon.vue";
 import SfSelect from "../../ui/SfSelect.vue";
 import SfDialog from "../../ui/SfDialog.vue";
 const props = defineProps<{ context: UiContext | null; targetObjectUrl?: string }>();
-const { speed, setSpeed, lastSession, restartPhase, orderedSessions, failedSessions, phase, quickCandidate, remove, removeFailed, catalog, error, message, busy, selected, acknowledged, directory, active, selectionLocked, blobUnconfirmed, sourceKey, scan, start, stop, recover, refresh, restarting, renewed, restart, replay } = createCaptureState(toRef(props, "context"), true, toRef(props, "targetObjectUrl"));
+const { speed, setSpeed, compatibleCodecs, setCompatibleCodecs, lastSession, restartPhase, orderedSessions, failedSessions, phase, quickCandidate, remove, removeFailed, catalog, error, message, busy, selected, acknowledged, directory, active, selectionLocked, blobUnconfirmed, sourceKey, scan, start, stop, recover, refresh, restarting, renewed, restart, replay } = createCaptureState(toRef(props, "context"), true, toRef(props, "targetObjectUrl"));
 const speedOptions = CAPTURE_SPEEDS.map(value => ({ value, label: value === "1" ? "正常速度" : `${value} 倍速（静音）` }));
 const labels: Record<string, string> = { armed: "等待数据", capturing: "录制中", stopping: "正在停止", finalizing: "正在生成文件", complete: "已保存", partial: "未完成", interrupted: "已中断", unavailable: "记录损坏" };
 const sourceOptions = computed(() => [{ value: "", label: props.targetObjectUrl ? "尚未定位对应媒体源" : "请选择媒体源" }, ...catalog.value.sources.map(source => ({ value: sourceKey(source), label: `${source.frameId === 0 ? "主页面" : `框架 ${source.frameId}`} · 媒体源 ${source.id} · ${source.url} · ${source.tracks.join(", ")} · ${source.state}` }))]);
@@ -83,6 +83,7 @@ defineExpose({ scan });
       <p v-if="Number(speed) >= 8" class="tool-notice">倍速太高时，网站可能自动降低清晰度，录出来的视频也可能分成几段。</p>
       <p v-if="active?.speedOverridden" class="tool-notice">{{ sessionError("capture_speed_overridden") }}</p>
       <label class="feature-check"><input v-model="acknowledged" type="checkbox">我有权保存此视频，并了解只能录到开始之后播放的内容</label>
+      <label class="feature-check"><input :checked="compatibleCodecs" type="checkbox" @change="setCompatibleCodecs(($event.target as HTMLInputElement).checked)">一键捕捉时优先录制兼容格式（H.264），录出来系统自带播放器就能直接播放</label>
       <div class="feature-row capture-actions">
         <button class="button primary large" :disabled="busy || restarting || !context?.supported || !acknowledged || !!active" @click="restart"><SfIcon name="capture" /><span>一键捕捉</span></button>
         <button v-if="phase === 'waiting' || phase === 'recording'" class="button" type="button" @click="returnToSource"><SfIcon name="arrow-back-up" /><span>去来源页播放</span></button>

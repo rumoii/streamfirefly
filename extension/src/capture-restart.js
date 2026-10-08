@@ -3,6 +3,8 @@ import { assertSiteAllowed } from "./platform.js";
 export function createCaptureRestart(api, resources, closeActive) {
   const locks = new Map(), timers = new Map();
   const key = tabId => `capture-restart:${tabId}`;
+  // On by default: the reloaded page is told AV1/HEVC are unsupported so the recording plays in stock Windows players.
+  async function compatibleCodecs() { try { return (await api.storage?.local?.get("captureCompatibleCodecs"))?.captureCompatibleCodecs !== false; } catch { return true; } }
   function serial(tabId, action) {
     const current = (locks.get(tabId) || Promise.resolve()).catch(() => {}).then(action);
     locks.set(tabId, current);
@@ -31,6 +33,7 @@ export function createCaptureRestart(api, resources, closeActive) {
       const identity = await api.tabs.sendMessage(payload.tabId, { type: "capture.identity" }, { frameId: 0 });
       if (!identity?.documentToken) throw Error("capture_document_unavailable");
       const id = crypto.randomUUID(), expires = Date.now() + 180000, marked = [], markers = {};
+      const compatible = await compatibleCodecs();
       try {
         const frames = await api.webNavigation.getAllFrames({ tabId: payload.tabId });
         if (!frames?.some(frame => frame.frameId === 0) || frames.length > 100) throw Error("capture_document_unavailable");
@@ -39,7 +42,7 @@ export function createCaptureRestart(api, resources, closeActive) {
           const previous = frame.frameId === 0 ? identity : await api.tabs.sendMessage(payload.tabId, { type: "capture.identity" }, { frameId: frame.frameId });
           if (!previous?.documentToken) throw Error("capture_document_unavailable");
           const token = crypto.randomUUID();
-          const result = await api.tabs.sendMessage(payload.tabId, { type: "capture.restart.mark", documentToken: previous.documentToken, token, expires }, { frameId: frame.frameId });
+          const result = await api.tabs.sendMessage(payload.tabId, { type: "capture.restart.mark", documentToken: previous.documentToken, token, expires, compatible }, { frameId: frame.frameId });
           if (!result?.ok) throw Error(result?.error || "capture_restart_storage_unavailable");
           marked.push({ frameId: frame.frameId, documentToken: previous.documentToken, token });
           markers[token] = { origin: new URL(frame.url).origin, oldDocument: previous.documentToken };

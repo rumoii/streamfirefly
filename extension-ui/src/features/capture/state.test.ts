@@ -20,6 +20,16 @@ describe("capture and deep-search session state", () => {
     expect(directoryInput(configured).attributes("placeholder")).toBe("D:\\Media");
     expect((directoryInput(configured).element as HTMLInputElement).value).toBe(""); configured.unmount();
   });
+  it("prefers compatible codecs by default and remembers turning it off", async () => {
+    send.mockImplementation(async message => { if (message.type === "capture.list") return { ok: true, value: [] }; throw Error(message.type); });
+    const wrapper = mount(CapturePanel, { props: { context } }); await flushPromises();
+    const toggle = () => wrapper.findAll("label.feature-check").find(label => label.text().includes("H.264"))!.get("input");
+    expect((toggle().element as HTMLInputElement).checked).toBe(true);
+    await toggle().setValue(false); await flushPromises();
+    expect(storage.saved.captureCompatibleCodecs).toBe(false); wrapper.unmount();
+    const reopened = mount(CapturePanel, { props: { context } }); await flushPromises();
+    expect((reopened.findAll("label.feature-check").find(label => label.text().includes("H.264"))!.get("input").element as HTMLInputElement).checked).toBe(false); reopened.unmount();
+  });
   it("remembers the recording speed and applies it to a running recording only", async () => {
     let active = false, overridden = false;
     send.mockImplementation(async message => {

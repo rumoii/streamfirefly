@@ -13,7 +13,7 @@ export function createCaptureState(context: Ref<UiContext | null>, trusted: bool
   let revision = 0, disposed = false, refreshing = false;
   let connectionFailure = "", recovering = "";
   const restarting = ref(false), renewed = ref(false), restartPhase = ref("");
-  const speed = ref<CaptureSpeed>("1");
+  const speed = ref<CaptureSpeed>("1"), compatibleCodecs = ref(true);
   let restartOperation = "", restartContext = "", restartTab = -1;
   const quickCandidate = computed<MediaCandidate | undefined>(() => {
     const downloadable = (context.value?.candidates || []).filter(item => !isBlobCandidate(item) && ["hls", "dash", "video", "audio"].includes(item.type));
@@ -107,7 +107,11 @@ export function createCaptureState(context: Ref<UiContext | null>, trusted: bool
     finally { busy.value = false; }
   }
   async function loadSpeed() {
-    try { const stored = await extensionApi()?.storage?.local?.get("captureSpeed"); const value = String(stored?.captureSpeed ?? "1"); if (!disposed && (CAPTURE_SPEEDS as readonly string[]).includes(value)) speed.value = value as CaptureSpeed; } catch {}
+    try {
+      const stored = await extensionApi()?.storage?.local?.get(["captureSpeed", "captureCompatibleCodecs"]); const value = String(stored?.captureSpeed ?? "1");
+      if (!disposed && (CAPTURE_SPEEDS as readonly string[]).includes(value)) speed.value = value as CaptureSpeed;
+      if (!disposed) compatibleCodecs.value = stored?.captureCompatibleCodecs !== false;
+    } catch {}
   }
   // The choice is remembered for the next recording and applied at once to a running one.
   async function setSpeed(value: CaptureSpeed) {
@@ -118,6 +122,11 @@ export function createCaptureState(context: Ref<UiContext | null>, trusted: bool
       const result = await sessionRequest("capture.speed", { tabId: context.value.sourceTabId, id: active.value.id, speed: rate });
       if (!disposed) message.value = rate === 1 ? "已恢复正常速度播放。" : result.rate ? `正在以 ${result.rate} 倍速静音播放。` : `视频开始播放后会以 ${rate} 倍速静音播放。`;
     } catch (reason) { if (!disposed) error.value = sessionError(reason); }
+  }
+  // Applies from the next one-click capture, whose reload is what lets the page pick H.264.
+  async function setCompatibleCodecs(value: boolean) {
+    compatibleCodecs.value = value;
+    try { await extensionApi()?.storage?.local?.set({ captureCompatibleCodecs: value }); } catch {}
   }
   async function stop() {
     if (!active.value || busy.value || !context.value) return;
@@ -165,5 +174,5 @@ export function createCaptureState(context: Ref<UiContext | null>, trusted: bool
   watch(selected, () => { acknowledged.value = false; });
   onBeforeUnmount(() => { disposed = true; revision++; clearTimeout(timer); });
   void refresh(); void loadSpeed();
-  return { speed, setSpeed, lastSession, restartPhase, sessions, orderedSessions, failedSessions, phase, quickCandidate, remove, removeFailed, catalog, error, message, busy, selected, acknowledged, directory, active, selectionLocked, blobUnconfirmed, sourceKey, scan, start, stop, recover, refresh, restarting, renewed, quickDownloadAvailable, restart, replay };
+  return { speed, setSpeed, compatibleCodecs, setCompatibleCodecs, lastSession, restartPhase, sessions, orderedSessions, failedSessions, phase, quickCandidate, remove, removeFailed, catalog, error, message, busy, selected, acknowledged, directory, active, selectionLocked, blobUnconfirmed, sourceKey, scan, start, stop, recover, refresh, restarting, renewed, quickDownloadAvailable, restart, replay };
 }

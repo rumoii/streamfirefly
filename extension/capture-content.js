@@ -45,7 +45,7 @@
         const existing = JSON.parse(sessionStorage.getItem("streamfirefly:capture-restart") || "[]");
         const markers = Array.isArray(existing) ? existing.filter(marker => marker?.expires > Date.now()) : [];
         if (markers.length >= 100) throw Error("capture_restart_storage_unavailable");
-        markers.push({ token: message.token, expires: message.expires });
+        markers.push({ token: message.token, expires: message.expires, compatible: message.compatible === true });
         sessionStorage.setItem("streamfirefly:capture-restart", JSON.stringify(markers));
         respond({ ok: true });
       } catch { respond({ ok: false, error: "capture_restart_storage_unavailable" }); }

@@ -15,6 +15,7 @@ const make = () => scope.Restart.createCaptureRestart(api, resources, async () =
 const restart = make();
 await assert.rejects(restart.begin({ tabId: 1, sourceContextId: 'stale' }), /capture_document_changed/);
 const operation = await restart.begin({ tabId: 1, sourceContextId: context }); assert.equal(reloads, 1); assert.equal(closes, 1);
+assert.equal(marked.get(0).compatible, true, 'Compatible codecs are on unless the user turned them off'); assert.equal(marked.get(2).compatible, true);
 assert.equal((await restart.confirm({ tab: { id: 1 }, frameId: 0, url: 'https://page.test/video' }, documentToken, marked.get(0).token)).enabled, false);
 context = 'new-context'; documentToken = 'new-document';
 const sender = { tab: { id: 1 }, frameId: 0, documentId: 'browser-new', url: 'https://page.test/video' };
@@ -31,7 +32,8 @@ await restart.validate({ ...payload, source: { frameId: 12, documentToken: 'fram
 for (const patch of [{ sourceContextId: 'old-context' }, { restartOperation: 'stale' }, { source: { ...payload.source, documentToken: 'old-document' } }, { source: { ...payload.source, documentId: 'old-browser' } }]) await assert.rejects(restart.validate({ ...payload, ...patch }), /capture_restart_timeout/);
 const restored = make(); assert.equal((await restored.status(1, operation.operationId)).sourceContextId, context);
 await restored.consume(payload); await assert.rejects(restart.validate(payload), /capture_restart_timeout/);
-const expired = await restart.begin({ tabId: 1, sourceContextId: context }); now += 180001; await assert.rejects(restart.status(1, expired.operationId), /capture_restart_timeout/); assert.equal(Object.keys(saved).length, 0);
+api.storage.local = { get: async () => ({ captureCompatibleCodecs: false }) };
+const expired = await restart.begin({ tabId: 1, sourceContextId: context }); assert.equal(marked.get(0).compatible, false); delete api.storage.local; now += 180001; await assert.rejects(restart.status(1, expired.operationId), /capture_restart_timeout/); assert.equal(Object.keys(saved).length, 0);
 const next = await restart.begin({ tabId: 1, sourceContextId: context }); context = 'third-context'; documentToken = 'third-document'; await restart.confirm(sender, documentToken, marked.get(0).token); await restart.navigation(1); await assert.rejects(restart.status(1, next.operationId), /capture_restart_timeout/);
 await restart.clear(1); await restored.clear(1);
 const reload = api.tabs.reload; api.tabs.reload = async () => { throw Error('reload failed'); }; await assert.rejects(restart.begin({ tabId: 1, sourceContextId: context }), /reload failed/); assert.equal(Object.keys(saved).length, 0); assert.equal(marked.size, 0); api.tabs.reload = reload;
