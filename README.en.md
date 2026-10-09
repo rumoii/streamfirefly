@@ -92,7 +92,7 @@ Download the Windows bundle for your architecture from [Releases](https://github
 
 ### Build from source
 
-You need Node.js, a Rust toolchain, and Chrome/Edge 116+ or Firefox 140+. The helper downloads with the `curl` that ships with Windows; HLS/DASH merging needs FFmpeg.
+You need Node.js 24 and Rust 1.98 with the MSVC toolchain (install the Visual Studio C++ build tools), the same versions CI uses, plus Chrome/Edge 116+ or Firefox 140+. The helper downloads with the `curl` that ships with Windows; HLS/DASH merging needs FFmpeg.
 
 ```powershell
 npm install
@@ -121,6 +121,12 @@ cargo build --release --manifest-path native-host/Cargo.toml
 By default, sniffing only runs while StreamFirefly is open. If the list is empty, play the video first. If it is still empty, reload the page and open StreamFirefly again, or set sniffing to "always" in the settings.
 
 > **Tip: turn on deep search.** Deep search is off by default. When it is on, StreamFirefly also finds video manifests that pages generate with scripts, so more resources show up. On the Resources tab, click the radar icon in the toolbar → **开启深搜** (Turn on), then reload the page. Tick **记住此站点** (Remember this site) for sites you use often.
+
+### Troubleshooting
+
+- Downloads fail, or the native helper won't connect or keeps showing as not installed: see the [FAQ](INSTALL.md#常见问题) in the installation guide (in Chinese).
+- Downloads are saved to `%LOCALAPPDATA%\StreamFirefly\downloads` by default; you can pick another folder in the settings.
+- Still stuck: on the extension settings page, go to **常规 → 问题反馈** (General → Feedback), export a diagnostics report, then [open an issue](https://github.com/rumoii/streamfirefly/issues/new/choose). Issues are public and the report keeps page URLs and titles, so check it before you submit.
 
 ### Floating window
 
@@ -180,6 +186,15 @@ cargo test --manifest-path native-host/Cargo.toml
 npm run test:native
 ```
 
+Before the first run, fetch the FFmpeg builds the tests use (Inno Setup is not needed):
+
+```powershell
+.\tools\download-ffmpeg.ps1 -Architecture x64        # minimal build bundled in releases
+New-Item -ItemType Directory -Force installer\build\x64 | Out-Null
+Copy-Item tools\ffmpeg-cache\ffmpeg-x64.exe installer\build\x64\ffmpeg.exe
+.\tools\download-fixture-ffmpeg.ps1                  # full build for generating fixtures
+```
+
 `test:native` uses the debug build you just compiled and writes tasks to a temporary directory; set `STREAMFIREFLY_NATIVE_EXE` to test another build. In the HLS/DASH tests the native helper runs the minimal FFmpeg named by `STREAMFIREFLY_FFMPEG_EXE` (default `installer/build/x64/ffmpeg.exe`); fixtures are generated and inspected with the full FFmpeg and FFprobe from `tools/download-fixture-ffmpeg.ps1`, or those named by `STREAMFIREFLY_FIXTURE_FFMPEG_EXE` and `STREAMFIREFLY_FFPROBE_EXE`.
 
 </details>
@@ -187,18 +202,20 @@ npm run test:native
 <details>
 <summary>Packaging and release</summary>
 
+For local testing:
+
 ```powershell
-.\tools\package-extension.ps1 -Edition chrome-store   # Chrome Web Store upload package
 .\tools\package-extension.ps1 -Edition general        # General-edition Chromium extension
-npm run package:firefox              # unsigned Firefox XPI for testing
-.\tools\package-release.ps1 -SignedFirefoxXpi '<signed XPI path>'
-.\tools\build-installer.ps1 -Architecture x64
-.\tools\build-installer.ps1 -Architecture arm64
-.\tools\prepare-release.ps1 -ChromeExtensionId '<extension ID assigned by the store>'
+.\tools\package-extension.ps1 -Edition chrome-store   # Chrome Web Store upload package
+npm run package:firefox                               # unsigned Firefox XPI for testing
+.\tools\build-installer.ps1 -Architecture x64         # local EXE installer, not a release asset; same for arm64
 ```
 
+Releases start from `.\tools\package-release.ps1 -SignedFirefoxXpi '<signed XPI path>'`. Signing, acceptance checks and uploading are covered in the [release process](docs/development/release.md) (in Chinese).
+
 - Release packages require a clean source commit and its matching signed Firefox XPI. Legacy beta tools are not the release entry point.
-- Building the installer needs Inno Setup 6. The bundled FFmpeg is a minimal LGPL build produced by `tools/ffmpeg/build.sh`, downloaded and checked against a fixed SHA-256; it is not committed to the repository.
+- `tools/prepare-release.ps1` is the old release flow that produced EXE installers and an unsigned XPI. It is deprecated; do not use it for releases.
+- Building the EXE installer needs Inno Setup 6, and it also creates `installer/build/<arch>/ffmpeg.exe`, which the native helper tests read by default. The bundled FFmpeg is a minimal LGPL build produced by `tools/ffmpeg/build.sh`, downloaded and checked against a fixed SHA-256; it is not committed to the repository.
 - The local development extension ID is `gimoeapmpoeogpabfdplccplmmohklff`; do not use it for installers you hand out. Firefox always uses `streamfirefly@example.invalid`.
 - Store submission material is in `store-assets/`.
 
@@ -222,7 +239,7 @@ Most documents are in Chinese.
 - [Modular discovery and tool integration](docs/development/modular-discovery.md)
 - [External tools and URL extraction](docs/development/tools-and-extraction.md)
 - [Design decisions](docs/decisions/README.md)
-- [Release notes](docs/releases/1.0.5.md)
+- [Release notes](https://github.com/rumoii/streamfirefly/releases/latest)
 
 ## Privacy
 

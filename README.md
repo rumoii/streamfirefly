@@ -100,7 +100,7 @@
 
 ### 从源码构建
 
-需要 Node.js、Rust 工具链，以及 Chrome/Edge 116+ 或 Firefox 140+。本地助手使用 Windows 自带的 `curl` 下载，HLS/DASH 合并需要 FFmpeg。
+需要 Node.js 24、Rust 1.98（MSVC 工具链，需安装 Visual Studio C++ 生成工具），与 CI 使用的版本一致；以及 Chrome/Edge 116+ 或 Firefox 140+。本地助手使用 Windows 自带的 `curl` 下载，HLS/DASH 合并需要 FFmpeg。
 
 ```powershell
 npm install
@@ -129,6 +129,12 @@ cargo build --release --manifest-path native-host/Cargo.toml
 默认只在流萤打开时嗅探。列表为空时先播放一下视频；还是没有的话，刷新网页后重新打开流萤，或在设置里把嗅探时机改为“始终嗅探”。
 
 > **小提示：推荐开启深度搜索。** 深度搜索默认关闭。开启后，流萤还会识别网页用脚本动态生成的视频清单，能找到更多资源。开启方法：在“资源”页点击工具栏的雷达图标 →“开启深搜”，然后刷新网页。常用的网站可以勾选“记住此站点”。
+
+### 遇到问题
+
+- 下载失败、本地助手连不上或一直提示未安装：先看安装指南的[常见问题](INSTALL.md#常见问题)。
+- 下载的文件默认保存在 `%LOCALAPPDATA%\StreamFirefly\downloads`，可以在设置里改成常用文件夹。
+- 仍未解决：在扩展设置页“常规 → 问题反馈”中导出诊断报告，再[提交问题](https://github.com/rumoii/streamfirefly/issues/new/choose)。issue 是公开的，报告保留了网页地址和标题，提交前请检查。
 
 ### 悬浮窗口操作
 
@@ -188,6 +194,15 @@ cargo test --manifest-path native-host/Cargo.toml
 npm run test:native
 ```
 
+首次运行前准备测试用 FFmpeg（不需要安装 Inno Setup）：
+
+```powershell
+.\tools\download-ffmpeg.ps1 -Architecture x64        # 发布包捆绑的精简版
+New-Item -ItemType Directory -Force installer\build\x64 | Out-Null
+Copy-Item tools\ffmpeg-cache\ffmpeg-x64.exe installer\build\x64\ffmpeg.exe
+.\tools\download-fixture-ffmpeg.ps1                  # 生成测试素材用的完整版
+```
+
 `test:native` 默认使用刚编译的 debug 版本，任务写入临时目录；可以用 `STREAMFIREFLY_NATIVE_EXE` 指定其他版本。HLS/DASH 测试中，本地助手使用 `STREAMFIREFLY_FFMPEG_EXE` 指定的精简版 FFmpeg（默认 `installer/build/x64/ffmpeg.exe`）；测试素材的生成和检查使用 `tools/download-fixture-ffmpeg.ps1` 下载的完整版 FFmpeg 和 FFprobe，也可用 `STREAMFIREFLY_FIXTURE_FFMPEG_EXE`、`STREAMFIREFLY_FFPROBE_EXE` 指定。
 
 </details>
@@ -195,18 +210,20 @@ npm run test:native
 <details>
 <summary>打包与发布</summary>
 
+开发自测：
+
 ```powershell
-.\tools\package-extension.ps1 -Edition chrome-store   # Chrome 应用商店上传包
 .\tools\package-extension.ps1 -Edition general        # 通用版 Chromium 扩展
-npm run package:firefox              # Firefox 测试用 XPI（未签名）
-.\tools\package-release.ps1 -SignedFirefoxXpi '<已签名 XPI 路径>'
-.\tools\build-installer.ps1 -Architecture x64
-.\tools\build-installer.ps1 -Architecture arm64
-.\tools\prepare-release.ps1 -ChromeExtensionId '<商店分配的扩展 ID>'
+.\tools\package-extension.ps1 -Edition chrome-store   # Chrome 应用商店上传包
+npm run package:firefox                               # Firefox 测试用 XPI（未签名）
+.\tools\build-installer.ps1 -Architecture x64         # 本地 EXE 安装器，不进 Release；arm64 同理
 ```
 
+正式发布入口是 `.\tools\package-release.ps1 -SignedFirefoxXpi '<已签名 XPI 路径>'`，签名、验收和上传的完整步骤见[正式发布流程](docs/development/release.md)。
+
 - 正式打包必须使用干净提交和与其运行时代码一致的 Firefox 签名包。内测工具只用于历史版本，不用于正式发布。
-- 安装包构建需要 Inno Setup 6。捆绑的 FFmpeg 是 `tools/ffmpeg/build.sh` 编译的精简 LGPL 版，按固定 SHA-256 下载，不提交到仓库。
+- `tools/prepare-release.ps1` 是旧的发布流程，产出 EXE 安装器和未签名 XPI，已废弃，不要用于发布。
+- EXE 安装器构建需要 Inno Setup 6，同时会生成本地助手测试默认读取的 `installer/build/<架构>/ffmpeg.exe`。捆绑的 FFmpeg 是 `tools/ffmpeg/build.sh` 编译的精简 LGPL 版，按固定 SHA-256 下载，不提交到仓库。
 - 本地开发用的扩展 ID 是 `gimoeapmpoeogpabfdplccplmmohklff`，不要用它构建对外发布的安装包。Firefox 固定使用 `streamfirefly@example.invalid`。
 - 商店提交材料在 `store-assets/`。
 
@@ -228,7 +245,7 @@ npm run package:firefox              # Firefox 测试用 XPI（未签名）
 - [模块化发现与工具集成](docs/development/modular-discovery.md)
 - [外部工具与 URL 提取](docs/development/tools-and-extraction.md)
 - [设计决策](docs/decisions/README.md)
-- [版本说明](docs/releases/1.0.5.md)
+- [版本说明](https://github.com/rumoii/streamfirefly/releases/latest)
 
 ## 隐私
 
