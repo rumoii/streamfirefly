@@ -25,3 +25,5 @@ export function typeLabel(value?: string): string {
   const labels: Record<string, string> = { video: "视频", audio: "音频", image: "图片", hls: "HLS", dash: "DASH", segment: "分片" };
   return labels[value || ""] || String(value || "资源").toUpperCase();
 }
+/** The directory part of a Windows or POSIX file path. */
+export function folderOf(path: string) { const index = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/")); return index > 0 ? path.slice(0, index) : path; }

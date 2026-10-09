@@ -280,7 +280,10 @@ export function humanError(value: string): string {
     hls_checkpoint_invalid: "HLS 检查点已损坏，请重新创建下载任务。",
     hls_checkpoint_version_unsupported: "HLS 检查点版本不兼容，请升级本地助手或重新创建任务。",
     hls_live_not_supported: "当前版本暂不支持直播 M3U8 录制。",
-    path_not_writable: "保存目录不可写，请检查路径和权限。"
+    path_not_writable: "保存目录不可写，请检查路径和权限。",
+    task_output_unknown: "这个文件不在任务记录里，请刷新后再试。",
+    task_output_missing: "找不到这个文件，可能已经被移动或删除。",
+    task_reveal_failed: "没能打开资源管理器，请用“复制文件夹路径”手动打开。"
   };
   return labels[value] || value || "未知错误";
 }

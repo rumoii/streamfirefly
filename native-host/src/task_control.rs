@@ -1,3 +1,4 @@
+use crate::capture_export::reveal_in_explorer;
 use crate::hls::load_checkpoint;
 use crate::hls::parse_key_override;
 use crate::hls_plan::runtime_plan_from_persisted;
@@ -30,6 +31,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
@@ -395,6 +397,33 @@ pub(crate) fn task_output_paths(task: &Task) -> HashSet<String> {
         }
     }
     paths
+}
+
+/// Only an existing regular file that belongs to the task may be shown in Explorer.
+pub(crate) fn task_reveal_target(task: &Task, path: &str) -> Result<PathBuf, &'static str> {
+    if !task_output_paths(task).contains(path) {
+        return Err("task_output_unknown");
+    }
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => Ok(PathBuf::from(path)),
+        _ => Err("task_output_missing"),
+    }
+}
+
+pub(crate) fn reveal_task_output(store: &TaskRuntime, payload: &Value) -> Result<Value, &'static str> {
+    let id = payload["id"].as_str().filter(|id| !id.is_empty()).ok_or("task_id_empty")?;
+    let path = payload["path"].as_str().ok_or("task_output_unknown")?;
+    let task = store
+        .repository
+        .tasks
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|task| task.id == id)
+        .cloned()
+        .ok_or("task_not_found")?;
+    reveal_in_explorer(&task_reveal_target(&task, path)?).map_err(|_| "task_reveal_failed")?;
+    Ok(json!({"id":id}))
 }
 
 pub(crate) fn delete_task_outputs(task: &Task) -> Result<bool, &'static str> {

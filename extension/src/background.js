@@ -254,7 +254,13 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!Number.isInteger(sender.tab?.id)) { sendResponse({ ok: false, error: "page_close_unavailable" }); return false; }
     api.tabs.remove(sender.tab.id).then(() => sendResponse({ ok: true }), () => sendResponse({ ok: false, error: "page_close_unavailable" })); return true;
   }
-  const administrative = ["extraction.get", "extraction.save", "extraction.test", "discovery.get", "discovery.save", "discovery.test", "template.render", "templates.get", "templates.save", "integration.preview", "integration.get", "integration.save", "integration.test", "integration.invoke", "integration.secret", "integration.intent", "capture.sources", "capture.open", "capture.close", "capture.list", "capture.recover", "capture.restart", "capture.restart.status", "capture.replay", "capture.speed", "capture.reveal", "capture.delete", "diagnostics.export"];
+  // Finished recordings are as sensitive as download tasks, so the page workspace may list and manage them like tasks.
+  const captureRecords = { "capture.list": () => capture.list(), "capture.recover": () => capture.recover(message.payload?.id), "capture.reveal": () => capture.reveal(message.payload || {}), "capture.delete": () => capture.remove(message.payload?.id) };
+  if (Object.hasOwn(captureRecords, message?.type)) {
+    Promise.resolve().then(captureRecords[message.type]).then(value => sendResponse({ ok: true, value }), error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+  const administrative = ["extraction.get", "extraction.save", "extraction.test", "discovery.get", "discovery.save", "discovery.test", "template.render", "templates.get", "templates.save", "integration.preview", "integration.get", "integration.save", "integration.test", "integration.invoke", "integration.secret", "integration.intent", "capture.sources", "capture.open", "capture.close", "capture.restart", "capture.restart.status", "capture.replay", "capture.speed", "diagnostics.export"];
   if (administrative.includes(message?.type)) {
     if (typeof sender.url !== "string" || sender.url.split(/[?#]/, 1)[0] !== api.runtime.getURL("dist/app.html")) { sendResponse({ ok: false, error: "请从扩展设置页执行此操作" }); return false; }
     const operations = {
@@ -281,10 +287,6 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
       "capture.speed": () => capture.speed(message.payload),
       "capture.open": () => capture.open(message.payload),
       "capture.close": () => capture.close(message.payload.tabId, message.payload.id),
-      "capture.list": () => capture.list(),
-      "capture.recover": () => capture.recover(message.payload.id),
-      "capture.reveal": () => capture.reveal(message.payload),
-      "capture.delete": () => capture.remove(message.payload.id),
       "diagnostics.export": () => diagnostics.exportReport()
     };
     Promise.resolve().then(operations[message.type]).then(value => sendResponse({ ok: true, value }), error => sendResponse({ ok: false, error: error.message }));
@@ -386,7 +388,7 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   if (["task.list", "task.control"].includes(message?.type)) { ensureNativeConfigured().then(info => info.ok ? nativeRequestPromise(message.type, message.payload || {}) : info).then(sendResponse); return true; }
-  if (["task.find", "task.delete", "path.validate"].includes(message?.type)) { nativeRequestPromise(message.type, message.payload || {}).then(sendResponse); return true; }
+  if (["task.find", "task.delete", "task.reveal", "path.validate"].includes(message?.type)) { nativeRequestPromise(message.type, message.payload || {}).then(sendResponse); return true; }
   if (message?.type === "preview.headers.apply") { updatePreviewHeaders({ ...message.payload, action: "apply" }, sender).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message })); return true; }
   if (message?.type === "preview.headers.clear") { updatePreviewHeaders({ action: "clear", previewSessionId: message.previewSessionId || message.payload?.previewSessionId }, sender).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message })); return true; }
   return false;

@@ -444,6 +444,23 @@ fn task_output_goes_into_the_requested_site_folder() {
     assert_eq!(Path::new(plain.output.as_deref().unwrap()).parent().unwrap(), root);
 }
 #[test]
+fn task_reveal_accepts_only_existing_outputs_of_the_task() {
+    let root = std::env::temp_dir().join(format!("streamfirefly-reveal-{}", Uuid::new_v4()));
+    fs::create_dir_all(&root).unwrap();
+    let store = load_store(&root.join("tasks.json"));
+    let task = create_task(&store, &hls_payload(Some(&root))).unwrap();
+    let output = task.output.clone().unwrap();
+    assert_eq!(crate::task_control::task_reveal_target(&task, &output), Err("task_output_missing"));
+    fs::write(&output, b"video").unwrap();
+    assert_eq!(crate::task_control::task_reveal_target(&task, &output), Ok(Path::new(&output).to_path_buf()));
+    let stranger = root.join("other.mp4");
+    fs::write(&stranger, b"other").unwrap();
+    assert_eq!(crate::task_control::task_reveal_target(&task, stranger.to_str().unwrap()), Err("task_output_unknown"));
+    assert_eq!(crate::task_control::reveal_task_output(&store, &json!({"id":"missing","path":output})), Err("task_not_found"));
+    assert_eq!(crate::task_control::reveal_task_output(&store, &json!({"id":task.id,"path":stranger.to_str().unwrap()})), Err("task_output_unknown"));
+    let _ = fs::remove_dir_all(root);
+}
+#[test]
 fn hls_task_keeps_public_outputs_but_strips_runtime_plan_and_credentials() {
     let root = std::env::temp_dir().join(format!("streamfirefly-hls-task-{}", Uuid::new_v4()));
     fs::create_dir_all(&root).unwrap();

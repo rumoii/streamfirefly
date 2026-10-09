@@ -3,16 +3,16 @@ import { computed, onMounted, ref, toRef, watch } from "vue";
 import type { UiContext } from "../../types";
 import type { CaptureSnapshot } from "../../../../shared/capture";
 import { CAPTURE_SPEEDS, createCaptureState } from "../capture/state";
-import { sessionError, sessionRequest } from "../session-client";
+import { sessionError } from "../session-client";
 import { configurationRequest } from "./client";
 import { readSettings } from "../settings/state";
 import SfIcon from "../../ui/SfIcon.vue";
 import SfSelect from "../../ui/SfSelect.vue";
-import SfDialog from "../../ui/SfDialog.vue";
+import CaptureRecordList from "../capture/CaptureRecordList.vue";
+import { modernCodec } from "../capture/display";
 const props = defineProps<{ context: UiContext | null; targetObjectUrl?: string }>();
-const { chooseSource, speed, setSpeed, compatibleCodecs, setCompatibleCodecs, lastSession, restartPhase, orderedSessions, failedSessions, phase, quickCandidate, remove, removeFailed, catalog, error, message, busy, selected, acknowledged, directory, active, selectionLocked, blobUnconfirmed, sourceKey, scan, start, stop, recover, refresh, restarting, renewed, restart, replay } = createCaptureState(toRef(props, "context"), true, toRef(props, "targetObjectUrl"));
+const { chooseSource, speed, setSpeed, compatibleCodecs, setCompatibleCodecs, lastSession, restartPhase, orderedSessions, phase, quickCandidate, remove, removeFailed, catalog, error, message, busy, selected, acknowledged, directory, active, selectionLocked, blobUnconfirmed, sourceKey, scan, start, stop, recover, refresh, restarting, renewed, restart, replay } = createCaptureState(toRef(props, "context"), true, toRef(props, "targetObjectUrl"));
 const speedOptions = CAPTURE_SPEEDS.map(value => ({ value, label: value === "1" ? "正常速度" : `${value} 倍速（静音）` }));
-const labels: Record<string, string> = { armed: "等待数据", capturing: "录制中", stopping: "正在停止", finalizing: "正在生成文件", complete: "已保存", partial: "未完成", interrupted: "已中断", unavailable: "记录损坏" };
 const sourceOptions = computed(() => [{ value: "", label: props.targetObjectUrl ? "尚未定位对应媒体源" : "请选择媒体源" }, ...catalog.value.sources.map(source => ({ value: sourceKey(source), label: `${source.frameId === 0 ? "主页面" : `框架 ${source.frameId}`} · 媒体源 ${source.id} · ${source.url} · ${source.tracks.join(", ")} · ${source.state}` }))]);
 const steps = [{ key: "ready", label: "勾选授权，点一键捕捉" }, { key: "waiting", label: "到来源页播放视频" }, { key: "recording", label: "录制中，播完自动保存" }, { key: "saving", label: "生成视频文件" }];
 const stepIndex = computed(() => phase.value === "done" ? steps.length : phase.value === "failed" ? 0 : steps.findIndex(step => step.key === phase.value));
@@ -29,14 +29,8 @@ const fallbackDirectory = "%LOCALAPPDATA%\\StreamFirefly\\captures", defaultDire
 onMounted(async () => { try { defaultDirectory.value = (await readSettings()).saveDir.trim(); } catch { defaultDirectory.value = ""; } });
 const advancedOpen = ref(false);
 watch(() => [blobUnconfirmed.value, renewed.value && !restarting.value && !active.value && catalog.value.sources.length > 1], needs => { if (needs.some(Boolean)) advancedOpen.value = true; });
-const pendingDelete = ref<CaptureSnapshot | null>(null);
-const pendingCleanup = ref(false);
 const notice = ref("");
-const finished = (session: CaptureSnapshot) => ["complete", "partial", "interrupted"].includes(session.state);
 function failure(session: CaptureSnapshot) { return session.outputs.length ? `已生成的文件可能不完整。原因：${sessionError(session.error)}` : sessionError(session.error); }
-function title(session: CaptureSnapshot) { return session.pageTitle || hostOf(session.pageUrl || session.source?.url) || "未知页面"; }
-function hostOf(url?: string) { try { return url ? new URL(url).hostname : ""; } catch { return ""; } }
-function when(session: CaptureSnapshot) { return session.createdAt ? new Date(session.createdAt).toLocaleString("zh-CN", { hour12: false }) : ""; }
 async function openQuickDownload() {
   if (!props.context || !quickCandidate.value) return;
   try { await configurationRequest("ui.source.activate", { tabId: props.context.sourceTabId, closeCurrent: false, candidateId: quickCandidate.value.id }); notice.value = ""; }
@@ -47,27 +41,6 @@ async function returnToSource() {
   try { await configurationRequest("ui.source.activate", { tabId: props.context.sourceTabId, closeCurrent: false }); notice.value = ""; }
   catch { notice.value = "来源标签页已关闭。"; }
 }
-// Users open the folder themselves and play the file from there, so copy its directory.
-function folderOf(path: string) { const index = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/")); return index > 0 ? path.slice(0, index) : path; }
-async function copyFolder(path: string) {
-  try { await navigator.clipboard.writeText(folderOf(path)); notice.value = "已复制文件夹路径。"; }
-  catch { notice.value = "复制失败，请手动选中路径复制。"; }
-}
-async function revealOutput(session: CaptureSnapshot, path: string) {
-  try { await sessionRequest("capture.reveal", { id: session.id, path }); notice.value = ""; }
-  catch (reason) { notice.value = reason instanceof Error && reason.message === "unsupported_message" ? "本地助手版本较旧，更新后才能直接打开文件夹；可以先用“复制文件夹路径”。" : sessionError(reason); }
-}
-// Stock Windows players lack AV1 and HEVC decoders, so recordings in these codecs open with sound only.
-function modernCodec(session: CaptureSnapshot) {
-  const mimes = session.tracks.map(track => track.mime.toLowerCase());
-  return mimes.some(mime => mime.includes("av01")) ? "AV1" : mimes.some(mime => /hvc1|hev1/.test(mime)) ? "HEVC" : "";
-}
-function codecHint(session: CaptureSnapshot) {
-  const codec = modernCodec(session);
-  if (codec === "AV1") return "视频是 AV1 编码。Windows 自带的媒体播放器要先在微软商店安装免费的“AV1 Video Extension”，也可以用 VLC 或 PotPlayer 播放。";
-  if (codec === "HEVC") return "视频是 HEVC（H.265）编码。Windows 自带的媒体播放器要先在微软商店安装“HEVC 视频扩展”，也可以用 VLC 或 PotPlayer 播放。";
-  return "打不开或只有声音？通常是播放器不支持这个视频的编码格式，换用 VLC 或 PotPlayer 一般就能播放。";
-}
 const liveCodecNotice = computed(() => {
   const codec = active.value ? modernCodec(active.value) : "";
   if (!codec) return "";
@@ -75,8 +48,6 @@ const liveCodecNotice = computed(() => {
     ? `这个网站没有按兼容格式提供视频，录到的是 ${codec}。可以继续录，录完用 VLC 或 PotPlayer 播放，或在微软商店安装对应的视频扩展。`
     : `当前录到的是 ${codec}，Windows 自带播放器打不开。想要能直接播放的文件，请使用支持的应用程序或者请勾选“优先录制兼容格式”后重新一键捕捉。`;
 });
-async function confirmDelete() { const session = pendingDelete.value; pendingDelete.value = null; if (session) await remove(session.id); }
-async function confirmCleanup() { pendingCleanup.value = false; await removeFailed(); }
 defineExpose({ scan });
 </script>
 <template>
@@ -121,27 +92,6 @@ defineExpose({ scan });
       </details>
     </section>
     <p v-if="message" class="feature-message" role="status">{{ message }}</p><p v-if="notice" class="feature-message" role="status">{{ notice }}</p><p v-if="error" class="inline-error" role="alert">{{ error }}</p>
-    <header v-if="orderedSessions.length" class="capture-records-head"><h4>录制记录 <small>{{ orderedSessions.length }} 条，最新的在上</small></h4><button v-if="failedSessions.length" class="button sm" :disabled="busy" @click="pendingCleanup = true"><SfIcon name="trash" /><span>清理失败记录</span></button></header>
-    <article v-for="session in orderedSessions" :key="session.id" class="feature-rule capture-session" :class="{ latest: session.id === lastSession?.id, busy: ['capturing', 'finalizing'].includes(session.state) }">
-      <div class="dispatch-item-head"><span class="dispatch-state" :data-state="session.state">{{ labels[session.state] || session.state }}</span><strong class="capture-session-title" :title="session.pageUrl || session.source?.url">{{ title(session) }}</strong><small class="capture-session-meta">{{ when(session) }}<template v-if="session.state !== 'unavailable'"> · {{ (session.bytes / 1048576).toFixed(1) }} MiB</template></small></div>
-      <p v-if="session.ended && session.state === 'complete'" class="feature-note">视频已播放到结尾。</p>
-      <div v-for="output in session.outputs" :key="output" class="capture-output-row"><p class="capture-output">{{ output }}</p><button class="button sm" type="button" @click="copyFolder(output)"><SfIcon name="copy" /><span>复制文件夹路径</span></button><button class="button sm" type="button" @click="revealOutput(session, output)"><SfIcon name="folder" /><span>打开文件夹</span></button></div>
-      <p v-if="session.outputs.length" class="feature-note">{{ codecHint(session) }}</p>
-      <p v-if="session.outputs.length > 1" class="feature-note">播放中切换过清晰度或拖动过进度，视频分成了 {{ session.outputs.length }} 段。</p>
-      <p v-if="session.error" class="inline-error">{{ failure(session) }}</p>
-      <details v-if="session.tracks.length" class="capture-tracks"><summary>技术信息</summary><p v-for="track in session.tracks" :key="track.id" class="feature-note">轨道 {{ track.id }} · {{ track.mime }} · {{ track.initialized ? '含初始化片段' : '缺少初始化片段' }}</p></details>
-      <div v-if="finished(session)" class="feature-row">
-        <button v-if="['partial', 'interrupted'].includes(session.state)" class="button sm" :disabled="busy" @click="recover(session.id)"><SfIcon name="refresh" /><span>重新生成文件</span></button>
-        <button class="button sm danger-ghost" :disabled="busy" @click="pendingDelete = session"><SfIcon name="trash" /><span>删除</span></button>
-      </div>
-    </article>
-    <SfDialog v-if="pendingDelete" title="删除这条录制记录？" size="sm" @close="pendingDelete = null">
-      <p>{{ pendingDelete.outputs.length ? "已保存的视频文件会一起删除，无法恢复。" : "录到的原始数据会一起删除，无法恢复。" }}</p>
-      <template #footer><button class="button" type="button" @click="pendingDelete = null">取消</button><button class="button danger-solid" type="button" @click="confirmDelete">删除</button></template>
-    </SfDialog>
-    <SfDialog v-if="pendingCleanup" title="清理失败记录？" size="sm" @close="pendingCleanup = false">
-      <p>将删除 {{ failedSessions.length }} 条未完成或已中断的记录及其原始数据。已保存的视频不受影响。</p>
-      <template #footer><button class="button" type="button" @click="pendingCleanup = false">取消</button><button class="button danger-solid" type="button" @click="confirmCleanup">清理</button></template>
-    </SfDialog>
+    <CaptureRecordList :sessions="orderedSessions" :busy="busy" :latest-id="lastSession?.id" heading @recover="recover" @remove="remove" @remove-failed="removeFailed" />
   </section>
 </template>

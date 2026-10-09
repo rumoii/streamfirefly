@@ -8,7 +8,7 @@ import SfMenu, { type MenuItem } from "../ui/SfMenu.vue";
 import { isActive, isRecording, isWorking, progressText, recordedText, resumeNotice, stateIcon, statusLine, taskActions, type TaskActionKey } from "../features/downloads/display";
 
 const props = defineProps<{ task: DownloadTask; connected?: boolean; compact?: boolean; readonly?: boolean; expanded?: boolean }>();
-const emit = defineEmits<{ action: [key: TaskActionKey]; toggle: [] }>();
+const emit = defineEmits<{ action: [key: TaskActionKey]; toggle: []; reveal: [path: string]; copyFolder: [path: string] }>();
 const actions = computed(() => taskActions(props.task));
 const offline = computed(() => props.connected === false);
 const menuItems = computed<MenuItem[]>(() => actions.value.menu.map(action => ({ ...action, disabled: offline.value })));
@@ -43,8 +43,8 @@ const line = computed(() => props.compact && !isRecording(props.task) && showPro
     </span>
     <div v-if="expanded && !readonly" class="task-detail">
       <div v-if="metrics.length || task.failed_segments" class="task-metrics"><span v-for="metric in metrics" :key="metric">{{ metric }}</span><span v-if="task.failed_segments" class="metric-danger">失败 {{ task.failed_segments }} 个</span></div>
-      <div v-if="task.outputs?.length" class="task-outputs"><div v-for="(output, index) in task.outputs" :key="index"><span class="tag">{{ taskOutputLabel(task, output) }}</span><strong :title="output.path || undefined">{{ output.path || '等待生成文件' }}</strong><em :data-state="output.state">{{ output.state === 'succeeded' ? '已完成' : output.state === 'failed' ? '失败' : '处理中' }}</em></div></div>
-      <div v-else-if="task.output" class="task-outputs"><div><span class="tag">输出</span><strong :title="task.output">{{ task.output }}</strong></div></div>
+      <div v-if="task.outputs?.length" class="task-outputs"><div v-for="(output, index) in task.outputs" :key="index"><span class="tag">{{ taskOutputLabel(task, output) }}</span><strong :title="output.path || undefined">{{ output.path || '等待生成文件' }}</strong><em :data-state="output.state">{{ output.state === 'succeeded' ? '已完成' : output.state === 'failed' ? '失败' : '处理中' }}</em><span v-if="output.path && output.state === 'succeeded'" class="task-output-actions"><button class="icon-button" type="button" aria-label="打开文件夹" title="打开文件夹" @click="emit('reveal', output.path)"><SfIcon name="folder" /></button><button class="icon-button" type="button" aria-label="复制文件夹路径" title="复制文件夹路径" @click="emit('copyFolder', output.path)"><SfIcon name="copy" /></button></span></div></div>
+      <div v-else-if="task.output" class="task-outputs"><div><span class="tag">输出</span><strong :title="task.output">{{ task.output }}</strong><span v-if="task.state === 'succeeded'" class="task-output-actions"><button class="icon-button" type="button" aria-label="打开文件夹" title="打开文件夹" @click="emit('reveal', task.output)"><SfIcon name="folder" /></button><button class="icon-button" type="button" aria-label="复制文件夹路径" title="复制文件夹路径" @click="emit('copyFolder', task.output)"><SfIcon name="copy" /></button></span></div></div>
       <div v-if="task.resume_requirement" class="resume-notice"><strong>{{ resumeNotice(task) }}</strong><span v-if="task.resume_requirement !== 'dash_reparse_required'">已完成切片和检查点会保留，不会从头下载。</span></div>
     </div>
   </article>
