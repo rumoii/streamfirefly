@@ -288,6 +288,13 @@ if (staleTask.ok || staleTask.error !== 'resource_view_context_stale' || nativeP
 await send({ type: 'task.create', payload: { url: 'https://video.example/file.mp4', sourceTabId: 7, sourceContextId: senderView.context.sourceContextId } }, { tab: { ...tabsById.get(8) } });
 const workspaceTask = nativePosted.at(-1)?.payload;
 if (workspaceTask?.sourceTabId !== 8 || workspaceTask?.sourceContextId !== senderView.context.sourceContextId) throw new Error(`Workspace task escaped its sender context: ${JSON.stringify(workspaceTask)}`);
+if ('subdirectory' in workspaceTask) throw new Error('A site folder was invented without a page address');
+const siteTask = async () => { await send({ type: 'task.create', payload: { url: 'https://cdn.example/file.mp4', pageUrl: 'https://www.video.example/watch', sourceContextId: senderView.context.sourceContextId } }, { tab: { ...tabsById.get(8) } }); return nativePosted.at(-1)?.payload?.subdirectory; };
+if (await siteTask() !== 'video.example') throw new Error('Site folders are not on by default or not derived from the page address');
+listeners.storageChanged({ siteFolders: { newValue: false } }, 'local');
+if (await siteTask() !== undefined) throw new Error('Turning site folders off still requested a folder');
+listeners.storageChanged({ siteFolders: { oldValue: false } }, 'local');
+if (await siteTask() !== 'video.example') throw new Error('A cleared site-folder setting did not return to the default');
 const opensBeforeClose = sidePanelCalls.filter(call => call.type === 'open').length;
 rejectSidePanelOpen = true;
 const firstClose = await send({ type: 'workspace.close' }, { tab: { ...tabsById.get(8) } });

@@ -11,5 +11,12 @@ export function assertSiteAllowed(...urls) { if (urls.some(blockedSite)) throw n
 export function cleanPageTitle(value) { return String(value || '').replace(/^(?:(?:流萤(?:\s+StreamFirefly)?)[\s·|\-–—:：]+)+/i, '').trim() || '未命名页面'; }
 export function pageTitleFor(tab) { try { return cleanPageTitle(tab?.title || new URL(tab?.url || '').hostname); } catch { return cleanPageTitle(tab?.title); } }
 /** Identifies the page a document shows; fragment-only changes stay on the same page. */
+/** Folder name for the page's site: lower-case host without one leading `www.` or `m.`; empty when unknown. */
+export function siteFolder(value) {
+  let host;
+  try { const url = new URL(String(value || '')); if (!['http:', 'https:'].includes(url.protocol)) return ''; host = url.hostname.toLowerCase(); } catch { return ''; }
+  host = host.replace(/^\[|\]$/g, '').replace(/^(?:www|m)\./, '').replace(/[^a-z0-9.-]/g, '_').replace(/\.+$/, '');
+  return host.startsWith('.') ? '' : host;
+}
 export function pageKey(url) { return String(url || '').split('#', 1)[0]; }
 export function normalizeSortMode(value) { return ['detected', 'size', 'duration'].includes(value) ? value : 'detected'; }

@@ -422,6 +422,22 @@ pub(crate) fn validate_dir(value: &str) -> Result<PathBuf, &'static str> {
     Ok(path)
 }
 
+/// The per-site folder chosen by the extension. Only a single, already safe directory name is accepted;
+/// anything else is ignored so the file lands directly in the save directory.
+pub(crate) fn site_subdirectory(payload: &Value) -> Option<String> {
+    let value = payload["subdirectory"].as_str()?;
+    (safe_file_stem(value).as_deref() == Some(value) && !value.starts_with('.')).then(|| value.into())
+}
+
+pub(crate) fn with_site_subdirectory(dir: PathBuf, payload: &Value) -> Result<PathBuf, &'static str> {
+    let Some(name) = site_subdirectory(payload) else {
+        return Ok(dir);
+    };
+    let dir = dir.join(name);
+    fs::create_dir_all(&dir).map_err(|_| "path_not_writable")?;
+    Ok(dir)
+}
+
 pub(crate) fn allowed_request_headers(payload: &Value) -> HashMap<String, String> {
     let allowed = ["referer", "origin", "authorization", "cookie", "user-agent"];
     let mut headers = HashMap::new();

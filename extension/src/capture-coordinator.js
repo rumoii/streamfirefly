@@ -1,5 +1,5 @@
 import { createCaptureTransport } from "./capture-transport.js";
-import { assertSiteAllowed, pageTitleFor } from "./platform.js";
+import { assertSiteAllowed, pageTitleFor, siteFolder } from "./platform.js";
 import { createCaptureRestart } from "./capture-restart.js";
 export const CAPTURE_SPEEDS = [1, 2, 4, 8, 16];
 export function createCaptureCoordinator(api, nativeRequest, evaluation, resources) {
@@ -12,6 +12,10 @@ export function createCaptureCoordinator(api, nativeRequest, evaluation, resourc
     const result = await api.runtime.sendMessage({ type: `capture.transport.${type}`, payload });
     if (!result?.ok) throw new Error(result?.error || "capture_transport_failed");
     return result.value;
+  }
+  async function savedSiteFolder(pageUrl) {
+    try { return (await api.storage?.local?.get("siteFolders"))?.siteFolders !== false ? siteFolder(pageUrl) : ""; }
+    catch { return ""; }
   }
   async function savedDirectory() {
     try { const stored = await api.storage?.local?.get("saveDir"); return typeof stored?.saveDir === "string" ? stored.saveDir.trim() : ""; }
@@ -99,7 +103,8 @@ export function createCaptureCoordinator(api, nativeRequest, evaluation, resourc
       await check();
       const page = await resources.loadTabState(payload.tabId), tab = await Promise.resolve().then(() => api.tabs.get(payload.tabId)).catch(() => null);
       const directory = (typeof payload.directory === "string" ? payload.directory.trim() : "") || await savedDirectory();
-      const result = await nativeRequest("capture.open", { origin: api.runtime.getURL("").replace(/\/$/, ""), directory, pageTitle: pageTitleFor(tab) || "", pageUrl: page.pageUrl || "" });
+      const subdirectory = await savedSiteFolder(page.pageUrl);
+      const result = await nativeRequest("capture.open", { origin: api.runtime.getURL("").replace(/\/$/, ""), directory, ...(subdirectory ? { subdirectory } : {}), pageTitle: pageTitleFor(tab) || "", pageUrl: page.pageUrl || "" });
       if (!result.ok) throw new Error(result.error || "capture_open_failed");
       session = { ...result.value, tabId: payload.tabId, source: found, state: "armed", restartOperation: payload.restartOperation, speed: await savedSpeed() };
       operation.id = session.id;

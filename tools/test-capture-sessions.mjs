@@ -90,6 +90,14 @@ const settingsSession = await settingsCoordinator.open(payload); assert.equal(la
 await settingsCoordinator.close(1, settingsSession.id);
 const explicitSession = await settingsCoordinator.open({ ...payload, directory: 'E:\\Captures' }); assert.equal(lastOpenDirectory(), 'E:\\Captures');
 await settingsCoordinator.close(1, explicitSession.id);
+const lastOpen = () => calls.filter(call => call.type === 'capture.open').at(-1).payload;
+const siteCoordinator = stored => factory({ ...api, storage: { local: { get: async () => stored } } }, native, { ensureDocument: async () => {} }, { loadTabState: async () => ({ sourceContextId: context, pageUrl: 'https://www.bilibili.com/video/BV1' }) });
+const defaultSite = siteCoordinator({}), siteSession = await defaultSite.open(payload);
+assert.equal(lastOpen().subdirectory, 'bilibili.com', 'site folders are on by default');
+await defaultSite.close(1, siteSession.id);
+const flat = siteCoordinator({ siteFolders: false }), flatSession = await flat.open(payload);
+assert.ok(!('subdirectory' in lastOpen()), 'turning site folders off keeps recordings in the save directory');
+await flat.close(1, flatSession.id);
 const sockets = [];
 class Socket {
   constructor() { sockets.push(this); this.readyState = 1; }

@@ -6,6 +6,7 @@ use crate::capture_model::{Session, Snapshot};
 use crate::capture_socket::receive;
 use crate::capture_storage::save;
 use crate::task_input::validate_dir;
+use crate::task_input::with_site_subdirectory;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
@@ -75,6 +76,8 @@ impl CaptureManager {
             Some(value) => validate_dir(value).map_err(str::to_string)?,
             None => self.root.clone(),
         };
+        // The finished video is exported beside the session directory, so it lands in the site folder too.
+        let base = with_site_subdirectory(base, payload).map_err(str::to_string)?;
         let id = Uuid::new_v4().to_string();
         let directory = base.join(format!("capture-{id}"));
         fs::create_dir_all(&directory).map_err(|_| "capture_directory_failed")?;
@@ -413,6 +416,21 @@ mod tests {
             .open(&json!({"origin":"https://evil.test"}))
             .is_err());
         assert!(!root.exists());
+    }
+    #[test]
+    fn opens_sessions_inside_the_site_folder_and_ignores_unsafe_names() {
+        let root = std::env::temp_dir().join(format!("capture-test-{}", Uuid::new_v4()));
+        let manager = CaptureManager::new(root.clone());
+        let origin = "chrome-extension://abcdefghijklmnop";
+        let parent = |subdirectory: Value| {
+            let opened = manager.open(&json!({"origin":origin,"subdirectory":subdirectory})).unwrap();
+            let id = opened["id"].as_str().unwrap().to_owned();
+            let directory = manager.sessions.lock().unwrap()[&id].lock().unwrap().directory.clone();
+            directory.parent().unwrap().to_path_buf()
+        };
+        assert_eq!(parent(json!("bilibili.com")), root.join("bilibili.com"));
+        assert_eq!(parent(json!("../outside")), root);
+        let _ = fs::remove_dir_all(root);
     }
     #[test]
     fn lists_newest_first_and_deletes_only_finished_sessions() {

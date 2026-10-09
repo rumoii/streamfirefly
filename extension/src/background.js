@@ -14,7 +14,7 @@ import { createPreview } from './preview.js';
 import { createWorkspace } from './workspace.js';
 import { createSniffing } from './sniffing.js';
 import { createUpdateCheck } from './update-check.js';
-import { supportedPage, blockedSite, assertSiteAllowed, pageKey } from './platform.js';
+import { supportedPage, blockedSite, assertSiteAllowed, pageKey, siteFolder } from './platform.js';
 const api = globalThis.browser ?? globalThis.chrome;
 const settings = createSettings(api);
 const sniffing = createSniffing(api, settings);
@@ -364,7 +364,8 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (payload.hlsPlan && ![2, 3].includes(payload.hlsPlan.version)) return { ok: false, error: "hls_plan_version_unsupported" };
       if (!payload.fileName) { const filename = await outputTemplates.filename(payload); if (filename) payload = { ...payload, fileName: filename }; }
       await settings.ready;
-      payload = { ...payload, namingMode: settings.get().fileNaming };
+      const current = settings.get(), folder = current.siteFolders ? siteFolder(payload.pageUrl || payload.referer) : "";
+      payload = { ...payload, namingMode: current.fileNaming, ...(folder ? { subdirectory: folder } : {}) };
       return nativeRequestPromise(message.type, payload);
     }).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
     return true;

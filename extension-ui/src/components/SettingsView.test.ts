@@ -4,7 +4,7 @@ import SettingsView from "./SettingsView.vue";
 import { defaultDiscovery } from "../../../shared/discovery";
 const { send, surface } = vi.hoisted(() => ({ send: vi.fn(), surface: vi.fn(() => "options") }));
 vi.mock("../api", () => ({ sendMessage: send, surfaceFromUrl: surface, extensionApi: () => ({ runtime: { id: "a".repeat(32), getManifest: () => ({ version: "1.0.2" }), getURL: (path: string) => `chrome-extension://${"a".repeat(32)}/${path}` } }) }));
-const settings = { saveDir: "", downloadThreads: 6, detectImages: false, advancedDeepSearch: false, sniffMode: "on_open" as const, candidateSort: "detected" as const, proxyMode: "system" as const, proxyUrl: "", fileNaming: "page_title" as const };
+const settings = { saveDir: "", downloadThreads: 6, detectImages: false, advancedDeepSearch: false, sniffMode: "on_open" as const, candidateSort: "detected" as const, proxyMode: "system" as const, proxyUrl: "", fileNaming: "page_title" as const, siteFolders: false };
 beforeEach(() => { surface.mockReturnValue("options"); send.mockReset(); send.mockImplementation(async () => ({ ok: true, value: { config: defaultDiscovery(), disabled: {}, error: "" } })); });
 async function choose(wrapper: ReturnType<typeof mount>, label: string, option: string) {
   await wrapper.get(`[aria-label="${label}"]`).trigger("click"); await flushPromises();
@@ -71,7 +71,10 @@ describe("unified settings navigation", () => {
     await choose(wrapper, "文件命名", "资源原名");
     expect(wrapper.text()).toContain("资源地址里的文件名");
     await wrapper.findAll("button").find(button => button.text() === "验证并保存")!.trigger("click");
+    await wrapper.get('input[aria-label="按来源网站分文件夹"]').setValue(true);
+    await wrapper.findAll("button").find(button => button.text() === "验证并保存")!.trigger("click");
     expect(wrapper.emitted("save")?.[0]?.[0]).toMatchObject({ fileNaming: "resource" });
+    expect(wrapper.emitted("save")?.[1]?.[0]).toMatchObject({ fileNaming: "resource", siteFolders: true });
     wrapper.unmount();
   });
   it("shows whether the general form has unsaved changes", async () => {

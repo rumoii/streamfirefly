@@ -18,6 +18,7 @@ use crate::task_input::safe_file_stem;
 use crate::task_input::safe_title;
 use crate::task_input::unique_output_path;
 use crate::task_input::validate_dir;
+use crate::task_input::with_site_subdirectory;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::fs;
@@ -100,6 +101,7 @@ pub(crate) fn create_task(store: &TaskRuntime, payload: &Value) -> Result<Task, 
             dir
         }
     };
+    let dir = with_site_subdirectory(dir, payload)?;
     let id = Uuid::new_v4().to_string();
     let ext = hls_plan
         .as_ref()

@@ -49,6 +49,7 @@ defineExpose({ hasUnsavedChanges });
               <label class="field"><span>下载并发数</span><input v-model.number="form.downloadThreads" class="control" type="number" min="1" max="16"><small>支持 Range 的普通文件建议使用 4–8 路。</small></label>
               <div class="field"><span>下载代理</span><SfSelect v-model="form.proxyMode" :options="proxyOptions" label="下载代理" /><small>系统模式读取 Windows 固定代理；PAC/WPAD 请使用自定义代理。</small></div>
             </div>
+            <div class="toggle-list"><label class="toggle-row"><span><strong>按来源网站分文件夹</strong><small>例如 B 站的视频保存到保存目录下的 bilibili.com 文件夹；一键捕捉的录制成品同样适用。</small></span><input v-model="form.siteFolders" type="checkbox" aria-label="按来源网站分文件夹"><i></i></label></div>
             <label v-if="form.proxyMode === 'custom'" class="field"><span>自定义代理地址</span><input v-model="form.proxyUrl" class="control" placeholder="例如 http://127.0.0.1:7897"><small :class="{ 'error-text': proxyError }">{{ proxyError || '支持 HTTP/HTTPS，不保存代理账号密码。' }}</small></label>
           </div>
         </section>

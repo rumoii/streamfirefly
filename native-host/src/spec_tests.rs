@@ -24,6 +24,8 @@ use crate::task_input::inline_manifest;
 use crate::task_input::prepare_task;
 use crate::task_input::safe_file_stem;
 use crate::task_input::safe_title;
+use crate::task_input::site_subdirectory;
+use crate::task_input::with_site_subdirectory;
 use crate::task_input::unique_output_path;
 use crate::task_input::validate_dir;
 use crate::wire::read_message;
@@ -251,6 +253,25 @@ fn page_title_naming_combines_title_with_informative_server_names() {
     assert_eq!(name(legacy), "30080", "older extensions without namingMode keep the original behaviour");
 }
 #[test]
+fn site_subdirectory_accepts_only_one_safe_folder_name() {
+    let folder = |value: Value| site_subdirectory(&json!({"subdirectory":value}));
+    assert_eq!(folder(json!("bilibili.com")), Some("bilibili.com".into()));
+    assert_eq!(folder(json!("192.168.1.2")), Some("192.168.1.2".into()));
+    for unsafe_name in [json!(""), json!("."), json!(".."), json!("../x"), json!("a/b"), json!(r"a\b"),json!("C:"), json!("con"), json!(".hidden"), json!(5)] {
+        assert_eq!(folder(unsafe_name.clone()), None, "{unsafe_name}");
+    }
+    assert_eq!(site_subdirectory(&json!({})), None);
+
+    let root = std::env::temp_dir().join(format!("streamfirefly-site-{}", Uuid::new_v4()));
+    fs::create_dir_all(&root).unwrap();
+    assert_eq!(with_site_subdirectory(root.clone(), &json!({"subdirectory":"bilibili.com"})).unwrap(), root.join("bilibili.com"));
+    assert!(root.join("bilibili.com").is_dir());
+    assert_eq!(with_site_subdirectory(root.clone(), &json!({"subdirectory":".."})).unwrap(), root);
+    fs::write(root.join("blocked.test"), b"file").unwrap();
+    assert_eq!(with_site_subdirectory(root.clone(), &json!({"subdirectory":"blocked.test"})), Err("path_not_writable"));
+    fs::remove_dir_all(root).unwrap();
+}
+#[test]
 fn task_prepare_prefers_the_extension_file_name() {
     let payload = |file_name: Value| json!({"url":"https://cdn.test/30080.mp4","namingMode":"page_title","pageTitle":"页面","fileName":file_name});
     assert_eq!(prepare_task(&payload(json!("模板/名称"))).unwrap()["fileName"], "模板_名称");
@@ -409,6 +430,18 @@ fn hls_prepare_uses_selected_container_and_rejects_before_creating_save_dir() {
     );
     assert!(!save_dir.exists());
     fs::remove_dir_all(root).unwrap();
+}
+#[test]
+fn task_output_goes_into_the_requested_site_folder() {
+    let root = std::env::temp_dir().join(format!("streamfirefly-site-task-{}", Uuid::new_v4()));
+    fs::create_dir_all(&root).unwrap();
+    let store = load_store(&root.join("tasks.json"));
+    let mut payload = hls_payload(Some(&root));
+    payload["subdirectory"] = json!("example.test");
+    let task = create_task(&store, &payload).unwrap();
+    assert_eq!(Path::new(task.output.as_deref().unwrap()).parent().unwrap(), root.join("example.test"));
+    let plain = create_task(&store, &hls_payload(Some(&root))).unwrap();
+    assert_eq!(Path::new(plain.output.as_deref().unwrap()).parent().unwrap(), root);
 }
 #[test]
 fn hls_task_keeps_public_outputs_but_strips_runtime_plan_and_credentials() {
