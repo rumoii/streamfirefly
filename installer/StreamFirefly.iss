@@ -1,4 +1,4 @@
-#define AppVersion "1.0.6"
+#define AppVersion "1.0.7"
 #define AppName "StreamFirefly"
 #define AppPublisher "rumoii"
 #define ChromeExtensionId "gimoeapmpoeogpabfdplccplmmohklff"

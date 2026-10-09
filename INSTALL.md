@@ -1,4 +1,4 @@
-# StreamFirefly 1.0.6 安装指南
+# StreamFirefly 1.0.7 安装指南
 
 流萤由两部分组成，两部分都要装好才能下载视频：
 
@@ -28,12 +28,12 @@
 
 ### 方式 B：通用版（Chrome / Edge，所有网站都能用）
 
-1. 打开 [最新版本下载页](https://github.com/rumoii/streamfirefly/releases/latest)，在页面下方的 Assets 里点击 `StreamFirefly-extension-1.0.6.zip` 下载。
-2. 在下载的压缩包上点右键 →“全部解压缩”，会得到一个名为 `StreamFirefly-extension-1.0.6` 的文件夹。**把这个文件夹放到一个不会被删除的位置**，比如 `D:\软件\流萤`。
+1. 打开 [最新版本下载页](https://github.com/rumoii/streamfirefly/releases/latest)，在页面下方的 Assets 里点击 `StreamFirefly-extension-1.0.7.zip` 下载。
+2. 在下载的压缩包上点右键 →“全部解压缩”，会得到一个名为 `StreamFirefly-extension-1.0.7` 的文件夹。**把这个文件夹放到一个不会被删除的位置**，比如 `D:\软件\流萤`。
    > 这个文件夹就是扩展本身，以后**不要删除或移动它**，否则扩展会失效。
 3. 打开扩展管理页：Chrome 在地址栏输入 `chrome://extensions`，Edge 输入 `edge://extensions`，回车。
 4. 打开右上角（Edge 在左侧）的“**开发者模式**”开关。
-5. 点击“**加载已解压的扩展程序**”，在弹出的窗口里找到第 2 步的 `StreamFirefly-extension-1.0.6` 文件夹，**单击选中它**（不用双击进去），再点“选择文件夹”。
+5. 点击“**加载已解压的扩展程序**”，在弹出的窗口里找到第 2 步的 `StreamFirefly-extension-1.0.7` 文件夹，**单击选中它**（不用双击进去），再点“选择文件夹”。
    > 选对的标志：这个文件夹里直接就有 `manifest.json` 文件。如果解压后外面又多套了一层同名文件夹，就选里面那一层。
 6. 看到“流萤 StreamFirefly”出现在列表里就成功了。建议点浏览器右上角的拼图图标，把流萤**固定**到工具栏，方便以后使用。
 
@@ -41,7 +41,7 @@
 
 ### 方式 C：Firefox
 
-1. 打开 [最新版本下载页](https://github.com/rumoii/streamfirefly/releases/latest)，下载 `StreamFirefly-firefox-1.0.6-signed.xpi`。
+1. 打开 [最新版本下载页](https://github.com/rumoii/streamfirefly/releases/latest)，下载 `StreamFirefly-firefox-1.0.7-signed.xpi`。
 2. 在 Firefox 地址栏输入 `about:addons` 回车，点右上角齿轮 →“从文件安装附加组件”，选择刚下载的文件，按提示确认。
 
 ## 第二步：一键安装本地下载助手
@@ -107,7 +107,7 @@
 2. 按 <kbd>Win</kbd> + <kbd>R</kbd>，粘贴下面这行并回车，卸载本地助手：
 
    ```text
-   powershell -ep Bypass -f "%LOCALAPPDATA%\StreamFirefly\package\1.0.6\tools\uninstall.ps1"
+   powershell -ep Bypass -f "%LOCALAPPDATA%\StreamFirefly\package\1.0.7\tools\uninstall.ps1"
    ```
 
 3. 在浏览器的扩展管理页移除流萤。

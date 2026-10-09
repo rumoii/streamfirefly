@@ -34,7 +34,7 @@ function native(type){
  const value=JSON.parse(result.stdout.subarray(4));assert.equal(value.ok,true,JSON.stringify(value));return value;
 }
 function dataCheck(){assert.deepEqual(preserved.map(hash),originalHashes);const list=native('task.list');assert.equal(list.tasks.length,1);assert.equal(list.tasks[0].id,'release-upgrade-fixture');assert.equal(list.tasks[0].state,'succeeded');assert.equal(list.tasks[0].output,download);}
-const report={passed:false,previousVersion:'0.10.0',nextVersion:'1.0.6',baseline:'44b296ba36b84ad74358a90524d1ad83dfe5687b',fixture:'v1 completed task, configuration marker and downloaded file'};
+const report={passed:false,previousVersion:'0.10.0',nextVersion:'1.0.7',baseline:'44b296ba36b84ad74358a90524d1ad83dfe5687b',fixture:'v1 completed task, configuration marker and downloaded file'};
 let registered=false;
 try{
  fs.copyFileSync(previous,host);fs.copyFileSync(previous,path.join(backup,'streamfirefly-native.exe'));
@@ -42,8 +42,8 @@ try{
  assert.equal(native('host.info').hostVersion,'0.10.0');dataCheck();fs.copyFileSync(store,path.join(backup,'tasks.json'));
  const storeHash=hash(store);
  const install=()=>powershell(path.join(bundle,'tools/install.ps1'),['-ChromeExtensionId','a'.repeat(32),'-EdgeExtensionId','b'.repeat(32),'-InstallDir',installed]);
- install();assert.equal(hash(store),storeHash);assert.equal(native('host.info').hostVersion,'1.0.6');dataCheck();
- install();assert.equal(native('host.info').hostVersion,'1.0.6');dataCheck();
+ install();assert.equal(hash(store),storeHash);assert.equal(native('host.info').hostVersion,'1.0.7');dataCheck();
+ install();assert.equal(native('host.info').hostVersion,'1.0.7');dataCheck();
  fs.copyFileSync(path.join(backup,'streamfirefly-native.exe'),host);fs.copyFileSync(path.join(backup,'tasks.json'),store);
  assert.equal(hash(host),hash(previous));assert.equal(native('host.info').hostVersion,'0.10.0');dataCheck();
  report.passed=true;console.log('Final packaged installer upgrade, repeated install and rollback preserve v1 tasks and user files');

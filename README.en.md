@@ -19,7 +19,7 @@ Local-first media discovery and download for the web
 
 StreamFirefly has two parts: a browser extension and a native helper for Windows. The extension finds video, audio, images and HLS/DASH manifests on web pages. The helper, written in Rust, handles downloading, queueing, recovery and FFmpeg merging. Tasks and settings stay on your machine.
 
-The current version is 1.0.6. The interface is currently in Simplified Chinese. StreamFirefly does not circumvent DRM; only download content you own or are authorized to download.
+The current version is 1.0.7. The interface is currently in Simplified Chinese. StreamFirefly does not circumvent DRM; only download content you own or are authorized to download.
 
 StreamFirefly ships in two editions built from the same source:
 
@@ -70,6 +70,8 @@ Screenshots come from the automated UI tests and show test data.
 - Detection rules: match by extension, MIME type or URL pattern, limited by site and size, with exclusions applied first. Rules can be reordered, copied, imported and exported, and each match shows which rule caused it. Patterns and templates run in a Worker with a time limit.
 - URL extraction: pulls the real media URL out of a request URL and lists it as a separate resource. Extracted resources do not inherit the original request's credentials and are never sent to external tools automatically.
 - Output templates: separate copy templates for HLS, DASH and other resources, plus a file name template. Templates only transform strings; they never run scripts.
+- File names and folders: downloads are named after the page title, with the server-provided file name appended when there is one, and saved in a per-site subfolder (for example `bilibili.com`). Both can be changed in settings; existing files are never moved.
+- Update check: the general and Firefox editions ask GitHub for the latest version once a day when first opened and only notify when a newer one exists. It can be turned off in settings.
 - External tools: a confirmation page shows the expanded arguments before sending and reports the result for each item. Clear failures can be retried by hand; unknown results are never resent automatically. Automatic sending applies only to sites you configured and to HTTP/Aria2 tools.
 - Deep search: off by default, enabled per page, and can be remembered per site. Watches for complete HLS/MPD text passing through JSON.parse, Base64, text decoding and same-origin Workers. Possible AES-128 keys are kept in memory only and can be chosen in the HLS parser.
 - Cache capture: pick a media source on the page and save MediaSource data from that point on. Seeks and codec changes start a new segment, each saved as its own MKV. Data buffered before capture started cannot be recovered. Recording can play muted at 2–16x speed; one-click capture prefers H.264 by default so the saved video, named after the page title in the save folder, plays in stock Windows players (some sites may offer lower resolution in H.264; the option can be turned off).

@@ -39,7 +39,7 @@ body:
     attributes:
       label: 流萤版本
       description: 在流萤“设置 → 常规 → 版本”中查看。
-      placeholder: "1.0.6"
+      placeholder: "1.0.7"
     validations:
       required: true
 
