@@ -7,6 +7,7 @@ import AppHeader from "./components/AppHeader.vue";
 import ResourcesView from "./components/ResourcesView.vue";
 import BatchDownloadDialog from "./components/BatchDownloadDialog.vue";
 import ConnectionBanner from "./components/ConnectionBanner.vue";
+import UpdateBanner from "./components/UpdateBanner.vue";
 import SettingsView from "./components/SettingsView.vue";
 import DispatchView from "./features/configuration/DispatchView.vue";
 import CaptureView from "./features/configuration/CaptureView.vue";
@@ -52,6 +53,7 @@ onBeforeUnmount(() => { store.dispose(); clearTimeout(toastTimer); });
     <AppHeader :context="store.context" :loading="store.loading" compact @refresh="store.refresh" @toggle-sniffing="guard(store.toggleSniffing)" />
     <main class="sidebar-content">
       <ConnectionBanner :state="store.connection" :error="store.connectionError" @retry="store.refresh" />
+      <UpdateBanner />
       <div v-if="store.error" class="status-banner error">{{ store.error }}</div>
       <div v-else-if="store.context?.blocked" class="restricted-state">
         <span><SfIcon name="plug-connected-x" :size="22" /></span><h2>不支持此网站</h2><p>根据 Chrome 应用商店政策，流萤不识别和下载 YouTube 内容。</p>

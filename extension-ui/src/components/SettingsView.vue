@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
-import { extensionApi, surfaceFromUrl } from "../api";
+import { surfaceFromUrl } from "../api";
 import { openTrustedSettings } from "../features/configuration/client";
 import RulesPanel from "../features/configuration/RulesPanel.vue";
 import ExtractionPanel from "../features/configuration/ExtractionPanel.vue";
@@ -10,16 +10,15 @@ import { validateProxyUrl, type AppSettings } from "../features/settings/state";
 import SfIcon from "../ui/SfIcon.vue";
 import SfSelect from "../ui/SfSelect.vue";
 import type { IconName } from "../ui/icons";
-import { EDITION, EDITION_LABEL } from "../edition";
 import NativeHelperCard from "./NativeHelperCard.vue";
 import FeedbackCard from "./FeedbackCard.vue";
+import UpdateCard from "./UpdateCard.vue";
 
 const props = defineProps<{ settings: AppSettings }>();
 const emit = defineEmits<{ save: [settings: typeof props.settings]; reset: [] }>();
 const form = reactive({ ...props.settings });
 watch(() => props.settings, value => Object.assign(form, value), { deep: true });
 const trusted = surfaceFromUrl() !== "workspace";
-const version = String(extensionApi()?.runtime?.getManifest?.().version || "");
 const section = ref("general");
 const panels = { rules: RulesPanel, extraction: ExtractionPanel, tools: ToolsPanel, templates: TemplatesPanel };
 const currentPanel = computed(() => panels[section.value as keyof typeof panels]);
@@ -59,11 +58,7 @@ defineExpose({ hasUnsavedChanges });
             <label class="toggle-row"><span><strong>高级深度搜索</strong><small>额外观察页面解码和 Worker；可能影响少数复杂网站。</small></span><input v-model="form.advancedDeepSearch" type="checkbox"><i></i></label>
           </div>
         </section>
-        <section class="settings-card" aria-labelledby="settings-edition-title">
-          <header><h4 id="settings-edition-title">版本</h4><p>{{ EDITION_LABEL }} {{ version }}</p></header>
-          <p v-if="EDITION === 'chrome-store'" class="settings-note">根据 Chrome 应用商店政策，此版本不识别和下载 YouTube 内容。</p>
-          <p v-else class="settings-note">通用版不限制网站；能否识别和下载取决于网站本身，DRM 加密内容不受支持。</p>
-        </section>
+        <UpdateCard />
         <FeedbackCard v-if="trusted" />
         <footer class="settings-footer"><span class="save-state" :class="{ dirty: hasUnsavedChanges }" role="status">{{ hasUnsavedChanges ? '有未保存的修改' : '已保存' }}</span><button class="button" type="button" @click="emit('reset')">恢复默认</button><button class="button primary" type="button" :disabled="Boolean(proxyError)" @click="emit('save', { ...form })">验证并保存</button></footer>
       </section>

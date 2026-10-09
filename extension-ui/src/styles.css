@@ -39,6 +39,11 @@
 .connection-banner strong { color: var(--sf-text); }
 .connection-banner p { color: var(--sf-text-2); }
 .connection-banner.with-guide { flex-wrap: wrap; align-items: flex-start; }
+.update-banner { justify-content: space-between; flex-wrap: wrap; background: var(--sf-info-soft); color: var(--sf-text); }
+.update-banner p { color: var(--sf-text-2); }
+.update-banner-actions { display: flex; gap: 6px; }
+a.button { text-decoration: none; }
+.update-found a { margin-left: 4px; }
 .native-install { flex: 1 1 100%; display: grid; gap: 8px; color: var(--sf-text); }
 .native-install h4 { margin: 0; font-size: var(--sf-text-md); font-weight: 600; }
 .native-install ol { margin: 0; padding-left: 20px; display: grid; gap: 2px; color: var(--sf-text-2); }

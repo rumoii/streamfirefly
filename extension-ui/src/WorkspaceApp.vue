@@ -8,6 +8,7 @@ import { sendMessage } from "./api";
 import ResourcesView from "./components/ResourcesView.vue";
 import BatchDownloadDialog from "./components/BatchDownloadDialog.vue";
 import ConnectionBanner from "./components/ConnectionBanner.vue";
+import UpdateBanner from "./components/UpdateBanner.vue";
 import DownloadsView from "./components/DownloadsView.vue";
 import SettingsView from "./components/SettingsView.vue";
 import ResourceTools from "./features/configuration/ResourceTools.vue";
@@ -100,6 +101,7 @@ onBeforeUnmount(() => { disposed = true; store.dispose(); clearTimeout(toastTime
     </nav>
     <main class="app-content" :class="{ 'parser-content': tab === 'parser', 'resource-content': tab === 'resources' || tab === 'downloads' }">
       <ConnectionBanner :state="store.connection" :error="store.connectionError" @retry="store.refresh" />
+      <UpdateBanner />
       <div v-if="store.error" class="status-banner error">{{ store.error }}</div>
         <ResourcesView v-show="tab === 'resources'" key="resources" :compact="isPanel" :suspended="suspended || tab !== 'resources'" :connected="store.connection === 'ready'" @batch-download="batchCandidates = $event" :candidates="store.candidates" :loading="store.loading" :view-state="store.resourceViewState" @download="openDownload" @capture-blob="captureBlob" @parse="openParser" @remove="guard(() => store.removeCandidates($event), '已从列表移除资源')" @update-view-state="patch => guard(() => store.patchResourceView(patch))" @metadata="(candidate, metadata) => guard(() => store.updateCandidateMetadata(candidate, metadata))" :external-enabled="Boolean(store.context?.supported)" @external-download="sendExternal"><template #header-tools><ResourceTools :context="store.context" /></template><template #hints><DeepSearchHint :context="store.context" /></template></ResourcesView>
       <Transition name="page" mode="out-in">

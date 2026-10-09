@@ -13,6 +13,7 @@ import { createResources } from './resources.js';
 import { createPreview } from './preview.js';
 import { createWorkspace } from './workspace.js';
 import { createSniffing } from './sniffing.js';
+import { createUpdateCheck } from './update-check.js';
 import { supportedPage, blockedSite, assertSiteAllowed, pageKey } from './platform.js';
 const api = globalThis.browser ?? globalThis.chrome;
 const settings = createSettings(api);
@@ -38,6 +39,7 @@ const deepSearch = createDeepSearch(api, settings);
 const capture = createCaptureCoordinator(api, nativeRequestPromise, evaluation, resources);
 const diagnostics = createDiagnostics(api, nativeRequestPromise, { captures: () => capture.list(), receipts: async () => (await integrations.read()).receipts });
 const outputTemplates = createOutputTemplates(api, evaluation.run);
+const updateCheck = createUpdateCheck(api);
 const requestHeadersById = new Map();
 const navigationCleanups = new Map();
 function beginNavigationCleanup(tabId, pageUrl, sameDocument = false) {
@@ -199,6 +201,9 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const operation = message.type === "deep.status" ? deepSearch.status(tabId) : deepSearch.set(tabId, message.payload?.enabled, Boolean(message.payload?.remember));
     operation.then(value => sendResponse({ ok: true, value }), error => sendResponse({ ok: false, error: error.message })); return true;
   }
+  if (message?.type === "update.check") { updateCheck.check().then(value => sendResponse({ ok: true, value }), error => sendResponse({ ok: false, error: error.message })); return true; }
+  if (message?.type === "update.auto") { updateCheck.auto().then(value => sendResponse({ ok: true, value }), error => sendResponse({ ok: false, error: error.message })); return true; }
+  if (message?.type === "update.dismiss") { updateCheck.dismiss(message.payload?.version).then(value => sendResponse({ ok: true, value }), error => sendResponse({ ok: false, error: error.message })); return true; }
   if (message?.type === "settings.open") { api.runtime.openOptionsPage().then(() => sendResponse({ ok: true }), () => sendResponse({ ok: false, error: "设置页打开失败" })); return true; }
   if (message?.type === "integration.open") { dispatchIntents.open(message.payload || {}, sender).then(sendResponse, error => sendResponse({ ok: false, error: error.message })); return true; }
   if (message?.type === "capture.control.open") {

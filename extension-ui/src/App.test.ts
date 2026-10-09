@@ -4,6 +4,7 @@ import type { UiContext } from "./types";
 
 const sent: any[] = [];
 const runtimeListeners = new Set<(message: any) => void>();
+let updateResponse: any = { ok: false, error: "update_unreachable" };
 let currentContext: UiContext = {
   sourceTabId: 7,
   sourceContextId: "context-7",
@@ -29,6 +30,8 @@ vi.stubGlobal("chrome", {
         return { ok: true, state: structuredClone(currentContext.resourceViewState) };
       }
       if (message.type === "task.list") return { ok: true, tasks: [{ id: "task-1", title: "当前下载", state: "stopping", progress: 36, live_recording: true, source_context_id: "context-7" }] };
+      if (message.type === "update.auto") return updateResponse;
+      if (message.type === "update.dismiss") return { ok: true, value: { ...updateResponse.value, hasUpdate: false } };
       if (message.type === "workspace.open" || message.type === "media.remove" || message.type === "preview.headers.clear") return { ok: true };
       return { ok: true };
     }),
@@ -118,6 +121,22 @@ describe("sidebar surface", () => {
     expect(wrapper.text()).not.toContain("当前页面不支持嗅探");
     expect(button(wrapper, "展开工作区").attributes("disabled")).toBeDefined();
     wrapper.unmount();
+  });
+
+  it("announces a newer release once and lets the user ignore it", async () => {
+    updateResponse = { ok: true, value: { enabled: true, currentVersion: "1.0.6", latestVersion: "1.0.7", releaseUrl: "https://github.com/rumoii/streamfirefly/releases/tag/v1.0.7", hasUpdate: true } };
+    try {
+      const wrapper = mount(App, { global: { plugins: [createPinia()] } });
+      await flushPromises();
+      expect(sent.filter(message => message.type === "update.auto")).toHaveLength(1);
+      const banner = wrapper.get(".update-banner");
+      expect(banner.text()).toContain("流萤 1.0.7 已发布");
+      expect(banner.get("a").attributes("href")).toBe("https://github.com/rumoii/streamfirefly/releases/tag/v1.0.7");
+      await button(wrapper, "忽略此版本").trigger("click"); await flushPromises();
+      expect(sent).toContainEqual({ type: "update.dismiss", payload: { version: "1.0.7" } });
+      expect(wrapper.find(".update-banner").exists()).toBe(false);
+      wrapper.unmount();
+    } finally { updateResponse = { ok: false, error: "update_unreachable" }; }
   });
 
   it("renders the resource empty state without inventing a session", async () => {
