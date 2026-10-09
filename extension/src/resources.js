@@ -1,5 +1,6 @@
 import { INLINE_MANIFEST_MAX_BYTES, newId, supportedPage, blockedSite, cleanPageTitle, pageTitleFor, normalizeSortMode, pageKey } from './platform.js';
-export function createResources(api, settings, sniffing, notifyWorkspaceMessage, detect, extract) {
+import { BADGE_COLORS } from './download-badge.js';
+export function createResources(api, settings, sniffing, notifyWorkspaceMessage, detect, extract, downloadBadge = null) {
 const candidateListeners = new Set();
 const STATE_VERSION = 2;
 
@@ -146,7 +147,15 @@ function schedulePersist(state) {
 function canonicalize(rawUrl) { try { const url = new URL(rawUrl); url.hash = ""; return url.href; } catch (_) { return rawUrl; } }
 
 // Segments stay out of the resource list, so the badge counts only listed resources.
-function updateBadge(state) { const count = [...state.candidates.values()].filter(item => item.type !== "segment").length; api.action.setBadgeText({ tabId: state.tabId, text: state.paused ? "Ⅱ" : count ? String(count) : "" }).catch?.(() => {}); }
+// Pause wins, then this page's downloads (progress, failure, completion), then the resource count.
+function updateBadge(state) {
+  const count = [...state.candidates.values()].filter(item => item.type !== "segment").length;
+  const download = state.paused ? null : downloadBadge?.badgeFor(state.sourceContextId);
+  const badge = state.paused ? { text: "Ⅱ", color: BADGE_COLORS.brand } : download || { text: count ? String(count) : "", color: BADGE_COLORS.brand };
+  api.action.setBadgeBackgroundColor?.({ tabId: state.tabId, color: badge.color })?.catch?.(() => {});
+  api.action.setBadgeText({ tabId: state.tabId, text: badge.text }).catch?.(() => {});
+}
+function refreshBadgeForContext(contextId) { for (const state of candidatesByTab.values()) if (contextId && state.sourceContextId === contextId) updateBadge(state); }
 
 const namespaceMediaLeaf = /^(?:[a-z_][a-z0-9_]*\.){4,}(?:m3u8?|mpd|mp4|webm|mov|mkv|flv|f4v|m4v|mpeg|mpg|avi|wmv|asf|ogv|3gp|mp3|m4a|aac|wav|flac|ogg|opus|wma|weba|ts|m4s|key)$/;
 
@@ -464,5 +473,5 @@ async function clearExtracted() {
     updateBadge(state); notifyUiContext(tabId);
   });
 }
-return { subscribeCandidates(listener) { candidateListeners.add(listener); return () => candidateListeners.delete(listener); }, clearExtracted, reevaluate, loadTabState, uiContextForTab, resolveUiTab, notifyUiContext, queueTab, rememberRequestContext, parseContentRange, addCandidate, clearTab, resolveRequestTabId, setSniffingPaused, patchResourceViewState, updateCandidateMetadata, removeCandidates, candidateFor, fetchMediaText };
+return { refreshBadgeForContext, subscribeCandidates(listener) { candidateListeners.add(listener); return () => candidateListeners.delete(listener); }, clearExtracted, reevaluate, loadTabState, uiContextForTab, resolveUiTab, notifyUiContext, queueTab, rememberRequestContext, parseContentRange, addCandidate, clearTab, resolveRequestTabId, setSniffingPaused, patchResourceViewState, updateCandidateMetadata, removeCandidates, candidateFor, fetchMediaText };
 }

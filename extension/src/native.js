@@ -1,6 +1,6 @@
 const MISSING_HOST = /native messaging host not found|native messaging host is forbidden|no such native application|permission to use native application/i;
 
-export function createNative(api, notifyWorkspaceMessage) {
+export function createNative(api, notifyWorkspaceMessage, onTaskEvent = () => {}) {
 const native = { port: null, pending: new Map(), seq: 0, capabilities: new Set(), infoPromise: null };
 
 function ensureNative() {
@@ -8,7 +8,7 @@ function ensureNative() {
   try {
     native.port = api.runtime.connectNative("com.streamfirefly.native");
     native.port.onMessage.addListener(message => {
-      if (["task.progress", "task.deleted", "task.persistence-error"].includes(message.type)) { api.runtime.sendMessage(message).catch?.(() => {}); notifyWorkspaceMessage(message); return; }
+      if (["task.progress", "task.deleted", "task.persistence-error"].includes(message.type)) { try { onTaskEvent(message); } catch (_) {} api.runtime.sendMessage(message).catch?.(() => {}); notifyWorkspaceMessage(message); return; }
       const pending = native.pending.get(message.id);
       if (pending) { clearTimeout(pending.timer); native.pending.delete(message.id); pending.resolve(message); }
     });

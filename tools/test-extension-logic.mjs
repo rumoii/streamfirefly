@@ -19,6 +19,7 @@ const localGetQueries = [];
 const executedScripts = [];
 const tabMessages = [];
 const previewRuleUpdates = [];
+const badgeTexts = [], badgeColors = [];
 let sidePanelBehavior = null;
 const sidePanelCalls = [];
 let rejectSidePanelOpen = false, rejectSidePanelClose = false;
@@ -43,7 +44,7 @@ const storageArea = (values, queries = null) => ({
   async remove(keys) { for (const key of Array.isArray(keys) ? keys : [keys]) delete values[key]; }
 });
 const api = {
-  action: { setBadgeText: async () => {}, onClicked: { addListener: listener => { listeners.actionClicked = listener; } } },
+  action: { setBadgeText: async details => { badgeTexts.push(details); }, setBadgeBackgroundColor: async details => { badgeColors.push(details); }, onClicked: { addListener: listener => { listeners.actionClicked = listener; } } },
   sidePanel: { setPanelBehavior: async value => { sidePanelBehavior = value; }, close: async value => { sidePanelCalls.push({ type: 'close', value: structuredClone(value) }); if (rejectSidePanelClose) throw new Error('close rejected'); }, open: async value => { sidePanelCalls.push({ type: 'open', value: structuredClone(value) }); if (rejectSidePanelOpen) throw new Error('open rejected'); } },
   scripting: { executeScript: async value => { executedScripts.push(structuredClone(value)); return []; } },
   storage: { local: storageArea(localValues, localGetQueries), session: storageArea(sessionValues), onChanged: { addListener: listener => { const previous = listeners.storageChanged; listeners.storageChanged = (...args) => { previous?.(...args); listener(...args); }; } } },
@@ -295,6 +296,14 @@ listeners.storageChanged({ siteFolders: { newValue: false } }, 'local');
 if (await siteTask() !== undefined) throw new Error('Turning site folders off still requested a folder');
 listeners.storageChanged({ siteFolders: { oldValue: false } }, 'local');
 if (await siteTask() !== 'video.example') throw new Error('A cleared site-folder setting did not return to the default');
+const tabBadge = () => ({ text: badgeTexts.filter(entry => entry.tabId === 8).at(-1)?.text, color: badgeColors.filter(entry => entry.tabId === 8).at(-1)?.color });
+const badgeTask = state => ({ id: 'badge-task', state, progress: state === 'running' ? 42 : 100, source_context_id: senderView.context.sourceContextId });
+nativeListeners.message({ type: 'task.progress', task: badgeTask('running') });
+if (JSON.stringify(tabBadge()) !== JSON.stringify({ text: '42%', color: '#2563eb' })) throw new Error(`Download progress was not shown on the source tab badge: ${JSON.stringify(tabBadge())}`);
+nativeListeners.message({ type: 'task.progress', task: badgeTask('succeeded') });
+if (JSON.stringify(tabBadge()) !== JSON.stringify({ text: '✓', color: '#16a34a' })) throw new Error(`Finished download was not marked on the badge: ${JSON.stringify(tabBadge())}`);
+nativeListeners.message({ type: 'task.deleted', id: 'badge-task' });
+if (tabBadge().text === '✓' || tabBadge().color !== '#2a8f7b') throw new Error(`Deleting the task did not restore the resource badge: ${JSON.stringify(tabBadge())}`);
 const opensBeforeClose = sidePanelCalls.filter(call => call.type === 'open').length;
 rejectSidePanelOpen = true;
 const firstClose = await send({ type: 'workspace.close' }, { tab: { ...tabsById.get(8) } });

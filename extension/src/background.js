@@ -14,6 +14,7 @@ import { createPreview } from './preview.js';
 import { createWorkspace } from './workspace.js';
 import { createSniffing } from './sniffing.js';
 import { createUpdateCheck } from './update-check.js';
+import { createDownloadBadge } from './download-badge.js';
 import { supportedPage, blockedSite, assertSiteAllowed, pageKey, siteFolder } from './platform.js';
 const api = globalThis.browser ?? globalThis.chrome;
 const settings = createSettings(api);
@@ -21,14 +22,19 @@ const sniffing = createSniffing(api, settings);
 const evaluation = createEvaluation(api);
 const discovery = createDiscovery(api, settings, evaluation);
 const extraction = createExtraction(api, evaluation);
-const resources = createResources(api, settings, sniffing, (message, tabId) => workspace.notifyWorkspaceMessage(message, tabId), discovery.detect, extraction.extract);
+const downloadBadge = createDownloadBadge();
+const resources = createResources(api, settings, sniffing, (message, tabId) => workspace.notifyWorkspaceMessage(message, tabId), discovery.detect, extraction.extract, downloadBadge);
 const { loadTabState, uiContextForTab, resolveUiTab, notifyUiContext, queueTab, rememberRequestContext, parseContentRange, addCandidate, clearTab, resolveRequestTabId, setSniffingPaused, patchResourceViewState, updateCandidateMetadata, removeCandidates, candidateFor, fetchMediaText } = resources;
 sniffing.readPaused(async tabId => (await loadTabState(tabId)).paused);
 const preview = createPreview(api, resources.candidateFor);
 const { updatePreviewHeaders } = preview;
 const workspace = createWorkspace(api, preview.clearPreviewHeadersForTab, sniffing.releaseWorkspace);
 const { openWorkspace, closeWorkspace, unmountWorkspace } = workspace;
-const native = createNative(api, workspace.notifyWorkspaceMessage);
+function trackDownloadBadge(task) { const contextId = downloadBadge.apply(task); if (contextId) resources.refreshBadgeForContext(contextId); }
+const native = createNative(api, workspace.notifyWorkspaceMessage, message => {
+  if (message.type === "task.progress") trackDownloadBadge(message.task);
+  if (message.type === "task.deleted") { const contextId = downloadBadge.remove(message.id); if (contextId) resources.refreshBadgeForContext(contextId); }
+});
 const { nativeRequestPromise, nativeInfo } = native;
 // A fresh install opens the settings page, which guides the one-click helper installation.
 api.runtime.onInstalled?.addListener(details => { if (details?.reason === "install") api.runtime.openOptionsPage()?.catch?.(() => {}); });
@@ -175,10 +181,19 @@ async function taskPayloadForSender(payload = {}, sender = {}) {
   return { ...payload, sourceTabId: sender.tab.id, sourceContextId: state.sourceContextId };
 }
 
+// A restarted background has lost the badge state; the helper's task list restores it once per lifetime.
+let downloadBadgeSeeded = false;
+function seedDownloadBadge() {
+  if (downloadBadgeSeeded) return;
+  downloadBadgeSeeded = true;
+  nativeRequestPromise("task.list").then(result => { if (!result?.ok) throw new Error(result?.error || "task_list_failed"); for (const task of result.tasks || []) trackDownloadBadge(task); }).catch(() => { downloadBadgeSeeded = false; });
+}
+
 async function ensureNativeConfigured() {
   await settings.ready;
   const info = await nativeInfo();
   if (!info.ok) return info;
+  seedDownloadBadge();
   const current = settings.get();
   const configured = await nativeRequestPromise("network.configure", { mode: current.proxyMode, proxyUrl: current.proxyUrl });
   return configured?.ok ? info : configured;
