@@ -363,6 +363,8 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (payload.dashPlan && !info.capabilities.includes("dash-selection-v1")) return { ok: false, error: "dash_native_upgrade_required" };
       if (payload.hlsPlan && ![2, 3].includes(payload.hlsPlan.version)) return { ok: false, error: "hls_plan_version_unsupported" };
       if (!payload.fileName) { const filename = await outputTemplates.filename(payload); if (filename) payload = { ...payload, fileName: filename }; }
+      await settings.ready;
+      payload = { ...payload, namingMode: settings.get().fileNaming };
       return nativeRequestPromise(message.type, payload);
     }).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
     return true;

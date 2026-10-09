@@ -52,7 +52,7 @@ export async function buildHlsPlan(selection: PlanSelection) {
 }
 
 export function candidatePayload(candidate: MediaCandidate) {
-  return { url: candidate.url, candidateId: candidate.id, title: candidate.title || candidate.pageTitle || "streamfirefly-download", mime: candidate.mime || null, contentDisposition: candidate.contentDisposition || null, referer: candidate.referer || candidate.pageUrl || null, requestHeaders: candidate.requestHeaders || {}, inlineManifest: candidate.inlineManifest || null };
+  return { url: candidate.url, candidateId: candidate.id, title: candidate.title || candidate.pageTitle || "streamfirefly-download", pageTitle: candidate.pageTitle || null, mime: candidate.mime || null, contentDisposition: candidate.contentDisposition || null, referer: candidate.referer || candidate.pageUrl || null, requestHeaders: candidate.requestHeaders || {}, inlineManifest: candidate.inlineManifest || null };
 }
 
 export async function prepareDefaultDownload(candidate: MediaCandidate, fetchManifest: ManifestLoader) {

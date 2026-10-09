@@ -24,6 +24,7 @@ const panels = { rules: RulesPanel, extraction: ExtractionPanel, tools: ToolsPan
 const currentPanel = computed(() => panels[section.value as keyof typeof panels]);
 const categories: { id: string; name: string; icon: IconName }[] = [{ id: "general", name: "常规", icon: "settings" }, ...(trusted ? [{ id: "rules", name: "识别规则", icon: "filter" as IconName }, { id: "extraction", name: "URL 提取", icon: "link" as IconName }, { id: "tools", name: "外部工具", icon: "external-link" as IconName }, { id: "templates", name: "输出模板", icon: "template" as IconName }] : [{ id: "advanced", name: "高级设置", icon: "adjustments-horizontal" as IconName }])];
 const proxyOptions: { value: AppSettings["proxyMode"]; label: string }[] = [{ value: "system", label: "跟随 Windows 系统代理" }, { value: "direct", label: "直连" }, { value: "custom", label: "自定义代理" }];
+const namingOptions: { value: AppSettings["fileNaming"]; label: string }[] = [{ value: "page_title", label: "网页标题（默认）" }, { value: "resource", label: "资源原名" }];
 const sniffOptions: { value: AppSettings["sniffMode"]; label: string }[] = [{ value: "on_open", label: "打开流萤时嗅探（默认）" }, { value: "always", label: "始终嗅探" }];
 const proxyError = computed(() => form.proxyMode === "custom" ? validateProxyUrl(form.proxyUrl) : "");
 const hasUnsavedChanges = computed(() => JSON.stringify(form) !== JSON.stringify(props.settings));
@@ -40,9 +41,10 @@ defineExpose({ hasUnsavedChanges });
         <header class="settings-section-head"><div><h3>常规</h3><p>设置默认下载方式和媒体识别偏好。</p></div></header>
         <NativeHelperCard v-if="trusted" />
         <section class="settings-card" aria-labelledby="settings-download-title">
-          <header><h4 id="settings-download-title">下载</h4><p>保存位置、并发数与网络代理。</p></header>
+          <header><h4 id="settings-download-title">下载</h4><p>保存位置、文件命名、并发数与网络代理。</p></header>
           <div class="settings-fields">
             <label class="field"><span>默认保存目录</span><input v-model="form.saveDir" class="control" placeholder="例如 D:\Downloads\StreamFirefly"><small>留空时使用系统默认目录；请填写绝对路径。</small></label>
+            <div class="field"><span>文件命名</span><SfSelect v-model="form.fileNaming" :options="namingOptions" label="文件命名" /><small>{{ form.fileNaming === 'resource' ? '使用服务器提供的文件名或资源地址里的文件名。' : '服务器提供文件名时拼在网页标题后面；同名文件自动加序号。' }}下载前仍可在弹窗里修改；“输出模板”里设置的文件主名称优先。</small></div>
             <div class="settings-field-row">
               <label class="field"><span>下载并发数</span><input v-model.number="form.downloadThreads" class="control" type="number" min="1" max="16"><small>支持 Range 的普通文件建议使用 4–8 路。</small></label>
               <div class="field"><span>下载代理</span><SfSelect v-model="form.proxyMode" :options="proxyOptions" label="下载代理" /><small>系统模式读取 Windows 固定代理；PAC/WPAD 请使用自定义代理。</small></div>

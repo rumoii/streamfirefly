@@ -10,11 +10,22 @@ beforeEach(() => { send.mockReset(); create.mockReset(); create.mockResolvedValu
 describe("DASH workbench", () => {
   it("uses inline content, defaults to highest bandwidth, and submits plain selected plan", async () => {
     const wrapper = mount(DashParserView, { props: props() }); await flushPromises();
-    expect(send).not.toHaveBeenCalled(); expect(wrapper.get('[aria-label="视频画质"]').attributes("data-value")).toBe("video-1");
+    expect(send.mock.calls.some(([message]) => message.type === "media.fetchText")).toBe(false); expect(wrapper.get('[aria-label="视频画质"]').attributes("data-value")).toBe("video-1");
     await wrapper.findAll("button").find(button => button.text() === "开始下载")!.trigger("click"); await flushPromises();
     expect(create).toHaveBeenCalledOnce(); const payload = create.mock.calls[0][0];
     expect(() => structuredClone(payload)).not.toThrow(); expect(payload.inlineManifest).toBeNull(); expect(payload.dashPlan.tracks).toHaveLength(1);
     expect(payload.dashPlan.tracks[0].id).toBe("video-1"); expect(wrapper.emitted("created")).toHaveLength(1); wrapper.unmount();
+  });
+  it("takes the default file name from the helper without overwriting a typed name", async () => {
+    send.mockImplementation(async (message: any) => message.type === "task.prepare" ? { ok: true, payload: { fileName: "页面标题 - 第1集", extension: "mp4" } } : { ok: false });
+    const wrapper = mount(DashParserView, { props: props() }); await flushPromises();
+    expect(send).toHaveBeenCalledWith({ type: "task.prepare", payload: expect.objectContaining({ url: "https://example.test/dynamic", inlineManifest: null }) });
+    expect((wrapper.get('[aria-label="文件名"]').element as HTMLInputElement).value).toBe("页面标题 - 第1集"); wrapper.unmount();
+    let resolve!: (value: any) => void; send.mockImplementation(() => new Promise(done => { resolve = done; }));
+    const typed = mount(DashParserView, { props: props() }); await flushPromises();
+    await typed.get('[aria-label="文件名"]').setValue("我的名字");
+    resolve({ ok: true, payload: { fileName: "页面标题", extension: "mp4" } }); await flushPromises();
+    expect((typed.get('[aria-label="文件名"]').element as HTMLInputElement).value).toBe("我的名字"); typed.unmount();
   });
   it("blocks unsupported content and missing host capability", async () => {
     const current = props(); current.capabilities = [];

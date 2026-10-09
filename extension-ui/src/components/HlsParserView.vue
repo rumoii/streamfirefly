@@ -123,7 +123,7 @@ async function initialize() {
 }
 
 function basePayload() {
-  return { url: props.candidate.url, candidateId: props.candidate.id, title: props.candidate.title || props.candidate.pageTitle || "streamfirefly-media", mime: props.candidate.mime || "application/vnd.apple.mpegurl", referer: props.candidate.referer || props.candidate.pageUrl || null, requestHeaders: props.candidate.requestHeaders || {}, downloadThreads: props.downloadThreads, sourceContextId: props.context.sourceContextId };
+  return { url: props.candidate.url, candidateId: props.candidate.id, title: props.candidate.title || props.candidate.pageTitle || "streamfirefly-media", pageTitle: props.candidate.pageTitle || null, mime: props.candidate.mime || "application/vnd.apple.mpegurl", referer: props.candidate.referer || props.candidate.pageUrl || null, requestHeaders: props.candidate.requestHeaders || {}, downloadThreads: props.downloadThreads, sourceContextId: props.context.sourceContextId };
 }
 
 async function createTask() {

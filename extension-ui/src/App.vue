@@ -33,7 +33,7 @@ let toastTimer = 0;
 
 function showToast(message: string) { toast.value = message; clearTimeout(toastTimer); toastTimer = window.setTimeout(() => toast.value = "", 3500); }
 async function guard(action: () => Promise<any>, success?: string) { try { await action(); if (success) showToast(success); } catch (reason: any) { showToast(humanError(reason?.message)); } }
-async function resetSettings() { const next = { saveDir: "", downloadThreads: 6, detectImages: false, advancedDeepSearch: false, sniffMode: "on_open" as const, candidateSort: store.settings.candidateSort, proxyMode: "system" as const, proxyUrl: "" }; await guard(() => store.saveSettings(next), "已恢复默认设置"); }
+async function resetSettings() { const next = { saveDir: "", downloadThreads: 6, detectImages: false, advancedDeepSearch: false, sniffMode: "on_open" as const, candidateSort: store.settings.candidateSort, proxyMode: "system" as const, proxyUrl: "", fileNaming: "page_title" as const }; await guard(() => store.saveSettings(next), "已恢复默认设置"); }
 function openParser(candidate: MediaCandidate) { void guard(() => store.openWorkspace(["hls", "dash"].includes(candidate.type) ? "parser" : "resources", candidate.id)); }
 
 function sendExternal(candidates: MediaCandidate[]) { const context = store.context; if (context) void guard(() => openDispatch(context.sourceTabId, context.sourceContextId, candidates.map(candidate => candidate.id))); }

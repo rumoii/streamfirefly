@@ -69,13 +69,44 @@ pub(crate) fn extension_from_url(url: &str) -> Option<String> {
     ((1..=8).contains(&ext.len()) && ext.chars().all(|c| c.is_ascii_alphanumeric())).then_some(ext)
 }
 
+/// Reads `filename*` (RFC 5987, UTF-8 or ISO-8859-1) before the plain `filename` parameter.
 pub(crate) fn filename_from_content_disposition(value: &str) -> Option<String> {
-    value.split(';').find_map(|part| {
-        let (key, value) = part.trim().split_once('=')?;
-        key.trim()
-            .eq_ignore_ascii_case("filename")
-            .then(|| value.trim().trim_matches('"').to_string())
-    })
+    let parameter = |name: &str| {
+        value.split(';').find_map(|part| {
+            let (key, value) = part.trim().split_once('=')?;
+            key.trim()
+                .eq_ignore_ascii_case(name)
+                .then(|| value.trim().trim_matches('"').to_string())
+        })
+    };
+    parameter("filename*")
+        .and_then(|value| decode_extended_value(&value))
+        .or_else(|| parameter("filename"))
+        .filter(|name| !name.trim().is_empty())
+}
+
+fn decode_extended_value(value: &str) -> Option<String> {
+    let mut parts = value.splitn(3, '\'');
+    let (charset, _language, encoded) = (parts.next()?, parts.next()?, parts.next()?);
+    let mut bytes = Vec::with_capacity(encoded.len());
+    let mut rest = encoded.as_bytes();
+    while let Some((&byte, tail)) = rest.split_first() {
+        if byte == b'%' {
+            let hex = std::str::from_utf8(tail.get(..2)?).ok()?;
+            bytes.push(u8::from_str_radix(hex, 16).ok()?);
+            rest = &tail[2..];
+        } else {
+            bytes.push(byte);
+            rest = tail;
+        }
+    }
+    if charset.eq_ignore_ascii_case("utf-8") {
+        String::from_utf8(bytes).ok()
+    } else if charset.eq_ignore_ascii_case("iso-8859-1") {
+        Some(bytes.into_iter().map(char::from).collect())
+    } else {
+        None
+    }
 }
 
 pub(crate) fn extension_from_content_disposition(value: &str) -> Option<String> {
@@ -254,15 +285,50 @@ pub(crate) fn extension_for(payload: &Value) -> String {
     }
 }
 
-pub(crate) fn recommended_file_stem(payload: &Value) -> String {
-    let disposition = payload["contentDisposition"]
+fn disposition_file_stem(payload: &Value) -> Option<String> {
+    payload["contentDisposition"]
         .as_str()
         .and_then(filename_from_content_disposition)
         .and_then(|name| {
             Path::new(&name)
                 .file_stem()
                 .map(|value| value.to_string_lossy().into())
-        });
+        })
+}
+
+const PAGE_TITLE_MIN_CHARS: usize = 40;
+
+/// `page_title` naming: the page title, followed by the server's file name when it adds information.
+fn page_title_file_stem(payload: &Value) -> Option<String> {
+    let title = ["pageTitle", "title"]
+        .iter()
+        .find_map(|key| payload[*key].as_str().and_then(safe_file_stem))?;
+    let Some(server) = disposition_file_stem(payload).and_then(|name| safe_file_stem(&name)) else {
+        return Some(title);
+    };
+    let (lower_title, lower_server) = (title.to_lowercase(), server.to_lowercase());
+    if lower_title.contains(&lower_server) {
+        return Some(title);
+    }
+    if lower_server.contains(&lower_title) {
+        return Some(server);
+    }
+    // safe_file_stem keeps 100 characters; shorten the title so the distinguishing server name survives.
+    let budget = 100usize.saturating_sub(server.chars().count() + 3);
+    if budget < PAGE_TITLE_MIN_CHARS {
+        return Some(title);
+    }
+    let title: String = title.chars().take(budget).collect();
+    safe_file_stem(&format!("{} - {server}", title.trim_end()))
+}
+
+pub(crate) fn recommended_file_stem(payload: &Value) -> String {
+    if payload["namingMode"] == "page_title" {
+        if let Some(stem) = page_title_file_stem(payload) {
+            return stem;
+        }
+    }
+    let disposition = disposition_file_stem(payload);
     let url_name = payload["url"]
         .as_str()
         .and_then(|url| url.split(['?', '#']).next())
@@ -301,7 +367,12 @@ pub(crate) fn prepare_task(payload: &Value) -> Result<Value, &'static str> {
         .map(|value| value.container.clone())
         .or_else(|| dash.as_ref().map(|plan| plan.container.clone()))
         .unwrap_or_else(|| extension_for(payload));
-    Ok(json!({"fileName": recommended_file_stem(payload), "extension": extension}))
+    // A name already chosen by the extension (the output template) wins over automatic naming.
+    let file_name = payload["fileName"]
+        .as_str()
+        .and_then(safe_file_stem)
+        .unwrap_or_else(|| recommended_file_stem(payload));
+    Ok(json!({"fileName": file_name, "extension": extension}))
 }
 
 pub(crate) fn unique_output_path(dir: &Path, stem: &str, ext: &str, tasks: &[Task]) -> PathBuf {

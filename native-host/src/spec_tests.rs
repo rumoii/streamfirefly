@@ -18,6 +18,7 @@ use crate::task_creation::create_task;
 use crate::task_input::extension_from_content_disposition;
 use crate::task_input::extension_from_mime;
 use crate::task_input::extension_from_url;
+use crate::task_input::filename_from_content_disposition;
 use crate::task_input::hls_plan;
 use crate::task_input::inline_manifest;
 use crate::task_input::prepare_task;
@@ -197,6 +198,63 @@ fn task_prepare_uses_disposition_name_and_detected_extension() {
     .unwrap();
     assert_eq!(prepared["fileName"], "movie");
     assert_eq!(prepared["extension"], "webm");
+}
+#[test]
+fn content_disposition_reads_encoded_names_before_plain_ones() {
+    assert_eq!(
+        filename_from_content_disposition(
+            "attachment; filename=\"fallback.mp4\"; filename*=UTF-8''%E7%AC%AC1%E9%9B%86.mp4"
+        ),
+        Some("第1集.mp4".into())
+    );
+    assert_eq!(
+        filename_from_content_disposition("attachment; filename*=iso-8859-1'en'caf%E9.mp4"),
+        Some("café.mp4".into())
+    );
+    assert_eq!(
+        filename_from_content_disposition("attachment; filename*=UTF-8''bad%E7; filename=plain.mp4"),
+        Some("plain.mp4".into())
+    );
+    assert_eq!(filename_from_content_disposition("attachment; filename=\"\""), None);
+}
+#[test]
+fn page_title_naming_combines_title_with_informative_server_names() {
+    let name = |payload: Value| prepare_task(&payload).unwrap()["fileName"].clone();
+    let base = json!({"url":"https://cdn.test/30080.m4s?sign=1","mime":"video/mp4","namingMode":"page_title","pageTitle":"示例视频_哔哩哔哩_bilibili","title":"资源标题"});
+    assert_eq!(name(base.clone()), "示例视频_哔哩哔哩_bilibili");
+    let mut with_server = base.clone();
+    with_server["contentDisposition"] = json!("attachment; filename=lecture-03.mp4");
+    assert_eq!(name(with_server.clone()), "示例视频_哔哩哔哩_bilibili - lecture-03");
+    with_server["contentDisposition"] = json!("attachment; filename=示例视频.mp4");
+    assert_eq!(name(with_server.clone()), "示例视频_哔哩哔哩_bilibili", "a server name inside the title adds nothing");
+    with_server["contentDisposition"] = json!("attachment; filename=\"示例视频_哔哩哔哩_bilibili 第2集.mp4\"");
+    assert_eq!(name(with_server.clone()), "示例视频_哔哩哔哩_bilibili 第2集");
+
+    let mut long = base.clone();
+    long["pageTitle"] = json!("长".repeat(120));
+    long["contentDisposition"] = json!("attachment; filename=part-07.mp4");
+    let stem = name(long.clone()).as_str().unwrap().to_string();
+    assert!(stem.ends_with(" - part-07") && stem.chars().count() == 100, "the title is shortened, not the server name: {stem}");
+    long["contentDisposition"] = json!(format!("attachment; filename={}.mp4", "s".repeat(70)));
+    assert_eq!(name(long.clone()), "长".repeat(100), "too little room keeps the title alone");
+
+    let mut untitled = base.clone();
+    untitled["pageTitle"] = json!(null);
+    assert_eq!(name(untitled.clone()), "资源标题");
+    untitled["title"] = json!(":::?");
+    assert_eq!(name(untitled), "____", "unsafe characters are replaced, not dropped");
+    let mut resource = base.clone();
+    resource["namingMode"] = json!("resource");
+    assert_eq!(name(resource), "30080", "resource naming keeps the original behaviour");
+    let mut legacy = base;
+    legacy.as_object_mut().unwrap().remove("namingMode");
+    assert_eq!(name(legacy), "30080", "older extensions without namingMode keep the original behaviour");
+}
+#[test]
+fn task_prepare_prefers_the_extension_file_name() {
+    let payload = |file_name: Value| json!({"url":"https://cdn.test/30080.mp4","namingMode":"page_title","pageTitle":"页面","fileName":file_name});
+    assert_eq!(prepare_task(&payload(json!("模板/名称"))).unwrap()["fileName"], "模板_名称");
+    assert_eq!(prepare_task(&payload(json!(" . "))).unwrap()["fileName"], "页面");
 }
 #[test]
 fn unique_output_adds_sequence_for_existing_and_reserved_names() {

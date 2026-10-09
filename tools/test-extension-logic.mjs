@@ -119,6 +119,7 @@ const rejectedV1 = await send({ type: 'task.create', payload: { hlsPlan: { versi
 if (rejectedV1.ok || rejectedV1.error !== 'hls_plan_version_unsupported') throw new Error('Legacy HLS plan was accepted');
 const acceptedV2 = await send({ type: 'task.create', payload: { hlsPlan: { version: 2 } } });
 if (!acceptedV2.ok) throw new Error('Current HLS plan was rejected');
+if (nativePosted.findLast(message => message.type === 'task.create')?.payload?.namingMode !== 'page_title') throw new Error('Download requests did not carry the default page-title naming mode');
 const nativeBeforeBlob = nativePosted.length;
 const rejectedBlobTask = await send({ type: 'task.create', payload: { url: 'blob:https://media.example/source' } });
 if (rejectedBlobTask.ok || rejectedBlobTask.error !== 'blob_resource_requires_capture' || nativePosted.length !== nativeBeforeBlob) throw new Error(`Blob media reached Native download: ${JSON.stringify(rejectedBlobTask)}`);

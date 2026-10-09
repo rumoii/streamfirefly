@@ -37,10 +37,20 @@ const audioOptions = computed(() => [{ value: "", label: "不下载音频" }, ..
 const containerOptions: { value: "mp4" | "mkv"; label: string }[] = [{ value: "mp4", label: "MP4" }, { value: "mkv", label: "MKV" }];
 function label(track: DashTrack) { return `${track.kind === "video" ? `${track.width} × ${track.height}` : track.language} · ${Math.round(track.bandwidth / 1000)} kbps · ${track.codecs || "未知编码"}`; }
 
+// Same naming as other downloads (output template, then the naming setting); keep the fallback when the helper is unavailable or the user already typed.
+async function suggestName(candidate: MediaCandidate, current: number, fallbackName: string) {
+  try {
+    // The helper only accepts HLS inline manifests; DASH content travels in the plan, as on submit.
+    const prepared: any = await sendMessage({ type: "task.prepare", payload: { ...candidatePayload(candidate), inlineManifest: null } });
+    if (current === sequence && prepared?.ok && prepared.payload?.fileName && fileName.value === fallbackName) fileName.value = prepared.payload.fileName;
+  } catch { /* Keep the fallback name. */ }
+}
+
 watch(() => props.candidate, async candidate => {
   const current = ++sequence;
   loading.value = true; error.value = ""; manifest.value = null; submittedPayload = null;
-  requestId = crypto.randomUUID(); fileName.value = candidate.title || candidate.pageTitle || "DASH";
+  requestId = crypto.randomUUID(); const fallbackName = fileName.value = candidate.title || candidate.pageTitle || "DASH";
+  void suggestName(candidate, current, fallbackName);
   try {
     const inline = candidate.inlineManifest;
     const response = inline ? { ok: true, text: inline.text, url: inline.baseUrl } : await sendMessage({ type: "media.fetchText", tabId: props.context.sourceTabId, id: candidate.id, url: candidate.url });
