@@ -191,7 +191,10 @@ pub(crate) fn wait_retry(
 ) -> bool {
     let deadline = Instant::now() + Duration::from_secs(seconds);
     while Instant::now() < deadline {
-        if abort.load(Ordering::Relaxed) || cancel_requested(store, task_id) {
+        if abort.load(Ordering::Relaxed)
+            || cancel_requested(store, task_id)
+            || crate::runtime::host_exiting(store)
+        {
             return false;
         }
         thread::sleep(Duration::from_millis(100));

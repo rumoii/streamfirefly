@@ -60,3 +60,20 @@ pub(crate) fn start_recovery_once(store: &TaskRuntime, writer: &Writer) {
         resume_recoverable_hls_tasks(store, writer);
     }
 }
+
+/// Records that recovery should run, but never starts downloads before the first
+/// successful `network.configure` so recovered requests use the user's network policy.
+pub(crate) fn request_recovery(store: &TaskRuntime, writer: &Writer) {
+    store.recovery_requested.store(true, Ordering::Release);
+    if store.network_configured.load(Ordering::Acquire) {
+        start_recovery_once(store, writer);
+    }
+}
+
+/// Marks the network policy ready and runs any recovery that arrived before configuration.
+pub(crate) fn network_ready(store: &TaskRuntime, writer: &Writer) {
+    store.network_configured.store(true, Ordering::Release);
+    if store.recovery_requested.load(Ordering::Acquire) {
+        start_recovery_once(store, writer);
+    }
+}

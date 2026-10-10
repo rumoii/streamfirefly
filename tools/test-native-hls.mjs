@@ -192,6 +192,9 @@ let host = startHost();
 const info = await host.send('host.info');
 if (!info.ok || !info.capabilities.includes('hls-segment-engine-v1')) throw new Error(`HLS capability missing: ${JSON.stringify(info)}`);
 if (!info.capabilities.includes('hls-live-engine-v1')) throw new Error(`Live HLS capability missing: ${JSON.stringify(info)}`);
+// Recovered downloads must use the configured network policy, so tests configure it like the extension does.
+const networkSetup = await host.send('network.configure', { mode: 'direct' });
+if (!networkSetup.ok) throw new Error(`Network configuration failed: ${JSON.stringify(networkSetup)}`);
 
 const autoLive = await host.send('task.create', livePayload('auto-live', liveManifest('plain', 0)));
 const autoLiveTask = await waitFor(host, autoLive.task.id, item => item.state === 'succeeded', 'automatic live ENDLIST completion', 260);
@@ -228,6 +231,7 @@ host.child.kill();
 await new Promise(resolve => host.child.once('exit', resolve));
 host = startHost();
 await host.send('host.info');
+await host.send('network.configure', { mode: 'direct' });
 await waitFor(host, restartLive.task.id, item => item.state === 'interrupted', 'live recovery requires explicit restart', 220);
 await host.send('task.control', { id: restartLive.task.id, action: 'retry' });
 await waitFor(host, restartLive.task.id, item => item.state === 'running' && item.attempt >= 2, 'explicit live recovery', 220);
@@ -314,6 +318,7 @@ await new Promise(resolve => host.child.once('exit', resolve));
 host = startHost();
 const restartInfo = await host.send('host.info');
 if (restartInfo.id == null || restartInfo.type === 'task.progress') throw new Error(`Recovery event preceded host.info response: ${JSON.stringify(restartInfo)}`);
+await host.send('network.configure', { mode: 'direct' });
 const recovered = await waitFor(host, slow.task.id, item => item.state === 'succeeded', 'automatic checkpoint recovery', 240);
 if (!fs.existsSync(recovered.output) || recovered.attempt < 2) throw new Error(`Restart recovery failed: ${JSON.stringify(recovered)}`);
 assertPlayable(recovered.output, 'Recovered HLS');

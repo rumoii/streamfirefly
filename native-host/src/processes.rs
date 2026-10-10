@@ -1,3 +1,4 @@
+use crate::runtime::host_exiting;
 use crate::runtime::TaskRuntime;
 use crate::task_state::update;
 use crate::wire::Writer;
@@ -10,6 +11,14 @@ use std::time::Instant;
 
 pub(crate) fn register_process(store: &TaskRuntime, id: &str, child: Child) -> Arc<Mutex<Child>> {
     let child = Arc::new(Mutex::new(child));
+    if host_exiting(store) {
+        // A cleanup pass may already have killed the current batch; never start another one.
+        if let Ok(mut process) = child.lock() {
+            let _ = process.kill();
+            let _ = process.wait();
+        }
+        return child;
+    }
     store
         .processes
         .lock()

@@ -357,27 +357,63 @@ impl CaptureManager {
     }
 }
 
-impl Drop for CaptureManager {
-    fn drop(&mut self) {
-        if let Ok(sessions) = self.sessions.lock() {
-            for session in sessions.values() {
-                if let Ok(mut current) = session.lock() {
-                    if ["armed", "capturing", "stopping", "finalizing"]
-                        .contains(&current.snapshot.state.as_str())
-                    {
-                        current.stop = true;
-                        current.snapshot.state = "interrupted".into();
-                        current.snapshot.error = Some("capture_host_stopped".into());
-                        let _ = save(&current);
-                    }
+impl CaptureManager {
+    /// Stops every active session and waits for its worker threads. Idempotent: a second
+    /// call finds no active sessions and no tracked workers. Drop reuses this so a normal
+    /// EOF shutdown and a destructor share one stop mechanism.
+    pub(crate) fn shutdown(&self) -> Result<(), String> {
+        let mut errors = Vec::new();
+        let sessions: Vec<Arc<Mutex<Session>>> = match self.sessions.lock() {
+            Ok(sessions) => sessions.values().cloned().collect(),
+            Err(_) => {
+                errors.push("capture_unavailable".to_string());
+                Vec::new()
+            }
+        };
+        for session in &sessions {
+            let mut current = match session.lock() {
+                Ok(current) => current,
+                Err(_) => {
+                    errors.push("capture_unavailable".to_string());
+                    continue;
+                }
+            };
+            if ["armed", "capturing", "stopping", "finalizing"]
+                .contains(&current.snapshot.state.as_str())
+            {
+                current.stop = true;
+                current.snapshot.state = "interrupted".into();
+                current.snapshot.error = Some("capture_host_stopped".into());
+                if save(&current).is_err() {
+                    errors.push(format!("capture_checkpoint_failed:{}", current.snapshot.id));
                 }
             }
         }
-        if let Ok(mut workers) = self.workers.lock() {
-            for worker in workers.drain(..) {
-                let _ = worker.join();
+        // Collect the handles and drop the locks before joining: a worker may still need
+        // the session or worker table while finishing its cleanup.
+        let workers: Vec<thread::JoinHandle<()>> = match self.workers.lock() {
+            Ok(mut workers) => workers.drain(..).collect(),
+            Err(_) => {
+                errors.push("capture_unavailable".to_string());
+                Vec::new()
+            }
+        };
+        for worker in workers {
+            if worker.join().is_err() {
+                errors.push("capture_worker_panicked".to_string());
             }
         }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join(","))
+        }
+    }
+}
+
+impl Drop for CaptureManager {
+    fn drop(&mut self) {
+        let _ = self.shutdown();
     }
 }
 

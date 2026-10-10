@@ -16,16 +16,20 @@ use crate::task_input::inline_manifest;
 use crate::task_input::is_network_url;
 use crate::task_input::safe_file_stem;
 use crate::task_input::safe_title;
-use crate::task_input::unique_output_path;
+use crate::task_input::unique_output_path_with;
 use crate::task_input::validate_dir;
 use crate::task_input::with_site_subdirectory;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::fs;
+use std::path::PathBuf;
 use uuid::Uuid;
 
 pub(crate) fn create_task(store: &TaskRuntime, payload: &Value) -> Result<Task, &'static str> {
     let _creation = store.creation.lock().unwrap();
+    if crate::runtime::host_exiting(store) {
+        return Err("task_store_unavailable");
+    }
     if store.repository.load_error.is_some() {
         return Err("task_store_unavailable");
     }
@@ -113,11 +117,19 @@ pub(crate) fn create_task(store: &TaskRuntime, payload: &Value) -> Result<Task, 
         None => String::new(),
     };
     let mut tasks = store.repository.tasks.lock().unwrap();
+    let mut reserved_paths: Vec<PathBuf> = Vec::new();
     let output = if payload["fileName"].is_string() {
-        unique_output_path(&dir, &custom_name, &ext, &tasks)
+        unique_output_path_with(&dir, &custom_name, &ext, &tasks, &reserved_paths)
     } else {
-        dir.join(format!("{}-{}.{}", title, &id[..8], ext))
+        unique_output_path_with(
+            &dir,
+            &format!("{}-{}", title, &id[..8]),
+            &ext,
+            &tasks,
+            &reserved_paths,
+        )
     };
+    reserved_paths.push(output.clone());
     let display_title = if custom_name.is_empty() {
         title
     } else {
@@ -161,12 +173,19 @@ pub(crate) fn create_task(store: &TaskRuntime, payload: &Value) -> Result<Task, 
                     language = format!("{base_language}-{suffix}");
                     suffix += 1;
                 }
-                let subtitle_path = output.with_file_name(format!(
-                    "{}.{}.{}",
+                let subtitle_stem = format!(
+                    "{}.{}",
                     output.file_stem().unwrap_or_default().to_string_lossy(),
-                    language,
-                    subtitle.extension
-                ));
+                    language
+                );
+                let subtitle_path = unique_output_path_with(
+                    &dir,
+                    &subtitle_stem,
+                    &subtitle.extension,
+                    &tasks,
+                    &reserved_paths,
+                );
+                reserved_paths.push(subtitle_path.clone());
                 TaskOutput {
                     kind: "subtitle".into(),
                     language: subtitle.language.clone(),

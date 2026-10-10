@@ -375,7 +375,69 @@ pub(crate) fn prepare_task(payload: &Value) -> Result<Value, &'static str> {
     Ok(json!({"fileName": file_name, "extension": extension}))
 }
 
-pub(crate) fn unique_output_path(dir: &Path, stem: &str, ext: &str, tasks: &[Task]) -> PathBuf {
+/// Compares two paths as the same output target on Windows: case, separators and
+/// equivalent directory spellings (`\\?\`, short names via the parent's canonical form).
+pub(crate) fn paths_equivalent(left: &Path, right: &Path) -> bool {
+    fn key(path: &Path) -> String {
+        let (parent, name) = match (path.parent(), path.file_name()) {
+            (Some(parent), Some(name)) => (parent, name),
+            _ => return fold(path.to_string_lossy().replace('/', "\\")),
+        };
+        let parent = fs::canonicalize(parent)
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| parent.to_string_lossy().into_owned());
+        fold(format!(
+            "{}\\{}",
+            parent.replace('/', "\\").trim_end_matches('\\'),
+            name.to_string_lossy()
+        )
+        .trim_start_matches("\\\\?\\")
+        .to_string())
+    }
+    #[cfg(windows)]
+    fn fold(value: String) -> String {
+        value.to_lowercase()
+    }
+    #[cfg(not(windows))]
+    fn fold(value: String) -> String {
+        value
+    }
+    key(left) == key(right)
+}
+
+/// True when the candidate collides with anything on disk, any task's primary or
+/// sidecar output, or a path already handed out in this creation batch.
+pub(crate) fn output_path_occupied(
+    candidate: &Path,
+    tasks: &[Task],
+    reserved: &[PathBuf],
+) -> bool {
+    candidate.exists()
+        || reserved
+            .iter()
+            .any(|path| paths_equivalent(path, candidate))
+        || tasks.iter().any(|task| {
+            task.output
+                .as_deref()
+                .map(Path::new)
+                .is_some_and(|path| paths_equivalent(path, candidate))
+                || task.outputs.iter().any(|output| {
+                    output
+                        .path
+                        .as_deref()
+                        .map(Path::new)
+                        .is_some_and(|path| paths_equivalent(path, candidate))
+                })
+        })
+}
+
+pub(crate) fn unique_output_path_with(
+    dir: &Path,
+    stem: &str,
+    ext: &str,
+    tasks: &[Task],
+    reserved: &[PathBuf],
+) -> PathBuf {
     for index in 0..10_000 {
         let suffix = if index == 0 {
             String::new()
@@ -383,14 +445,66 @@ pub(crate) fn unique_output_path(dir: &Path, stem: &str, ext: &str, tasks: &[Tas
             format!(" ({index})")
         };
         let candidate = dir.join(format!("{stem}{suffix}.{ext}"));
-        let occupied = tasks
-            .iter()
-            .any(|task| task.output.as_deref().map(Path::new) == Some(candidate.as_path()));
-        if !candidate.exists() && !occupied {
+        if !output_path_occupied(&candidate, tasks, reserved) {
             return candidate;
         }
     }
     dir.join(format!("{}-{}.{}", stem, Uuid::new_v4(), ext))
+}
+
+/// Copies a finished work file onto its final output path. The destination is created
+/// exclusively so a file that appeared after task creation is never overwritten; a
+/// partial file from a failed copy is removed again because this call created it.
+pub(crate) fn publish_task_output(
+    temporary: &Path,
+    destination: &Path,
+    tasks: &[Task],
+    self_task_id: &str,
+) -> Result<(), &'static str> {
+    let occupied = tasks.iter().any(|task| {
+        task.id != self_task_id
+            && (task
+                .output
+                .as_deref()
+                .map(Path::new)
+                .is_some_and(|path| paths_equivalent(path, destination))
+                || task.outputs.iter().any(|output| {
+                    output
+                        .path
+                        .as_deref()
+                        .map(Path::new)
+                        .is_some_and(|path| paths_equivalent(path, destination))
+                }))
+    });
+    if occupied {
+        return Err("output_path_conflict");
+    }
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).map_err(|_| "path_not_writable")?;
+    }
+    let mut created = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::AlreadyExists => "output_path_conflict",
+            _ => "path_not_writable",
+        })?;
+    let mut source = fs::File::open(temporary).map_err(|_| "output_write_failed")?;
+    if let Err(error) = std::io::copy(&mut source, &mut created) {
+        drop(created);
+        let _ = fs::remove_file(destination);
+        return Err(match error.kind() {
+            std::io::ErrorKind::AlreadyExists => "output_path_conflict",
+            _ => "output_write_failed",
+        });
+    }
+    if created.sync_all().is_err() {
+        drop(created);
+        let _ = fs::remove_file(destination);
+        return Err("output_write_failed");
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_dir(value: &str) -> Result<PathBuf, &'static str> {

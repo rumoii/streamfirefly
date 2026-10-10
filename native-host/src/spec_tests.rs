@@ -26,7 +26,7 @@ use crate::task_input::safe_file_stem;
 use crate::task_input::safe_title;
 use crate::task_input::site_subdirectory;
 use crate::task_input::with_site_subdirectory;
-use crate::task_input::unique_output_path;
+use crate::task_input::unique_output_path_with;
 use crate::task_input::validate_dir;
 use crate::wire::read_message;
 use crate::wire::write_message;
@@ -35,6 +35,8 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+#[cfg(windows)]
+use std::path::PathBuf;
 use uuid::Uuid;
 
 fn manifest_value(suffix: &str) -> Value {
@@ -334,7 +336,7 @@ fn unique_output_adds_sequence_for_existing_and_reserved_names() {
         .get("inline_manifest")
         .is_none());
     assert_eq!(
-        unique_output_path(&dir, "视频", "mp4", &tasks),
+        unique_output_path_with(&dir, "视频", "mp4", &tasks, &[]),
         dir.join("视频 (2).mp4")
     );
     fs::remove_dir_all(dir).unwrap();
@@ -616,5 +618,297 @@ fn delete_task_outputs_removes_media_and_all_subtitle_files_once() {
     assert_eq!(delete_task_outputs(&task), Ok(true));
     assert!(!media.exists());
     assert!(!subtitle.exists());
+    fs::remove_dir_all(dir).unwrap();
+}
+
+// --- output collision protection (issue #7) ---
+
+fn collision_payload(save_dir: &Path, file_name: &str, subtitles: Value) -> Value {
+    let mut payload = json!({
+        "url":"https://example.test/master.m3u8",
+        "title":"movie",
+        "fileName":file_name,
+        "mime":"application/vnd.apple.mpegurl",
+        "hlsPlan":{
+            "version":2,
+            "duration":2.0,
+            "container":"mkv",
+            "videoManifest":manifest_value("video"),
+            "audioManifest":null,
+            "subtitles":subtitles
+        }
+    });
+    payload["saveDir"] = Value::String(save_dir.to_string_lossy().into_owned());
+    payload
+}
+
+fn one_subtitle(language: &str) -> Value {
+    json!([{"language":language,"label":"字幕","extension":"vtt","manifest":manifest_value("sub")}])
+}
+
+#[test]
+fn creation_avoids_existing_media_and_subtitle_files_on_disk() {
+    let dir = std::env::temp_dir().join(format!("streamfirefly-collision-disk-{}", Uuid::new_v4()));
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("movie.mkv"), b"existing-media").unwrap();
+    fs::write(dir.join("movie.en.vtt"), b"existing-subtitle").unwrap();
+    let store = load_store(&dir.join("tasks.json"));
+    let task = create_task(&store, &collision_payload(&dir, "movie", one_subtitle("en"))).unwrap();
+    assert_eq!(
+        task.output.as_deref(),
+        Some(dir.join("movie (1).mkv").to_string_lossy().as_ref())
+    );
+    let subtitle = task
+        .outputs
+        .iter()
+        .find(|output| output.kind == "subtitle")
+        .unwrap()
+        .path
+        .clone()
+        .unwrap();
+    assert_eq!(Path::new(&subtitle), dir.join("movie (1).en.vtt"));
+    assert_eq!(fs::read(dir.join("movie.mkv")).unwrap(), b"existing-media");
+    assert_eq!(
+        fs::read(dir.join("movie.en.vtt")).unwrap(),
+        b"existing-subtitle"
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn creation_renames_only_the_conflicting_subtitle_when_media_is_free() {
+    let dir =
+        std::env::temp_dir().join(format!("streamfirefly-collision-sub-only-{}", Uuid::new_v4()));
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("movie.en.vtt"), b"existing-subtitle").unwrap();
+    let store = load_store(&dir.join("tasks.json"));
+    let task = create_task(&store, &collision_payload(&dir, "movie", one_subtitle("en"))).unwrap();
+    assert_eq!(
+        task.output.as_deref(),
+        Some(dir.join("movie.mkv").to_string_lossy().as_ref())
+    );
+    let subtitle = task
+        .outputs
+        .iter()
+        .find(|output| output.kind == "subtitle")
+        .unwrap()
+        .path
+        .clone()
+        .unwrap();
+    assert_eq!(Path::new(&subtitle), dir.join("movie.en (1).vtt"));
+    assert_eq!(
+        fs::read(dir.join("movie.en.vtt")).unwrap(),
+        b"existing-subtitle"
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn creation_avoids_primary_and_sidecar_paths_reserved_by_other_tasks() {
+    let dir = std::env::temp_dir().join(format!("streamfirefly-collision-task-{}", Uuid::new_v4()));
+    fs::create_dir_all(&dir).unwrap();
+    let store = load_store(&dir.join("tasks.json"));
+    let first = create_task(&store, &collision_payload(&dir, "movie", one_subtitle("en"))).unwrap();
+    let second = create_task(&store, &collision_payload(&dir, "movie", one_subtitle("en"))).unwrap();
+    let paths = |task: &Task| -> Vec<String> {
+        task.outputs
+            .iter()
+            .filter_map(|output| output.path.clone())
+            .collect()
+    };
+    let first_paths = paths(&first);
+    let second_paths = paths(&second);
+    for path in &first_paths {
+        assert!(!second_paths.contains(path), "paths must not overlap: {path}");
+    }
+    assert_eq!(
+        first.output.as_deref(),
+        Some(dir.join("movie.mkv").to_string_lossy().as_ref())
+    );
+    assert!(second.output.as_deref().unwrap().ends_with(").mkv"));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn same_language_subtitles_in_one_task_stay_distinct() {
+    let dir =
+        std::env::temp_dir().join(format!("streamfirefly-collision-same-lang-{}", Uuid::new_v4()));
+    fs::create_dir_all(&dir).unwrap();
+    let store = load_store(&dir.join("tasks.json"));
+    let task = create_task(&store, &hls_payload(Some(&dir))).unwrap();
+    let subtitles: Vec<_> = task
+        .outputs
+        .iter()
+        .filter(|output| output.kind == "subtitle")
+        .filter_map(|output| output.path.clone())
+        .collect();
+    assert_eq!(subtitles.len(), 2);
+    assert_ne!(subtitles[0], subtitles[1]);
+    assert!(subtitles[0].contains("zh-CN."));
+    assert!(subtitles[1].contains("zh-CN-2."));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_path_comparison_ignores_case_and_separators() {
+    use crate::task_input::paths_equivalent;
+    let dir = std::env::temp_dir().join(format!("streamfirefly-collision-case-{}", Uuid::new_v4()));
+    fs::create_dir_all(&dir).unwrap();
+    let lower = dir.join("movie.en.vtt");
+    let upper = dir.join("MOVIE.EN.VTT");
+    assert!(paths_equivalent(&lower, &upper));
+    let mixed = PathBuf::from(lower.to_string_lossy().replace('\\', "/"));
+    assert!(paths_equivalent(&lower, &mixed));
+    assert!(!paths_equivalent(&lower, &dir.join("movie.en2.vtt")));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn creation_avoids_same_path_written_in_different_case() {
+    let dir = std::env::temp_dir().join(format!("streamfirefly-collision-fold-{}", Uuid::new_v4()));
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("movie.en.vtt"), b"existing").unwrap();
+    let store = load_store(&dir.join("tasks.json"));
+    let payload = collision_payload(&dir, "MOVIE", one_subtitle("en"));
+    let task = create_task(&store, &payload).unwrap();
+    let subtitle = task
+        .outputs
+        .iter()
+        .find(|output| output.kind == "subtitle")
+        .unwrap()
+        .path
+        .clone()
+        .unwrap();
+    assert!(!crate::task_input::paths_equivalent(
+        Path::new(&subtitle),
+        &dir.join("movie.en.vtt")
+    ));
+    assert_eq!(fs::read(dir.join("movie.en.vtt")).unwrap(), b"existing");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn default_named_output_and_subtitles_avoid_disk_collisions() {
+    let dir =
+        std::env::temp_dir().join(format!("streamfirefly-collision-default-{}", Uuid::new_v4()));
+    fs::create_dir_all(&dir).unwrap();
+    let stem = "streamfirefly-download-12345678";
+    fs::write(dir.join(format!("{stem}.mp4")), b"existing").unwrap();
+    fs::write(dir.join(format!("{stem}.en.vtt")), b"existing-sub").unwrap();
+    let candidate = unique_output_path_with(&dir, stem, "mp4", &[], &[]);
+    assert_eq!(candidate, dir.join(format!("{stem} (1).mp4")));
+    let subtitle = unique_output_path_with(
+        &dir,
+        &format!("{stem}.en"),
+        "vtt",
+        &[],
+        &[candidate.clone()],
+    );
+    assert_eq!(subtitle, dir.join(format!("{stem}.en (1).vtt")));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn concurrent_creation_never_hands_out_the_same_path() {
+    let dir =
+        std::env::temp_dir().join(format!("streamfirefly-collision-concurrent-{}", Uuid::new_v4()));
+    fs::create_dir_all(&dir).unwrap();
+    let store = load_store(&dir.join("tasks.json"));
+    let mut handles = Vec::new();
+    for _ in 0..8 {
+        let store = store.clone();
+        let dir = dir.clone();
+        handles.push(std::thread::spawn(move || {
+            create_task(&store, &collision_payload(&dir, "movie", one_subtitle("en"))).unwrap()
+        }));
+    }
+    let tasks: Vec<Task> = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect();
+    let mut seen = std::collections::HashSet::new();
+    for task in &tasks {
+        for output in &task.outputs {
+            let path = output.path.clone().unwrap();
+            assert!(seen.insert(path.clone()), "duplicate path handed out: {path}");
+        }
+    }
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn publish_refuses_existing_destination_and_keeps_original_bytes() {
+    let dir =
+        std::env::temp_dir().join(format!("streamfirefly-publish-exists-{}", Uuid::new_v4()));
+    fs::create_dir_all(&dir).unwrap();
+    let destination = dir.join("movie.mkv");
+    fs::write(&destination, b"sentinel-original").unwrap();
+    let temporary = dir.join("work.tmp");
+    fs::write(&temporary, b"new-media-bytes").unwrap();
+    assert_eq!(
+        crate::task_input::publish_task_output(&temporary, &destination, &[], "self"),
+        Err("output_path_conflict")
+    );
+    assert_eq!(fs::read(&destination).unwrap(), b"sentinel-original");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn publish_refuses_paths_reserved_by_another_task() {
+    let dir =
+        std::env::temp_dir().join(format!("streamfirefly-publish-reserved-{}", Uuid::new_v4()));
+    fs::create_dir_all(&dir).unwrap();
+    let destination = dir.join("movie.mkv");
+    let other: Task = serde_json::from_value(json!({
+        "id":"other","url":"https://example.test/a.mkv","title":"other",
+        "state":"queued","progress":0,"output":destination,"error":null,"mime":"video/mp4",
+        "outputs":[{"kind":"media","path":destination,"state":"queued"}]
+    }))
+    .unwrap();
+    let temporary = dir.join("work.tmp");
+    fs::write(&temporary, b"new-media-bytes").unwrap();
+    assert_eq!(
+        crate::task_input::publish_task_output(&temporary, &destination, &[other], "self"),
+        Err("output_path_conflict")
+    );
+    assert!(!destination.exists());
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn publish_copies_content_and_reports_success() {
+    let dir = std::env::temp_dir().join(format!("streamfirefly-publish-ok-{}", Uuid::new_v4()));
+    fs::create_dir_all(&dir).unwrap();
+    let destination = dir.join("movie.mkv");
+    let temporary = dir.join("work.tmp");
+    fs::write(&temporary, b"new-media-bytes").unwrap();
+    assert_eq!(
+        crate::task_input::publish_task_output(&temporary, &destination, &[], "self"),
+        Ok(())
+    );
+    assert_eq!(fs::read(&destination).unwrap(), b"new-media-bytes");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn publish_retry_after_conflict_succeeds_once_destination_is_free() {
+    let dir = std::env::temp_dir().join(format!("streamfirefly-publish-retry-{}", Uuid::new_v4()));
+    fs::create_dir_all(&dir).unwrap();
+    let destination = dir.join("movie.mkv");
+    let temporary = dir.join("work.tmp");
+    fs::write(&temporary, b"new-media-bytes").unwrap();
+    fs::write(&destination, b"sentinel").unwrap();
+    assert_eq!(
+        crate::task_input::publish_task_output(&temporary, &destination, &[], "self"),
+        Err("output_path_conflict")
+    );
+    fs::remove_file(&destination).unwrap();
+    assert_eq!(
+        crate::task_input::publish_task_output(&temporary, &destination, &[], "self"),
+        Ok(())
+    );
+    assert_eq!(fs::read(&destination).unwrap(), b"new-media-bytes");
     fs::remove_dir_all(dir).unwrap();
 }

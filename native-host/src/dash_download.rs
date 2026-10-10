@@ -274,6 +274,7 @@ fn execute(
         writer,
         task,
         args,
+        &temporary,
         plan.duration,
         85,
         14,

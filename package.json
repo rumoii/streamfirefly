@@ -14,7 +14,7 @@
     "test:capture:runtime:windows": "node --test tools/test-capture-runtime-windows.mjs",
     "test:packaging:windows": "node --test tools/test-internal-packaging-windows.mjs",
     "diagnose:capture:sampling": "node tools/diagnose-capture-sampling.mjs",
-    "test:native": "cargo build --manifest-path native-host/Cargo.toml && node tools/test-native.mjs && node tools/test-native-download.mjs && node tools/test-native-hls.mjs && npm run test:dash:native && node tools/test-native-queue.mjs && node tools/test-native-capture.mjs && node tools/test-native-capture-volume.mjs",
+    "test:native": "cargo build --manifest-path native-host/Cargo.toml && node tools/test-native.mjs && node tools/test-native-download.mjs && node tools/test-native-hls.mjs && node tools/test-native-recovery-order.mjs && npm run test:dash:native && node tools/test-native-queue.mjs && node tools/test-native-capture.mjs && node tools/test-native-capture-eof.mjs && node tools/test-native-capture-volume.mjs",
     "test:dash:native": "node tools/test-native-dash.mjs",
     "test:dash:discovery": "node tools/test-native-dash.mjs --browser",
     "verify:features": "npm run typecheck && npm run validate:extension && npm run test:unit && cargo test --manifest-path native-host/Cargo.toml && npm run test:native",

@@ -32,6 +32,13 @@ pub(crate) fn finalize(session: &Arc<Mutex<Session>>) {
     let mut complete = !generations.is_empty();
     let mut failure = "capture_no_media_data";
     for (generation, tracks) in &generations {
+        // A host shutdown marks the session interrupted; never start another merge round then.
+        if session
+            .lock()
+            .map_or(true, |current| current.snapshot.state == "interrupted")
+        {
+            return;
+        }
         let inspections: Vec<_> = tracks.iter().map(|track| inspect_file(&directory.join(&track.file), &track.mime)).collect();
         if tracks.iter().all(|track| track.bytes == 0) || inspections.iter().all(|inspection| inspection.as_ref().is_ok_and(|value| value.initialized && !value.media)) { continue; }
         {

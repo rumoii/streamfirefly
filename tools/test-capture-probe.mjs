@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { buildSync } from 'esbuild';
+import { fileURLToPath } from 'node:url';
 import { editionDefine } from './edition.mjs';
 const listeners = new Map(), posted = [];
 class SourceBuffer {
@@ -64,7 +65,7 @@ for (let index = 0; index < 65; index++) window.URL.createObjectURL(new MediaSou
 assert.equal(window.__streamFireflyCaptureProbe.sources().length, 64);
 const restoredUrl = window.URL.createObjectURL(firstSource);
 assert.equal(JSON.stringify(window.__streamFireflyCaptureProbe.sources().find(source => source.id === '1').objectUrls), JSON.stringify([restoredUrl]));
-const code = buildSync({ entryPoints: [new URL('../extension/src/capture-coordinator.js', import.meta.url).pathname.replace(/^\/(\w:)/, '$1')], bundle: true, format: 'iife', globalName: 'Capture', write: false, define: editionDefine('chrome-store') }).outputFiles[0].text;
+const code = buildSync({ entryPoints: [fileURLToPath(new URL('../extension/src/capture-coordinator.js', import.meta.url))], bundle: true, format: 'iife', globalName: 'Capture', write: false, define: editionDefine('chrome-store') }).outputFiles[0].text;
 const scope = { Worker: undefined, setTimeout, clearTimeout }; vm.runInNewContext(code, scope);
 const actions = [];
 const api = {

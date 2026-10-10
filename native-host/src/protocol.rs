@@ -1,5 +1,6 @@
 use crate::paths::state_path;
-use crate::recovery::start_recovery_once;
+use crate::recovery::network_ready;
+use crate::recovery::request_recovery;
 use crate::repository::sanitized_task;
 use crate::repository::sanitized_tasks;
 use crate::repository::save_store;
@@ -82,6 +83,7 @@ pub(crate) fn run() -> io::Result<()> {
                         for task in store.repository.tasks.lock().unwrap().iter_mut() {
                             task.network = config.clone();
                         }
+                        network_ready(&store, &writer);
                         json!({"version":1,"id":id,"ok":true})
                     }
                     Err(error) => json!({"version":1,"id":id,"ok":false,"error":error}),
@@ -162,15 +164,15 @@ pub(crate) fn run() -> io::Result<()> {
         };
         emit(&writer, response);
         if message_type == "task.list" {
-            start_recovery_once(&store, &writer);
+            request_recovery(&store, &writer);
         }
     }
-    shutdown_downloads(&store)
+    shutdown_host(&store, &captures)
 }
 
 /// Ends every download child before the host exits so no orphaned writer outlives it.
 /// Holding the task list blocks runner updates, so persisted states stay resumable on the next start.
-fn shutdown_downloads(store: &TaskRuntime) -> ! {
+fn shutdown_downloads(store: &TaskRuntime) {
     let _tasks = store
         .repository
         .tasks
@@ -186,5 +188,20 @@ fn shutdown_downloads(store: &TaskRuntime) -> ! {
     for id in ids {
         stop_process(store, &id);
     }
-    std::process::exit(0)
+}
+
+/// Normal EOF shutdown: freeze task scheduling and retries first, end the download
+/// children, then stop capture sessions and wait for their workers. Any cleanup failure
+/// exits non-zero instead of pretending success.
+fn shutdown_host(store: &TaskRuntime, captures: &crate::capture::CaptureManager) -> ! {
+    store.exiting.store(true, std::sync::atomic::Ordering::SeqCst);
+    shutdown_downloads(store);
+    let capture_result = captures.shutdown();
+    match capture_result {
+        Ok(()) => std::process::exit(0),
+        Err(error) => {
+            eprintln!("streamfirefly capture shutdown incomplete: {error}");
+            std::process::exit(1)
+        }
+    }
 }

@@ -31,6 +31,9 @@ pub(crate) fn remove_pending(store: &TaskRuntime, id: &str) -> bool {
 }
 
 pub(crate) fn start_download(store: TaskRuntime, writer: Writer, task: Task) {
+    if crate::runtime::host_exiting(&store) {
+        return;
+    }
     {
         let mut scheduler = store.scheduler.lock().unwrap();
         if scheduler.running.contains(&task.id) || scheduler.pending.contains(&task.id) {
@@ -66,6 +69,9 @@ impl Drop for RunningTask {
 }
 
 fn pump(store: &TaskRuntime, writer: &Writer) {
+    if crate::runtime::host_exiting(store) {
+        return;
+    }
     let mut scheduler = store.scheduler.lock().unwrap();
     while scheduler.running.len() < MAX_ACTIVE_TASKS {
         let Some(id) = scheduler.pending.pop_front() else {

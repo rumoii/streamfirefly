@@ -13,6 +13,10 @@ pub(crate) fn update(
     change: impl FnOnce(&mut Task),
 ) {
     let mut tasks = store.repository.tasks.lock().unwrap();
+    // Shutdown keeps the last persisted states so downloads stay resumable on the next start.
+    if crate::runtime::host_exiting(store) {
+        return;
+    }
     let Some(index) = tasks.iter().position(|task| task.id == id) else {
         return;
     };

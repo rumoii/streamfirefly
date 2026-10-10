@@ -48,6 +48,7 @@ pub(crate) fn run_ffmpeg_with_progress(
     writer: &Writer,
     task: &Task,
     args: Vec<String>,
+    progress_path: &std::path::Path,
     duration: f64,
     progress_start: u8,
     progress_span: u8,
@@ -93,10 +94,7 @@ pub(crate) fn run_ffmpeg_with_progress(
             unregister_process(store, &task.id, &child);
             return Err("cancelled".into());
         }
-        let bytes = task
-            .output
-            .as_deref()
-            .and_then(|path| fs::metadata(path).ok())
+        let bytes = fs::metadata(progress_path)
             .map(|metadata| metadata.len())
             .unwrap_or(last_bytes);
         let speed = (bytes.saturating_sub(last_bytes) as f64

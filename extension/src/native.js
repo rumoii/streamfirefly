@@ -1,6 +1,6 @@
 const MISSING_HOST = /native messaging host not found|native messaging host is forbidden|no such native application|permission to use native application/i;
 
-export function createNative(api, notifyWorkspaceMessage, onTaskEvent = () => {}) {
+export function createNative(api, notifyWorkspaceMessage, onTaskEvent = () => {}, onConnectionReset = () => {}) {
 const native = { port: null, pending: new Map(), seq: 0, capabilities: new Set(), infoPromise: null };
 
 function ensureNative() {
@@ -18,6 +18,7 @@ function ensureNative() {
       const error = MISSING_HOST.test(reason) ? "native_host_missing" : "native_host_disconnected";
       for (const pending of native.pending.values()) { clearTimeout(pending.timer); pending.resolve({ ok: false, error }); }
       native.pending.clear(); native.port = null; native.capabilities.clear(); native.infoPromise = null;
+      try { onConnectionReset(error); } catch (_) {}
       const message = { type: "native.disconnected", error };
       api.runtime.sendMessage(message).catch?.(() => {});
       notifyWorkspaceMessage(message);

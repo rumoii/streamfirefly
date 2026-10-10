@@ -34,7 +34,7 @@ function trackDownloadBadge(task) { const contextId = downloadBadge.apply(task);
 const native = createNative(api, workspace.notifyWorkspaceMessage, message => {
   if (message.type === "task.progress") trackDownloadBadge(message.task);
   if (message.type === "task.deleted") { const contextId = downloadBadge.remove(message.id); if (contextId) resources.refreshBadgeForContext(contextId); }
-});
+}, resetNativeInit);
 const { nativeRequestPromise, nativeInfo } = native;
 // A fresh install opens the settings page, which guides the one-click helper installation.
 api.runtime.onInstalled?.addListener(details => { if (details?.reason === "install") api.runtime.openOptionsPage()?.catch?.(() => {}); });
@@ -189,14 +189,35 @@ function seedDownloadBadge() {
   nativeRequestPromise("task.list").then(result => { if (!result?.ok) throw new Error(result?.error || "task_list_failed"); for (const task of result.tasks || []) trackDownloadBadge(task); }).catch(() => { downloadBadgeSeeded = false; });
 }
 
+// task.list can trigger recovery on the helper, so it must not run before the user's
+// network policy is configured. Concurrent callers share one initialization; a settings
+// change re-configures, and a disconnect resets everything so the next connection starts over.
+let nativeInitPromise = null;
+let configuredNetwork = null;
+function resetNativeInit() {
+  nativeInitPromise = null;
+  configuredNetwork = null;
+  downloadBadgeSeeded = false;
+}
 async function ensureNativeConfigured() {
   await settings.ready;
-  const info = await nativeInfo();
-  if (!info.ok) return info;
-  seedDownloadBadge();
   const current = settings.get();
-  const configured = await nativeRequestPromise("network.configure", { mode: current.proxyMode, proxyUrl: current.proxyUrl });
-  return configured?.ok ? info : configured;
+  const wanted = { mode: current.proxyMode, proxyUrl: current.proxyUrl };
+  if (configuredNetwork && (configuredNetwork.mode !== wanted.mode || configuredNetwork.proxyUrl !== wanted.proxyUrl)) nativeInitPromise = null;
+  if (nativeInitPromise) return nativeInitPromise;
+  const initialization = (async () => {
+    const info = await nativeInfo();
+    if (!info.ok) return info;
+    const configured = await nativeRequestPromise("network.configure", wanted);
+    if (!configured?.ok) return configured;
+    configuredNetwork = wanted;
+    seedDownloadBadge();
+    return info;
+  })();
+  nativeInitPromise = initialization;
+  const result = await initialization;
+  if (!result.ok && nativeInitPromise === initialization) nativeInitPromise = null;
+  return result;
 }
 
 api.runtime.onMessage.addListener((message, sender, sendResponse) => {
