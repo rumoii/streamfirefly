@@ -30,7 +30,7 @@ StreamFirefly ships in two editions built from the same source:
 
 - Finds media URLs in network requests, response types, media elements, JSON/text bodies and inline scripts, and parses HLS manifests that pages build in memory through POST, Blob or script. Manifests that loaded before StreamFirefly was opened are picked up from the page's resource timing when you open it.
 - Downloads plain files over 1–16 parallel Range connections and resumes each part after a pause. Falls back to a single connection when the server does not support ranges.
-- For HLS, choose the quality, external audio, subtitles and a time or segment range. Standard AES-128 is supported. Streams are merged without re-encoding; audio-only streams are saved as M4A.
+- For HLS, choose the quality, external audio, subtitles and a time or segment range. Standard AES-128 is supported. Streams are merged without re-encoding; audio-only streams are saved as M4A. The parser page can preview the selected range before downloading.
 - Records HLS live streams, with manual start, pause and stop.
 - Downloads DASH on demand (experimental): one video and one audio track, saved as MP4 or MKV.
 - Queues tasks in order and runs at most two at a time. Recoverable tasks continue automatically after the helper restarts.

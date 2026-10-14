@@ -209,8 +209,11 @@ a.button { text-decoration: none; }
 .range-tabs { margin: 14px 16px; }
 .range-body { padding: 0 16px 18px; }
 .timeline { height: 50px; display: flex; gap: 2px; align-items: stretch; padding: 10px; border-radius: var(--sf-radius-lg); background: var(--sf-surface-3); overflow: hidden; }
-.timeline i { min-width: 2px; border-radius: 2px; background: var(--sf-border-strong); }
+.timeline i { position: relative; min-width: 2px; border-radius: 2px; background: var(--sf-border-strong); }
 .timeline i.selected { background: var(--sf-accent); }
+/* Typed start/end times in time mode; the timeline padding leaves room above and below the blocks. */
+.timeline-marker { position: absolute; top: -6px; bottom: -6px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--sf-text); }
+.timeline-scale { margin-top: 6px; display: flex; justify-content: space-between; gap: 8px; color: var(--sf-text-3); font-size: var(--sf-text-xs); font-variant-numeric: tabular-nums; }
 .range-inputs { margin-top: 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .range-inputs label span { display: block; margin-bottom: 5px; color: var(--sf-text-2); font-size: var(--sf-text-sm); }
 .range-summary { margin: 16px 0 0; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -230,6 +233,18 @@ a.button { text-decoration: none; }
 .dash-selection { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; padding: 20px; margin: 0; min-width: 0; }
 .dash-selection > .field { min-width: 0; }
 .dash-loading { min-height: 200px; }
+
+/* HLS selection preview player. */
+.selection-preview { margin-top: 14px; display: grid; gap: 12px; scroll-margin-bottom: 120px; }
+.selection-preview > .status-banner { margin: 0; }
+.selection-preview .preview-play:disabled { cursor: not-allowed; opacity: .55; }
+.selection-preview .preview-play:disabled:hover span { transform: none; background: rgba(255, 255, 255, .16); }
+.selection-preview .expanded-preview video { max-height: 320px; }
+.preview-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.preview-controls input[type="range"] { width: 100%; margin: 0; accent-color: var(--sf-accent); }
+.preview-seek { flex: 1 1 180px; min-width: 120px; display: flex; }
+.preview-time { color: var(--sf-text-2); font-size: var(--sf-text-sm); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.preview-volume { width: 90px; display: flex; }
 
 /* Downloads: one row per task, details expand below the row. */
 .downloads-page { min-height: 0; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--sf-border); border-radius: var(--sf-radius-lg); background: var(--sf-surface); }

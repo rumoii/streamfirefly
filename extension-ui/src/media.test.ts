@@ -1,4 +1,4 @@
-import { betterAlternative, chooseHlsContainer, defaultAudio, defaultVariant, deriveMediaPlaylist, filterCandidates, focusedCandidateIds, hlsEncryptionMethods, isBlobCandidate, parseHls, segmentRangeForTime, sortCandidates, validateHlsKeyOverride } from "./media";
+import { betterAlternative, chooseHlsContainer, defaultAudio, defaultVariant, deriveMediaPlaylist, filterCandidates, focusedCandidateIds, hlsEncryptionMethods, isBlobCandidate, parseHls, segmentRangeForTime, sortCandidates, validateHlsKeyOverride, validateHlsRange } from "./media";
 import type { MediaCandidate } from "./types";
 
 const masterText = `#EXTM3U
@@ -211,4 +211,24 @@ test("puts covered resources first after direct downloads and finds better copie
   expect(betterAlternative(blob, [blob, hls, bare, large])).toEqual({ candidate: large, reason: "resolution" });
   expect(betterAlternative(large, [blob, hls, large])).toBeNull();
   expect(betterAlternative(bare, [bare, hls, large])).toBeNull();
+});
+
+test("rejects invalid derived segment ranges", () => {
+  const manifest = parseHls(`#EXTM3U\n#EXTINF:5,\n1.ts\n#EXTINF:5,\n2.ts\n#EXTINF:5,\n3.ts\n#EXT-X-ENDLIST`, "https://media.example/v/index.m3u8");
+  expect(() => deriveMediaPlaylist(manifest, Number.NaN, 1)).toThrow("切片范围无效");
+  expect(() => deriveMediaPlaylist(manifest, 2, 1)).toThrow("切片范围无效");
+  const derived = deriveMediaPlaylist(manifest, 5, 6);
+  expect([derived.first, derived.last]).toEqual([2, 2]);
+});
+
+test("validates range inputs before building a selection", () => {
+  const manifest = parseHls(`#EXTM3U\n#EXTINF:5,\n1.ts\n#EXTINF:5,\n2.ts\n#EXT-X-ENDLIST`, "https://media.example/v/index.m3u8");
+  expect(validateHlsRange(manifest, "all", { startTime: Number.NaN, endTime: 0, first: 0, last: 1 })).toBe("");
+  expect(validateHlsRange(manifest, "time", { startTime: Number.NaN, endTime: 5, first: 0, last: 1 })).toContain("有效的时间");
+  expect(validateHlsRange(manifest, "time", { startTime: 5, endTime: 1, first: 0, last: 1 })).toContain("开始时间");
+  expect(validateHlsRange(manifest, "time", { startTime: -1, endTime: 5, first: 0, last: 1 })).toContain("负数");
+  expect(validateHlsRange(manifest, "segment", { startTime: 0, endTime: 5, first: 0.5, last: 1 })).toContain("整数");
+  expect(validateHlsRange(manifest, "segment", { startTime: 0, endTime: 5, first: 2, last: 1 })).toContain("不能晚于");
+  expect(validateHlsRange(manifest, "segment", { startTime: 0, endTime: 5, first: 0, last: 1 })).toBe("");
+  expect(validateHlsRange(null, "time", { startTime: Number.NaN, endTime: 0, first: 0, last: 0 })).toBe("");
 });

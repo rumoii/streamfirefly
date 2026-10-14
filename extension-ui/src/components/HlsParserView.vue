@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import type { MediaCandidate, UiContext } from "../types";
-import { chooseHlsContainer, defaultAudio, defaultVariant, deriveMediaPlaylist, hlsEncryptionMethods, parseHls, segmentRangeForTime, validateHlsKeyOverride, type HlsKeyOverrideKind, type HlsManifest, type HlsTrack } from "../media";
+import { chooseHlsContainer, defaultAudio, defaultVariant, deriveMediaPlaylist, hlsEncryptionMethods, parseHls, segmentRangeForTime, validateHlsKeyOverride, validateHlsRange, type HlsKeyOverrideKind, type HlsManifest, type HlsTrack } from "../media";
 import { formatDuration } from "../format";
 import { extensionApi, sendMessage } from "../api";
 import { humanError } from "../store";
-import { buildHlsPlan } from "../download-plan";
+import { buildHlsPlan, captureHlsSelection, planSelectionFor, type HlsSelectionSnapshot } from "../download-plan";
+import HlsSelectionPreview from "./HlsSelectionPreview.vue";
 import { createDownload } from "../download-client";
 import KeyCandidates from "../features/configuration/KeyCandidates.vue";
 import SfIcon from "../ui/SfIcon.vue";
@@ -41,31 +42,62 @@ const subtitleTracks = computed(() => (master.value?.tracks || []).filter(item =
 const actualRange = computed(() => {
   const manifest = videoManifest.value;
   if (!manifest?.segments.length || manifest.live) return null;
-  const first = rangeMode.value === "all" ? 0 : rangeMode.value === "time" ? segmentRangeForTime(manifest, range.startTime, range.endTime)[0] : range.first;
-  const last = rangeMode.value === "all" ? manifest.segments.length - 1 : rangeMode.value === "time" ? segmentRangeForTime(manifest, range.startTime, range.endTime)[1] : range.last;
-  const derived = deriveMediaPlaylist(manifest, first, last);
-  return { ...derived, count: derived.last - derived.first + 1 };
+  try {
+    const first = rangeMode.value === "all" ? 0 : rangeMode.value === "time" ? segmentRangeForTime(manifest, range.startTime, range.endTime)[0] : range.first;
+    const last = rangeMode.value === "all" ? manifest.segments.length - 1 : rangeMode.value === "time" ? segmentRangeForTime(manifest, range.startTime, range.endTime)[1] : range.last;
+    const derived = deriveMediaPlaylist(manifest, first, last);
+    return { ...derived, count: derived.last - derived.first + 1 };
+  } catch { return null; }
 });
+const rangeError = computed(() => (videoManifest.value && !isLive.value ? validateHlsRange(videoManifest.value, rangeMode.value, { startTime: range.startTime, endTime: range.endTime, first: range.first, last: range.last }) : ""));
 const advancedSupported = computed(() => props.capabilities.includes("hls-selection-v1"));
 const keyOverrideSupported = computed(() => props.capabilities.includes("hls-key-override-v1"));
 const encryptionMethods = computed(() => hlsEncryptionMethods(videoManifest.value));
 const unsupportedEncryption = computed(() => encryptionMethods.value.find(method => method !== "AES-128") || "");
 const unsupportedLiveFeature = computed(() => videoManifest.value?.hasDrmKeyFormat ? "此直播使用 DRM 密钥格式，流萤不会尝试绕过。" : videoManifest.value?.hasLowLatencyParts ? "此直播使用 LL-HLS Part，Beta 3 暂不支持录制。" : "");
 const keyError = computed(() => keyMode.value === "manual" ? validateHlsKeyOverride(keyForm.kind, keyForm.value, keyForm.iv) : "");
+const timelineSegments = computed(() => (videoManifest.value?.segments || []).slice(0, 160));
+// In time mode, marks the typed start and end inside the segment blocks they fall in, so the snap to whole segments is visible.
+const timeMarkers = computed(() => {
+  const segments = videoManifest.value?.segments;
+  if (rangeMode.value !== "time" || !segments?.length || rangeError.value) return [];
+  const duration = videoManifest.value!.duration;
+  return ([["start", range.startTime], ["end", range.endTime]] as const).map(([edge, value]) => {
+    const time = Math.min(Math.max(value, 0), duration);
+    const segment = segments.find(item => edge === "start" ? time < item.end : time <= item.end) || segments[segments.length - 1];
+    const offset = segment.duration > 0 ? Math.min(100, Math.max(0, (time - segment.start) / segment.duration * 100)) : 0;
+    return { edge, index: segment.index, offset };
+  });
+});
+const previewSnapshot = ref<HlsSelectionSnapshot | null>(null);
+watch([selectedVariantId, selectedAudioId, rangeMode, () => range.startTime, () => range.endTime, () => range.first, () => range.last, keyMode, () => keyForm.kind, () => keyForm.value, () => keyForm.iv, videoManifest], () => { previewSnapshot.value = null; });
 
-async function fetchText(url: string): Promise<{ text: string; url: string }> {
+function startPreview() {
+  if (!videoManifest.value || isLive.value || rangeError.value || loading.value) return;
+  try {
+    error.value = "";
+    previewSnapshot.value = captureSelectionNow();
+  } catch (reason: any) { error.value = humanError(reason?.message); }
+}
+
+async function fetchText(url: string, restrictOrigin = false): Promise<{ text: string; url: string }> {
   if (!extensionApi()?.runtime?.sendMessage) return previewManifest(url);
-  const result: any = await sendMessage({ type: "media.fetchText", tabId: props.context.sourceTabId, id: props.candidate.id, url });
-  if (!result?.ok) throw new Error(result?.error || "media_fetch_failed");
+  const result: any = await sendMessage({ type: "media.fetchText", tabId: props.context.sourceTabId, id: props.candidate.id, url, ...(restrictOrigin ? { restrictOrigin: true } : {}) });
+  if (!result?.ok) {
+    if (restrictOrigin && (result?.status === 401 || result?.status === 403) && new URL(url).origin !== new URL(props.candidate.url).origin) throw new Error("跨域音轨请求被拒绝；预览不会转发来源凭据，可改用下载。");
+    throw new Error(result?.error || "media_fetch_failed");
+  }
   return { text: result.text, url: result.url || url };
 }
 
-async function loadTrack(track: HlsTrack): Promise<HlsManifest> {
+async function loadTrack(track: HlsTrack, options: { restrictOrigin?: boolean } = {}): Promise<HlsManifest> {
   if (!track.uri) throw new Error("轨道没有清单地址");
-  if (trackManifests.has(track.id)) return trackManifests.get(track.id)!;
-  const response = await fetchText(track.uri);
+  const restrictOrigin = options.restrictOrigin === true;
+  const cacheKey = JSON.stringify([track.id, track.uri, restrictOrigin]);
+  if (trackManifests.has(cacheKey)) return trackManifests.get(cacheKey)!;
+  const response = await fetchText(track.uri, restrictOrigin);
   const parsed = parseHls(response.text, response.url);
-  trackManifests.set(track.id, parsed);
+  trackManifests.set(cacheKey, parsed);
   return parsed;
 }
 
@@ -98,11 +130,11 @@ function resetRange() {
 
 watch(selectedVariantId, () => { void loadVariant(); });
 watch(() => [range.startTime, range.endTime], () => {
-  if (rangeMode.value !== "time" || !videoManifest.value) return;
+  if (rangeMode.value !== "time" || !videoManifest.value || rangeError.value) return;
   [range.first, range.last] = segmentRangeForTime(videoManifest.value, range.startTime, range.endTime);
 });
 watch(() => [range.first, range.last], () => {
-  if (rangeMode.value !== "segment" || !videoManifest.value?.segments.length) return;
+  if (rangeMode.value !== "segment" || !videoManifest.value?.segments.length || rangeError.value) return;
   const first = videoManifest.value.segments[Math.max(0, Math.min(range.first, videoManifest.value.segments.length - 1))];
   const last = videoManifest.value.segments[Math.max(first.index, Math.min(range.last, videoManifest.value.segments.length - 1))];
   range.startTime = first.start; range.endTime = last.end;
@@ -136,21 +168,32 @@ async function createTask() {
   if (unsupportedLiveFeature.value) { error.value = unsupportedLiveFeature.value; return; }
   if (unsupportedEncryption.value) { error.value = `暂不支持 ${unsupportedEncryption.value} 加密；流萤不会绕过 DRM。`; return; }
   if (keyMode.value === "manual" && (!keyOverrideSupported.value || keyError.value)) { error.value = keyError.value || "当前本地助手不支持自定义密钥"; return; }
+  if (rangeError.value) { error.value = rangeError.value; return; }
   form.busy = true; error.value = "";
   try {
-    const audio = audioTracks.value.find(item => item.id === selectedAudioId.value);
-    const audioManifest = audio ? await loadTrack(audio) : null;
-    const selectedTracks = selectedSubtitleIds.value
-      .map(id => subtitleTracks.value.find(item => item.id === id))
-      .filter((track): track is HlsTrack => Boolean(track));
-    const subtitles = await Promise.all(selectedTracks.map(async track => ({ id: track.id, language: track.language || null, label: track.name, manifest: await loadTrack(track) })));
-    const hlsPlan = await buildHlsPlan({ video: videoManifest.value, audio: audioManifest, subtitles, container: form.container, first: actualRange.value?.first, last: actualRange.value?.last, requestedStart: range.startTime, requestedEnd: range.endTime, keyOverride: keyMode.value === "manual" ? { kind: keyForm.kind, value: keyForm.value.trim(), iv: keyForm.iv.trim() || null } : null });
-    const task = await createDownload({ ...basePayload(), fileName: form.name.trim(), saveDir: props.saveDir || null, hlsPlan }, requestId.value);
-    const result = { task };
+    const snapshot = captureSelectionNow();
+    const audioManifest = snapshot.audioTrack ? await loadTrack(snapshot.audioTrack) : null;
+    const subtitles = await Promise.all(snapshot.subtitleTracks.map(async track => ({ id: track.id, language: track.language || null, label: track.name, manifest: await loadTrack(track) })));
+    const hlsPlan = await buildHlsPlan(planSelectionFor(snapshot, { audioManifest, subtitles, container: snapshot.output.container }));
+    const task = await createDownload({ ...basePayload(), fileName: snapshot.output.fileName, saveDir: snapshot.output.saveDir, hlsPlan }, requestId.value);
     requestId.value = crypto.randomUUID();
-    emit("created", `HLS 任务已创建：${result.task?.title || form.name}`);
+    emit("created", `HLS 任务已创建：${task?.title || snapshot.output.fileName}`);
   } catch (reason: any) { error.value = humanError(reason?.message); }
   finally { form.busy = false; }
+}
+
+function captureSelectionNow() {
+  return captureHlsSelection({
+    source: { candidateId: props.candidate.id, candidateUrl: props.candidate.url, sourceContextId: props.context.sourceContextId, sourceTabId: props.context.sourceTabId, requestHeaders: props.candidate.requestHeaders || {} },
+    video: videoManifest.value!,
+    variant: selectedVariant.value,
+    audioTrack: audioTracks.value.find(item => item.id === selectedAudioId.value) || null,
+    subtitleTracks: subtitleTracks.value.filter(item => selectedSubtitleIds.value.includes(item.id)),
+    rangeMode: rangeMode.value,
+    range: { startTime: range.startTime, endTime: range.endTime, first: range.first, last: range.last },
+    keyOverride: keyMode.value === "manual" ? { kind: keyForm.kind, value: keyForm.value.trim(), iv: keyForm.iv.trim() || null } : null,
+    output: { fileName: form.name.trim(), saveDir: props.saveDir || null, container: form.container, extension: form.extension }
+  });
 }
 
 onMounted(initialize);
@@ -186,11 +229,14 @@ function previewManifest(url: string) {
       <section class="panel parser-range">
         <div class="panel-title"><div><h3>切片与时间范围</h3><p>范围按完整切片边界执行</p></div><span v-if="videoManifest" class="tag">{{ videoManifest.segments.length }} 个切片</span></div>
         <div v-if="!isLive" class="range-tabs"><button v-for="mode in [['all','全部'],['time','按时间'],['segment','按切片']]" :key="mode[0]" type="button" :class="{ active: rangeMode === mode[0] }" @click="rangeMode = mode[0] as any">{{ mode[1] }}</button></div>
-        <div v-if="videoManifest && !isLive" class="range-body">
-          <div class="timeline"><i v-for="segment in videoManifest.segments.slice(0, 160)" :key="segment.index" :class="{ selected: actualRange && segment.index >= actualRange.first && segment.index <= actualRange.last }" :style="{ flexGrow: Math.max(.2, segment.duration) }"></i></div>
+        <div v-if="videoManifest?.segments.length && !isLive" class="range-body">
+          <div class="timeline"><i v-for="segment in timelineSegments" :key="segment.index" :class="{ selected: actualRange && segment.index >= actualRange.first && segment.index <= actualRange.last }" :style="{ flexGrow: Math.max(.2, segment.duration) }"><b v-for="marker in timeMarkers.filter(item => item.index === segment.index)" :key="marker.edge" class="timeline-marker" :style="{ left: `${marker.offset}%` }"></b></i></div>
+          <div class="timeline-scale"><span>00:00</span><span>{{ formatDuration(timelineSegments[timelineSegments.length - 1].end) }}{{ timelineSegments.length < videoManifest.segments.length ? ` · 仅显示前 ${timelineSegments.length} 个切片` : '' }}</span></div>
+          <HlsSelectionPreview :snapshot="previewSnapshot" :load-track="loadTrack" :poster="candidate.poster || null" :can-start="!(loading || form.busy || rangeError || unsupportedEncryption || keyError)" @start="startPreview" />
           <div v-if="rangeMode === 'time'" class="range-inputs"><label><span>开始时间（秒）</span><input v-model.number="range.startTime" class="control" type="number" min="0" :max="videoManifest.duration" step="0.1"></label><label><span>结束时间（秒）</span><input v-model.number="range.endTime" class="control" type="number" :min="range.startTime" :max="videoManifest.duration" step="0.1"></label></div>
           <div v-if="rangeMode === 'segment'" class="range-inputs"><label><span>起始切片</span><input v-model.number="range.first" class="control" type="number" min="0" :max="videoManifest.segments.length - 1"></label><label><span>结束切片</span><input v-model.number="range.last" class="control" type="number" :min="range.first" :max="videoManifest.segments.length - 1"></label></div>
           <dl v-if="actualRange" class="range-summary"><div><dt>清单总时长</dt><dd>{{ formatDuration(videoManifest.duration) }}</dd></div><div><dt>实际下载范围</dt><dd>{{ formatDuration(actualRange.actualStart) }} — {{ formatDuration(actualRange.actualEnd) }}</dd></div><div><dt>实际切片</dt><dd>#{{ actualRange.first }} — #{{ actualRange.last }}（{{ actualRange.count }} 个）</dd></div><div><dt>预计时长</dt><dd>{{ formatDuration(actualRange.actualEnd - actualRange.actualStart) }}</dd></div></dl>
+          <p v-if="rangeError" class="inline-error">{{ rangeError }}</p>
         </div>
         <div v-else-if="isLive" class="empty-state"><span><SfIcon name="broadcast" :size="22" /></span><h3>直播录制模式</h3><p>当前窗口已有 {{ videoManifest?.segments.length || 0 }} 个切片；开始后会自动轮询并去重保存。</p></div>
         <div v-else-if="!loading" class="empty-state"><span><SfIcon name="alert-triangle" :size="22" /></span><h3>没有可用切片</h3><p>此清单没有可下载的完整媒体切片。</p></div>
@@ -214,7 +260,7 @@ function previewManifest(url: string) {
     <section class="download-summary panel">
       <div><span>输出文件</span><div class="filename"><input v-model="form.name" maxlength="100"><b>.{{ form.extension }}</b></div><small>{{ saveDir || '系统默认下载目录' }}</small></div>
       <div class="summary-pills"><span>{{ selectedVariant?.height ? `${selectedVariant.height}P` : '原始画质' }}</span><span>{{ audioTracks.find(item => item.id === selectedAudioId)?.name || '内嵌音轨' }}</span><span>{{ selectedSubtitleIds.length }} 条字幕</span><span>{{ form.container.toUpperCase() }} 无转码</span></div>
-      <button class="button primary large" type="button" :disabled="connected === false || loading || !videoManifest || !advancedSupported || (isLive && !liveSupported) || Boolean(unsupportedLiveFeature) || Boolean(unsupportedEncryption) || Boolean(keyError) || form.busy || !form.name.trim()" @click="createTask">{{ form.busy ? '正在创建任务…' : isLive ? '开始录制直播' : '开始可靠下载' }}</button>
+      <button class="button primary large" type="button" :disabled="connected === false || loading || !videoManifest || !advancedSupported || (isLive && !liveSupported) || Boolean(unsupportedLiveFeature) || Boolean(unsupportedEncryption) || Boolean(keyError) || Boolean(rangeError) || form.busy || !form.name.trim()" @click="createTask">{{ form.busy ? '正在创建任务…' : isLive ? '开始录制直播' : '开始可靠下载' }}</button>
     </section>
   </section>
 </template>

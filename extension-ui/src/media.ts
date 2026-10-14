@@ -202,11 +202,29 @@ export function segmentRangeForTime(manifest: HlsManifest, start: number, end: n
   return [from, Math.max(from, last < 0 ? manifest.segments.length - 1 : last)];
 }
 
+export function validateHlsRange(manifest: HlsManifest | null, mode: "all" | "time" | "segment", values: { startTime: number; endTime: number; first: number; last: number }): string {
+  if (!manifest || !manifest.segments.length) return "";
+  if (mode === "time") {
+    if (!Number.isFinite(values.startTime) || !Number.isFinite(values.endTime)) return "请输入有效的时间范围";
+    if (values.startTime < 0 || values.endTime < 0) return "时间范围不能为负数";
+    if (values.startTime > values.endTime) return "开始时间不能晚于结束时间";
+    return "";
+  }
+  if (mode === "segment") {
+    if (!Number.isInteger(values.first) || !Number.isInteger(values.last)) return "切片序号必须是整数";
+    if (values.first < 0 || values.last < 0) return "切片序号不能为负数";
+    if (values.first > values.last) return "起始切片不能晚于结束切片";
+    return "";
+  }
+  return "";
+}
+
 function quote(value: string): string { return `"${value.replaceAll('"', "%22")}"`; }
 
 export function deriveMediaPlaylist(manifest: HlsManifest, first: number, last: number): { text: string; baseUrl: string; first: number; last: number; actualStart: number; actualEnd: number } {
   if (manifest.live) throw new Error("直播清单请使用录制模式");
   if (!manifest.segments.length) throw new Error("清单没有可下载切片");
+  if (!Number.isInteger(first) || !Number.isInteger(last) || first < 0 || last < first) throw new Error("切片范围无效");
   const from = Math.max(0, Math.min(first, manifest.segments.length - 1));
   const to = Math.max(from, Math.min(last, manifest.segments.length - 1));
   const selected = manifest.segments.slice(from, to + 1);

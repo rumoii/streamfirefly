@@ -1,4 +1,4 @@
-import { chooseHlsContainer, defaultAudio, defaultVariant, deriveMediaPlaylist, hlsEncryptionMethods, parseHls, segmentRangeForTime, validateHlsKeyOverride, type HlsKeyOverrideKind, type HlsManifest } from "./media";
+import { chooseHlsContainer, defaultAudio, defaultVariant, deriveMediaPlaylist, hlsEncryptionMethods, parseHls, segmentRangeForTime, validateHlsKeyOverride, validateHlsRange, type HlsKeyOverrideKind, type HlsManifest, type HlsTrack, type HlsVariant } from "./media";
 import type { MediaCandidate } from "./types";
 
 export type ManifestLoader = (url: string) => Promise<{ text: string; url: string }>;
@@ -13,6 +13,66 @@ export interface PlanSelection {
   requestedStart?: number;
   requestedEnd?: number;
   keyOverride?: KeyOverride | null;
+}
+
+export interface HlsSelectionSnapshot {
+  source: { candidateId: string; candidateUrl: string; sourceContextId: string; sourceTabId: number; requestHeaders: Record<string, string> };
+  video: HlsManifest;
+  variant: HlsVariant | null;
+  audioTrack: HlsTrack | null;
+  subtitleTracks: HlsTrack[];
+  rangeMode: "all" | "time" | "segment";
+  range: { startTime: number; endTime: number; first: number; last: number };
+  selection: { first: number; last: number; actualStart: number; actualEnd: number };
+  keyOverride: KeyOverride | null;
+  output: { fileName: string; saveDir: string | null; container: string; extension: string };
+}
+
+export function captureHlsSelection(input: {
+  source: HlsSelectionSnapshot["source"];
+  video: HlsManifest;
+  variant: HlsVariant | null;
+  audioTrack: HlsTrack | null;
+  subtitleTracks: HlsTrack[];
+  rangeMode: HlsSelectionSnapshot["rangeMode"];
+  range: HlsSelectionSnapshot["range"];
+  keyOverride: KeyOverride | null;
+  output: HlsSelectionSnapshot["output"];
+}): HlsSelectionSnapshot {
+  const rangeError = validateHlsRange(input.video, input.rangeMode, input.range);
+  if (rangeError) throw new Error(rangeError);
+  const common = {
+    source: { ...input.source, requestHeaders: { ...input.source.requestHeaders } },
+    video: input.video,
+    variant: input.variant,
+    audioTrack: input.audioTrack,
+    subtitleTracks: [...input.subtitleTracks],
+    rangeMode: input.rangeMode,
+    range: { ...input.range },
+    keyOverride: input.keyOverride ? { ...input.keyOverride } : null,
+    output: { ...input.output }
+  };
+  if (input.video.live) {
+    return { ...common, selection: { first: 0, last: Math.max(0, input.video.segments.length - 1), actualStart: 0, actualEnd: 0 } };
+  }
+  const first = input.rangeMode === "all" ? 0 : input.rangeMode === "time" ? segmentRangeForTime(input.video, input.range.startTime, input.range.endTime)[0] : input.range.first;
+  const last = input.rangeMode === "all" ? input.video.segments.length - 1 : input.rangeMode === "time" ? segmentRangeForTime(input.video, input.range.startTime, input.range.endTime)[1] : input.range.last;
+  const derived = deriveMediaPlaylist(input.video, first, last);
+  return { ...common, selection: { first: derived.first, last: derived.last, actualStart: derived.actualStart, actualEnd: derived.actualEnd } };
+}
+
+export function planSelectionFor(snapshot: HlsSelectionSnapshot, options: { audioManifest?: HlsManifest | null; subtitles?: PlanSelection["subtitles"]; container?: string } = {}): PlanSelection {
+  return {
+    video: snapshot.video,
+    audio: options.audioManifest ?? null,
+    subtitles: options.subtitles,
+    container: options.container ?? snapshot.output.container,
+    first: snapshot.selection.first,
+    last: snapshot.selection.last,
+    requestedStart: snapshot.range.startTime,
+    requestedEnd: snapshot.range.endTime,
+    keyOverride: snapshot.keyOverride
+  };
 }
 
 function validateManifest(manifest: HlsManifest) {

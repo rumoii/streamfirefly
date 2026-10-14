@@ -435,7 +435,7 @@ async function readBoundedText(response, maxBytes) {
 }
 
 /** Resolves a candidate-owned http(s) request with the page's Referer, Origin and Authorization. */
-async function prepareOwnedFetch(tabId, id, requestedUrl) {
+async function prepareOwnedFetch(tabId, id, requestedUrl, options = {}) {
   const candidate = await candidateFor(tabId, id);
   const owner = Array.isArray(candidate) ? null : candidate;
   if (!owner) return { ok: false, error: "media_candidate_not_found" };
@@ -444,26 +444,29 @@ async function prepareOwnedFetch(tabId, id, requestedUrl) {
   catch (_) { return { ok: false, error: "media_url_invalid" }; }
   if (!/^https?:$/.test(url.protocol)) return { ok: false, error: "media_url_unsupported" };
   if (blockedSite(url.href) || blockedSite(owner.pageUrl)) return { ok: false, error: "site_blocked" };
+  let ownerOrigin;
+  try { ownerOrigin = new URL(owner.url).origin; } catch (_) {}
+  const allowCredentials = options.restrictOrigin !== true || url.origin === ownerOrigin;
   const headers = new Headers();
   const pageHeaders = {};
   for (const [name, value] of Object.entries(owner.requestHeaders || {})) {
     const key = name.toLowerCase();
     if (typeof value !== "string" || !value) continue;
-    if (key === "authorization") headers.set(name, value);
-    else if (["origin", "referer"].includes(key)) pageHeaders[key] = value;
+    if (key === "authorization" && allowCredentials) headers.set(name, value);
+    else if (["origin", "referer"].includes(key) && allowCredentials) pageHeaders[key] = value;
   }
-  if (!pageHeaders.referer && /^https?:/i.test(owner.referer || owner.pageUrl || "")) pageHeaders.referer = owner.referer || owner.pageUrl;
-  return { ok: true, owner, url, headers, pageHeaders };
+  if (allowCredentials && !pageHeaders.referer && /^https?:/i.test(owner.referer || owner.pageUrl || "")) pageHeaders.referer = owner.referer || owner.pageUrl;
+  return { ok: true, owner, url, headers, pageHeaders, credentials: allowCredentials ? "include" : "omit" };
 }
 
-async function fetchMediaText(tabId, id, requestedUrl) {
-  const prepared = await prepareOwnedFetch(tabId, id, requestedUrl);
+async function fetchMediaText(tabId, id, requestedUrl, options = {}) {
+  const prepared = await prepareOwnedFetch(tabId, id, requestedUrl, options);
   if (!prepared.ok) return prepared;
-  const { url, headers, pageHeaders } = prepared;
+  const { url, headers, pageHeaders, credentials } = prepared;
   // Fetch drops Referer and Origin as forbidden headers, so a short-lived session rule supplies them.
-  const removeRule = await applyFetchHeaders(url, pageHeaders);
+  const removeRule = await applyFetchHeaders(url, pageHeaders, options.restrictOrigin === true);
   try {
-    const response = await fetch(url.href, { headers, credentials: "include", redirect: "follow" });
+    const response = await fetch(url.href, { headers, credentials, redirect: "follow" });
     if (!response.ok) return { ok: false, error: "media_fetch_failed", status: response.status };
     let text;
     try { text = await readBoundedText(response, 4 * 1024 * 1024); }
@@ -518,12 +521,13 @@ async function probeMediaSize(tabId, sourceContextId, id) {
 }
 
 let nextFetchRuleId = 2146000000;
-async function applyFetchHeaders(url, pageHeaders) {
+async function applyFetchHeaders(url, pageHeaders, restrictOrigin = false) {
   const requestHeaders = Object.entries(pageHeaders).map(([header, value]) => ({ header: header.replace(/^(.)/, match => match.toUpperCase()), operation: "set", value }));
   if (!requestHeaders.length || !api.declarativeNetRequest?.updateSessionRules) return async () => {};
   const id = nextFetchRuleId++;
+  const target = restrictOrigin ? { regexFilter: `^${url.origin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:/|$)` } : { requestDomains: [url.hostname] };
   try {
-    await api.declarativeNetRequest.updateSessionRules({ addRules: [{ id, priority: 2, action: { type: "modifyHeaders", requestHeaders }, condition: { requestDomains: [url.hostname], resourceTypes: ["xmlhttprequest", "other"], tabIds: [-1] } }] });
+    await api.declarativeNetRequest.updateSessionRules({ addRules: [{ id, priority: 2, action: { type: "modifyHeaders", requestHeaders }, condition: { ...target, resourceTypes: ["xmlhttprequest", "other"], tabIds: [-1] } }] });
   } catch (_) { return async () => {}; }
   return async () => { try { await api.declarativeNetRequest.updateSessionRules({ removeRuleIds: [id] }); } catch (_) {} };
 }

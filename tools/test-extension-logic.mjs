@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import assert from 'node:assert/strict';
+import { createPreview } from '../extension/src/preview.js';
 import { buildSync } from 'esbuild';
 import path from 'node:path';
 import vm from 'node:vm';
@@ -257,6 +259,26 @@ if (!manifest.ok || !manifest.text.startsWith('#EXTM3U')) throw new Error(`Bound
 const fetchRule = previewRuleUpdates.find(update => update.addRules?.[0]?.condition?.tabIds?.[0] === -1)?.addRules[0];
 if (!fetchRule || JSON.stringify(fetchRule.condition.requestDomains) !== '["media.example"]' || !fetchRule.action.requestHeaders.some(item => item.header === 'Referer' && item.value === 'https://media.example/page')) throw new Error(`Manifest fetch did not supply the page Referer: ${JSON.stringify(previewRuleUpdates)}`);
 if (!previewRuleUpdates.some(update => update.removeRuleIds?.includes(fetchRule.id))) throw new Error('Manifest fetch header rule was not removed');
+for (const [url, restrictOrigin, auth, credentials] of [
+  ['https://media.example/audio.m3u8', true, 'Bearer preview', 'include'],
+  ['https://cdn.example/audio.m3u8', true, null, 'omit'],
+  ['https://media.example:9443/audio.m3u8', true, null, 'omit'],
+  ['https://cdn.example/audio.m3u8', false, 'Bearer preview', 'include']
+]) {
+  fetchResponse = new Response('#EXTM3U\n#EXTINF:2,\nsegment.ts\n');
+  const beforeRules = previewRuleUpdates.length;
+  const result = await send({ type: 'media.fetchText', tabId: 7, id: video.id, url, ...(restrictOrigin ? { restrictOrigin: true } : {}) });
+  assert.equal(result.ok, true);
+  const request = fetchCalls.at(-1);
+  assert.equal(new Headers(request.init.headers).get('authorization'), auth);
+  assert.equal(request.init.credentials, credentials);
+  if (restrictOrigin && auth) {
+    const rule = previewRuleUpdates.slice(beforeRules).find(update => update.addRules)?.addRules[0];
+    assert.ok(new RegExp(rule.condition.regexFilter).test('https://media.example/audio.m3u8'));
+    assert.equal(new RegExp(rule.condition.regexFilter).test('https://media.example:9443/audio.m3u8'), false);
+  } else if (restrictOrigin) assert.equal(previewRuleUpdates.length, beforeRules);
+}
+console.log('Preview-only manifest credentials and unchanged download defaults passed');
 fetchResponse = new Response('too large', { headers: { 'content-length': String(4 * 1024 * 1024 + 1) } });
 const oversizedManifest = await send({ type: 'media.fetchText', tabId: 7, id: video.id, url: 'https://media.example/large.m3u8' });
 if (oversizedManifest.ok || oversizedManifest.error !== 'media_manifest_too_large') throw new Error(`Oversized manifest was not rejected: ${JSON.stringify(oversizedManifest)}`);
@@ -513,3 +535,87 @@ const cleared = await send({ type: 'extraction.save', payload: { version: 1, rul
 if (!cleared.ok || cleared.value.cleanup.status !== 'complete' || (await send({ type: 'media.candidates', tabId: 8 })).some(item => item.url === extractedUrl)) throw new Error('Extraction save did not clean derived candidates');
 listeners.removed(8); await flush();
 console.log('Trusted extraction routes, real evaluation worker code, independent candidates and cleanup passed');
+
+// Exercise production rule ownership with barriers at the asynchronous browser API.
+{
+  const candidate = { url: 'https://media.example/master.m3u8' };
+  const payload = id => ({ previewSessionId: id, candidateId: 'c1', url: candidate.url, headers: { authorization: `Bearer ${id}` } });
+  const sender = id => ({ tab: { id } });
+  const gate = () => {
+    let entered, release;
+    return { started: new Promise(resolve => { entered = resolve; }), wait: new Promise(resolve => { release = resolve; }), enter: () => entered(), release: () => release() };
+  };
+  const fixture = (lookup = async () => candidate) => {
+    const rules = new Map();
+    const api = { declarativeNetRequest: { updateSessionRules: async update => {
+      for (const id of update.removeRuleIds || []) rules.delete(id);
+      for (const rule of update.addRules || []) rules.set(rule.id, rule);
+    } } };
+    return { rules, api, preview: createPreview(api, lookup) };
+  };
+  {
+    const { rules, api, preview } = fixture();
+    const first = gate(), update = api.declarativeNetRequest.updateSessionRules;
+    api.declarativeNetRequest.updateSessionRules = async change => {
+      await update(change);
+      if (change.addRules?.[0]?.action.requestHeaders[0].value === 'Bearer old') { first.enter(); await first.wait; }
+    };
+    const old = preview.updatePreviewHeaders(payload('old'), sender(7));
+    await first.started;
+    const clearOld = preview.updatePreviewHeaders({ previewSessionId: 'old', action: 'clear' }, sender(7));
+    const next = preview.updatePreviewHeaders(payload('new'), sender(7));
+    await settle();
+    assert.equal(rules.size, 1);
+    // A different tab must remain usable while tab 7 waits on the browser.
+    await preview.updatePreviewHeaders(payload('other'), sender(8));
+    await preview.clearPreviewHeadersForTab(8);
+    first.release();
+    await Promise.all([old, clearOld, next]);
+    await preview.updatePreviewHeaders({ previewSessionId: 'old', action: 'clear' }, sender(7));
+    assert.equal(rules.size, 1);
+    assert.equal([...rules.values()][0].action.requestHeaders[0].value, 'Bearer new');
+    await preview.updatePreviewHeaders({ previewSessionId: 'new', action: 'clear' }, sender(7));
+    await preview.clearPreviewHeadersForTab(7);
+    assert.equal(rules.size, 0);
+  }
+  for (const stage of ['lookup', 'install']) {
+    const barrier = gate();
+    const { rules, api, preview } = fixture(async () => {
+      if (stage === 'lookup') { barrier.enter(); await barrier.wait; }
+      return candidate;
+    });
+    const update = api.declarativeNetRequest.updateSessionRules;
+    api.declarativeNetRequest.updateSessionRules = async change => {
+      await update(change);
+      if (stage === 'install' && change.addRules?.length) { barrier.enter(); await barrier.wait; }
+    };
+    const apply = preview.updatePreviewHeaders(payload('closing'), sender(7));
+    await barrier.started;
+    const close = preview.clearPreviewHeadersForTab(7);
+    barrier.release();
+    assert.equal((await apply).ok, false);
+    await close;
+    assert.equal(rules.size, 0);
+  }
+  {
+    const { rules, api, preview } = fixture();
+    const update = api.declarativeNetRequest.updateSessionRules;
+    let rejectRemoval = true;
+    api.declarativeNetRequest.updateSessionRules = async change => {
+      if (rejectRemoval && change.removeRuleIds?.length) throw new Error('remove failed');
+      await update(change);
+    };
+    await preview.updatePreviewHeaders(payload('retry'), sender(7));
+    await assert.rejects(preview.clearPreviewHeadersForTab(7), /remove failed/);
+    assert.equal(rules.size, 1);
+    rejectRemoval = false;
+    await preview.clearPreviewHeadersForTab(7);
+    assert.equal(rules.size, 0);
+    for (let index = 0; index < 10; index++) {
+      await preview.updatePreviewHeaders(payload(`repeat-${index}`), sender(7));
+      await preview.clearPreviewHeadersForTab(7);
+      assert.equal(rules.size, 0);
+    }
+  }
+  console.log('Preview tab serialization, close barriers, retryable cleanup and repeated sessions passed');
+}

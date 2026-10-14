@@ -10,23 +10,9 @@ import SfMenu, { type MenuItem } from "../ui/SfMenu.vue";
 import SfPopover from "../ui/SfPopover.vue";
 import SfSelect from "../ui/SfSelect.vue";
 import type { IconName } from "../ui/icons";
+import { loadHls, PREVIEW_HLS_CONFIG, type HlsConstructor } from "../hls-loader";
 
 type PreviewState = "idle" | "preparing" | "ready" | "playing" | "failed";
-type HlsConstructor = typeof import("hls.js").default;
-
-let hlsModulePromise: Promise<HlsConstructor> | null = null;
-
-function loadHls(): Promise<HlsConstructor> {
-  if (!hlsModulePromise) {
-    hlsModulePromise = import("hls.js")
-      .then(module => module.default)
-      .catch(error => {
-        hlsModulePromise = null;
-        throw error;
-      });
-  }
-  return hlsModulePromise;
-}
 
 const props = defineProps<{ candidates: MediaCandidate[]; focus?: PageFocus | null; loading: boolean; viewState: ResourceViewState; compact?: boolean; coverOnly?: boolean; suspended?: boolean; connected?: boolean; externalEnabled?: boolean }>();
 const emit = defineEmits<{
@@ -272,7 +258,7 @@ async function preparePreview(item: MediaCandidate) {
       media.load();
       return;
     }
-    hls = new Hls({ enableWorker: true, lowLatencyMode: false, autoStartLoad: true, startPosition: 0, maxBufferLength: 4, maxMaxBufferLength: 8, backBufferLength: 0, maxBufferSize: 10 * 1024 * 1024 });
+    hls = new Hls({ ...PREVIEW_HLS_CONFIG });
     hls.on(Hls.Events.ERROR, (_, data) => handleHlsError(item, data, Hls));
     hls.on(Hls.Events.LEVEL_LOADED, (_, data: any) => reportMetadata(item, { duration: data?.details?.totalduration, live: Boolean(data?.details?.live) }));
     hls.on(Hls.Events.MANIFEST_PARSED, (_, data: any) => {
