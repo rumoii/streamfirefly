@@ -744,7 +744,8 @@ pub fn local_playlist(track: &TrackCheckpoint, track_dir: &Path) -> Result<PathB
             }
             previous_map = segment.map_id.clone();
         }
-        lines.push(format!("#EXTINF:{:.6},{}", segment.duration, segment.title));
+        // Titles come from the remote playlist; FFmpeg treats a lone '\r' in one as a line break.
+        lines.push(format!("#EXTINF:{:.6},", segment.duration));
         lines.push(segment.local_name.replace('\\', "/"));
     }
     lines.push("#EXT-X-ENDLIST".into());
@@ -780,6 +781,23 @@ mod tests {
             parse_media_playlist("video", "video", None, None, &live).unwrap_err(),
             "hls_live_not_supported"
         );
+    }
+
+    #[test]
+    fn local_playlist_drops_remote_segment_titles() {
+        let manifest = PersistedManifest {
+            base_url: "https://media.example/v/index.m3u8".into(),
+            text: "#EXTM3U\n#EXTINF:5,x\rC:/secret.txt\na\n#EXT-X-ENDLIST\n".into(),
+        };
+        let track = parse_media_playlist("video", "video", None, None, &manifest).unwrap();
+        assert!(track.segments[0].title.contains('\r'));
+        let root =
+            std::env::temp_dir().join(format!("streamfirefly-local-playlist-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let playlist = fs::read_to_string(local_playlist(&track, &root).unwrap()).unwrap();
+        fs::remove_dir_all(&root).unwrap();
+        assert!(!playlist.contains('\r') && !playlist.contains("secret"));
+        assert!(playlist.contains("#EXTINF:5.000000,\nsegments/000000.bin\n"));
     }
 
     #[test]

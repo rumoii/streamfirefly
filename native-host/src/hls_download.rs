@@ -405,6 +405,20 @@ pub(crate) fn publish_hls_progress(
     });
 }
 
+/// Opens a local playlist written by `local_playlist`. Segment files keep the extension of
+/// their URL (or `bin` when it has none), which FFmpeg's HLS demuxer rejects by default;
+/// the playlist only lists our own relative files, so the extension checks are lifted.
+fn hls_input_args(playlist: &Path) -> [String; 6] {
+    [
+        "-allowed_extensions".into(),
+        "ALL".into(),
+        "-extension_picky".into(),
+        "0".into(),
+        "-i".into(),
+        playlist.to_string_lossy().into_owned(),
+    ]
+}
+
 pub(crate) fn merge_hls_checkpoint(
     store: &TaskRuntime,
     writer: &Writer,
@@ -449,9 +463,9 @@ pub(crate) fn merge_hls_checkpoint(
             "pipe:1".into(),
             "-nostats".into(),
         ];
-        args.extend(["-i".into(), video_playlist.to_string_lossy().into_owned()]);
+        args.extend(hls_input_args(&video_playlist));
         if let Some(audio) = &audio_playlist {
-            args.extend(["-i".into(), audio.to_string_lossy().into_owned()]);
+            args.extend(hls_input_args(audio));
         }
         // The primary playlist may carry audio only, so its video stream is optional.
         args.extend([
@@ -557,21 +571,22 @@ pub(crate) fn merge_hls_checkpoint(
         });
         let playlist = local_playlist(subtitle, &work_dir.join(&subtitle.id))?;
         let temporary = publish_work_path(Path::new(&path), &task.id);
-        let args = vec![
+        let mut args: Vec<String> = vec![
             "-nostdin".into(),
             "-y".into(),
             "-loglevel".into(),
             "error".into(),
             "-protocol_whitelist".into(),
             "file".into(),
-            "-i".into(),
-            playlist.to_string_lossy().into_owned(),
+        ];
+        args.extend(hls_input_args(&playlist));
+        args.extend([
             "-map".into(),
             "0:s:0".into(),
             "-c:s".into(),
             "webvtt".into(),
             temporary.to_string_lossy().into_owned(),
-        ];
+        ]);
         let start = 90 + ((subtitle_index * 10) / subtitle_count.max(1)) as u8;
         let span = (10 / subtitle_count.max(1)).max(1) as u8;
         match run_ffmpeg_with_progress(

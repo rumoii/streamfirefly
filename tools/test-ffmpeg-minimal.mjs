@@ -38,6 +38,16 @@ function packedAudio(name, codecArgs, format, extension) {
   fixture([...tone, ...codecArgs, '-f', 'segment', '-segment_time', '1', '-segment_format', format, '-segment_list', path.join(dir, 'source.m3u8'), '-segment_list_type', 'm3u8', path.join(dir, `segment-%03d.${extension}`)], `${name} fixture`);
   return localPlaylist(dir, fs.readFileSync(path.join(dir, 'source.m3u8'), 'utf8'));
 }
+/** Renames segments to an extension FFmpeg does not list, as hls.rs does for URLs without one. */
+function renameSegments(playlist, extension) {
+  const dir = path.dirname(playlist);
+  const text = fs.readFileSync(playlist, 'utf8').replace(/^(segment-\d+)\.ts$/gm, (_, stem) => {
+    fs.renameSync(path.join(dir, `${stem}.ts`), path.join(dir, `${stem}.${extension}`));
+    return `${stem}.${extension}`;
+  });
+  fs.writeFileSync(playlist, text);
+  return playlist;
+}
 function localPlaylist(dir, source) {
   const lines = ['#EXTM3U', '#EXT-X-VERSION:7', '#EXT-X-TARGETDURATION:2', '#EXT-X-MEDIA-SEQUENCE:0'];
   const map = source.match(/#EXT-X-MAP:URI="([^"]+)"/);
@@ -53,9 +63,10 @@ function streams(file) {
   assert.ok(Number(probe.format.duration) > 1, `${file} has no duration`);
   return probe.streams.map(stream => `${stream.codec_type}:${stream.codec_name}`).sort().join(',');
 }
+const hlsInput = ['-allowed_extensions', 'ALL', '-extension_picky', '0']; // hls_input_args
 const hlsMerge = (inputs, output) => [ // native-host/src/hls_download.rs
   '-nostdin', '-y', '-loglevel', 'error', '-protocol_whitelist', 'file', '-progress', 'pipe:1', '-nostats',
-  ...inputs.flatMap(input => ['-i', input]), '-map', '0:v:0?', '-map', inputs.length > 1 ? '1:a:0' : '0:a?', '-c', 'copy', output];
+  ...inputs.flatMap(input => [...hlsInput, '-i', input]), '-map', '0:v:0?', '-map', inputs.length > 1 ? '1:a:0' : '0:a?', '-c', 'copy', output];
 const dashMerge = (tracks, output) => [ // native-host/src/dash_download.rs
   '-nostdin', '-y', '-loglevel', 'error', '-progress', 'pipe:1',
   ...tracks.flatMap(([file, offset]) => ['-protocol_whitelist', 'file', '-format_whitelist', 'mov,matroska,webm,mpegts,aac,mp3', '-itsoffset', String(offset), '-i', file]),
@@ -73,6 +84,10 @@ function check(label, args, output, expected) {
 try {
   const tsAvc = hls('ts-avc-aac', [...video, ...tone, '-c:v', 'libx264', ...picture, '-c:a', 'aac'], 'mpegts');
   check('hls ts h264+aac -> mp4', hlsMerge([tsAvc], 'ts-avc-aac.mp4'), 'ts-avc-aac.mp4', 'audio:aac,video:h264');
+  const tsBin = renameSegments(hls('ts-bin', [...video, ...tone, '-c:v', 'libx264', ...picture, '-c:a', 'aac'], 'mpegts'), 'bin');
+  check('hls ts segments named .bin -> mp4', hlsMerge([tsBin], 'ts-bin.mp4'), 'ts-bin.mp4', 'audio:aac,video:h264');
+  const tsJpg = renameSegments(hls('ts-jpg', [...video, '-c:v', 'libx264', ...picture], 'mpegts'), 'jpg');
+  check('hls ts segments named .jpg -> mp4', hlsMerge([tsJpg], 'ts-jpg.mp4'), 'ts-jpg.mp4', 'video:h264');
   const tsHevc = hls('ts-hevc-aac', [...video, ...tone, '-c:v', 'libx265', '-x265-params', 'log-level=none', '-tag:v', 'hvc1', ...picture, '-c:a', 'aac'], 'mpegts');
   check('hls ts hevc+aac -> mp4', hlsMerge([tsHevc], 'ts-hevc-aac.mp4'), 'ts-hevc-aac.mp4', 'audio:aac,video:hevc');
   check('hls ts hevc+aac -> mkv', hlsMerge([tsHevc], 'ts-hevc-aac.mkv'), 'ts-hevc-aac.mkv', 'audio:aac,video:hevc');
@@ -92,7 +107,7 @@ try {
   const subtitles = path.join(work, 'subtitles'); fs.mkdirSync(subtitles);
   for (let index = 0; index < 3; index += 1) fs.writeFileSync(path.join(subtitles, `segment-${index}.vtt`), `WEBVTT\nX-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000\n\n00:00:0${index}.100 --> 00:00:0${index}.900\n字幕 ${index}\n`);
   fs.writeFileSync(path.join(subtitles, 'local.m3u8'), ['#EXTM3U', '#EXT-X-VERSION:7', '#EXT-X-TARGETDURATION:1', '#EXT-X-MEDIA-SEQUENCE:0', ...[0, 1, 2].flatMap(index => ['#EXTINF:1.000000,', `segment-${index}.vtt`]), '#EXT-X-ENDLIST', ''].join('\n'));
-  run(minimal, ['-nostdin', '-y', '-loglevel', 'error', '-protocol_whitelist', 'file', '-i', path.join(subtitles, 'local.m3u8'), '-map', '0:s:0', '-c:s', 'webvtt', 'subtitles.zh.vtt'], 'minimal FFmpeg hls webvtt subtitles'); // hls_download.rs
+  run(minimal, ['-nostdin', '-y', '-loglevel', 'error', '-protocol_whitelist', 'file', ...hlsInput, '-i', path.join(subtitles, 'local.m3u8'), '-map', '0:s:0', '-c:s', 'webvtt', 'subtitles.zh.vtt'], 'minimal FFmpeg hls webvtt subtitles'); // hls_download.rs
   const vtt = fs.readFileSync(path.join(work, 'subtitles.zh.vtt'), 'utf8');
   assert.ok(vtt.startsWith('WEBVTT') && vtt.includes('字幕 2'), 'WebVTT subtitle conversion lost cues');
   cases.push('hls webvtt subtitles -> vtt');

@@ -103,9 +103,10 @@ const server = http.createServer((request, response) => {
     response.end(key);
     return;
   }
-  const match = /^\/(plain|aes|aes-slow|retry|auth|slow)\/(segment-\d+\.ts)$/.exec(request.url || '');
-  if (!match) { response.writeHead(404); response.end(); return; }
-  const [, mode, name] = match;
+  const match = /^\/(plain|aes|aes-slow|retry|auth|slow|noext)\/(segment-\d+)(\.ts)?$/.exec(request.url || '');
+  if (!match || (match[1] === 'noext') === Boolean(match[3])) { response.writeHead(404); response.end(); return; }
+  const [, mode, stem] = match;
+  const name = `${stem}.ts`;
   if (mode === 'retry') {
     const attempts = retryCounts.get(request.url) || 0;
     retryCounts.set(request.url, attempts + 1);
@@ -243,6 +244,12 @@ const plain = await host.send('task.create', payload('plain', manifest('plain'))
 const plainTask = await waitFor(host, plain.task.id, item => item.state === 'succeeded', 'plain HLS completion');
 if (!fs.existsSync(plainTask.output) || plainTask.segments_completed !== segments.length) throw new Error(`Plain HLS failed: ${JSON.stringify(plainTask)}`);
 assertPlayable(plainTask.output, 'Plain HLS');
+
+// Segment URLs without an extension are stored as .bin, which FFmpeg's HLS demuxer rejects unless told otherwise.
+const extensionless = await host.send('task.create', payload('noext', manifest('plain').replaceAll('/plain/', '/noext/').replace(/\.ts$/gm, '')));
+const extensionlessTask = await waitFor(host, extensionless.task.id, item => ['succeeded', 'failed'].includes(item.state), 'extensionless HLS completion');
+if (extensionlessTask.state !== 'succeeded') throw new Error(`Extensionless HLS failed: ${JSON.stringify(extensionlessTask)}`);
+assertPlayable(extensionlessTask.output, 'Extensionless HLS');
 
 const audioOnlyPayload = payload('audio-only', audioOnlyManifest());
 audioOnlyPayload.hlsPlan.container = 'm4a';
