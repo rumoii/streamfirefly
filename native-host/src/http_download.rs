@@ -30,8 +30,14 @@ pub(crate) struct ProbeInfo {
     cancelled: bool,
 }
 
-pub(crate) fn add_header_args(args: &mut Vec<String>, task: &Task) {
+pub(crate) fn add_header_args(args: &mut Vec<String>, task: &Task, url: &str) {
+    let same_origin = !task.hls_selection
+        || url::Url::parse(&task.url).ok().zip(url::Url::parse(url).ok())
+            .is_some_and(|(source, target)| source.origin() == target.origin());
     for (name, value) in &task.request_headers {
+        if !same_origin && crate::repository::is_sensitive_request_header(name) {
+            continue;
+        }
         args.push("--header".into());
         args.push(format!("{name}: {value}"));
     }
@@ -39,7 +45,7 @@ pub(crate) fn add_header_args(args: &mut Vec<String>, task: &Task) {
 
 pub(crate) fn add_request_args(args: &mut Vec<String>, task: &Task, url: &str) {
     crate::network::add_proxy_args(args, &task.network, url);
-    add_header_args(args, task);
+    add_header_args(args, task, url);
 }
 
 pub(crate) fn probe_size(store: &TaskRuntime, task: &Task) -> ProbeInfo {

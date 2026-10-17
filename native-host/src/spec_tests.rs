@@ -77,6 +77,33 @@ fn hls_payload(save_dir: Option<&Path>) -> Value {
     payload
 }
 #[test]
+fn hls_request_credentials_stay_with_the_original_origin() {
+    let task: Task = serde_json::from_value(json!({
+        "id":"headers", "url":"https://source.test/master.m3u8", "title":"headers",
+        "state":"queued", "progress":0, "output":null, "error":null, "mime":null,
+        "hls_selection":true,
+        "request_headers":{"Cookie":"session=test", "aUtHoRiZaTiOn":"Bearer test", "referer":"https://source.test/watch", "user-agent":"test-agent"}
+    })).unwrap();
+    let headers = |task: &Task, target: &str| {
+        let mut args = Vec::new();
+        crate::http_download::add_request_args(&mut args, task, target);
+        args.windows(2).filter(|pair| pair[0] == "--header").map(|pair| pair[1].clone()).collect::<Vec<_>>()
+    };
+    for target in ["https://source.test/segment.ts", "https://SOURCE.test:443/key.bin"] {
+        assert_eq!(headers(&task, target).len(), 4, "same-origin headers missing: {target}");
+    }
+    for target in ["https://cdn.test/segment.ts", "http://source.test/segment.ts", "https://source.test:8443/key.bin", "https://source.test.other/segment.ts", "invalid"] {
+        let outgoing = headers(&task, target);
+        assert_eq!(outgoing.len(), 2, "credentials escaped to {target}: {outgoing:?}");
+        assert!(outgoing.contains(&"referer: https://source.test/watch".into()));
+        assert!(outgoing.contains(&"user-agent: test-agent".into()));
+    }
+    let mut ordinary = task.clone();
+    ordinary.hls_selection = false;
+    assert_eq!(headers(&ordinary, "https://cdn.test/segment.ts").len(), 4);
+}
+
+#[test]
 fn native_message_round_trip() {
     let value = json!({"version":1,"id":"a"});
     let mut data = Vec::new();

@@ -25,6 +25,10 @@ const fragmented = spawnSync(fixtureFfmpeg, ['-nostdin', '-y', '-v', 'error', '-
 assert.equal(fragmented.status, 0, fragmented.stderr?.toString());
 const initialization = fs.readFileSync(path.join(fragmentedDir, 'init.mp4'));
 const fragment = fs.readFileSync(path.join(fragmentedDir, 'segment-0.m4s'));
+const audioFile = path.join(temporary, 'audio.aac');
+const generatedAudio = spawnSync(fixtureFfmpeg, ['-nostdin', '-y', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000', '-t', '1', '-c:a', 'aac', '-f', 'adts', audioFile], { windowsHide: true });
+assert.equal(generatedAudio.status, 0, generatedAudio.stderr?.toString());
+const audio = fs.readFileSync(audioFile);
 const key = Buffer.alloc(16, 7);
 const cipher = createCipheriv('aes-128-cbc', key, Buffer.alloc(16));
 const encrypted = Buffer.concat([cipher.update(media), cipher.final()]);
@@ -33,21 +37,38 @@ const blocked = new Set();
 const waiting = [];
 const requests = [];
 const liveManifests = new Map();
-const server = http.createServer((request, response) => {
-  requests.push({ url: request.url, proxied: request.headers['x-via-test-proxy'] === '1' });
+const inFlight = new Map();
+function serve(request, response) {
+  requests.push({ url: request.url, host: request.headers.host, authorization: request.headers.authorization, cookie: request.headers.cookie, referer: request.headers.referer, proxied: request.headers['x-via-test-proxy'] === '1' });
   const name = request.url.split('/')[1];
-  if ((['auth-stop', 'map-stop', 'subtitle-stop'].includes(name) && request.url.endsWith('last.ts')) || (name === 'empty-stop' && request.url.endsWith('.ts'))) {
+  const control = inFlight.get(name);
+  if (control && (request.url.endsWith(control.file) && ++control.seen === control.holdAt)) {
+    control.release = () => { if (!response.destroyed) { response.writeHead(control.status); response.end(control.status === 200 ? (liveManifests.get(request.url) || media) : 'controlled failure'); } };
+    return;
+  }
+  if (name === 'credentials-redirect' && request.headers.host === new URL(origin).host) {
+    response.writeHead(302, { Location: `${cdnOrigin}${request.url}` }); response.end(); return;
+  }
+  if (name === 'credentials-denied' || (name === 'credentials-same' && (request.headers.authorization !== 'Bearer hls-synthetic' || request.headers.cookie !== 'session=hls-synthetic'))) {
+    response.writeHead(403); response.end('forbidden'); return;
+  }
+  if ((['auth-stop', 'expired-auth-stop', 'map-stop', 'subtitle-stop'].includes(name) && request.url.endsWith('last.ts')) || (name === 'empty-stop' && request.url.endsWith('.ts'))) {
     response.writeHead(403); response.end('forbidden'); return;
   }
   const body = liveManifests.has(request.url) ? Buffer.from(liveManifests.get(request.url))
-    : name === 'map-stop' ? (request.url.endsWith('init.mp4') ? initialization : fragment)
-    : request.url.endsWith('.key') ? key : request.url.endsWith('.vtt') ? subtitle : ['proxy-recovery', 'key-stop'].includes(name) ? encrypted : media;
+    : ['map-stop', 'credentials-map-cross'].includes(name) ? (request.url.endsWith('init.mp4') ? initialization : fragment)
+    : request.url.endsWith('.key') ? key : request.url.endsWith('.vtt') ? subtitle : request.url.endsWith('.aac') ? audio
+    : ['proxy-recovery', 'key-stop'].includes(name) || name.startsWith('credentials-') ? encrypted : media;
   const send = () => { if (!response.destroyed) { response.writeHead(200, { 'Content-Length': body.length }); response.end(body); } };
   if (blocked.has(name) && request.url.endsWith('last.ts')) waiting.push({ name, send });
   else send();
-});
+}
+const server = http.createServer(serve);
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const origin = `http://127.0.0.1:${server.address().port}`;
+const cdn = http.createServer(serve);
+await new Promise(resolve => cdn.listen(0, '127.0.0.1', resolve));
+const cdnOrigin = `http://127.0.0.1:${cdn.address().port}`;
 const proxy = http.createServer((request, response) => {
   const forwarded = http.request(new URL(request.url), { method: request.method, headers: { ...request.headers, 'x-via-test-proxy': '1' } }, upstream => {
     response.writeHead(upstream.statusCode, upstream.headers); upstream.pipe(response);
@@ -121,13 +142,122 @@ function payload(name, { subtitles = true, fileName = name } = {}) {
 const digest = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 const workFiles = () => fs.readdirSync(downloads).filter(name => name.includes('.streamfirefly-part-'));
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+async function stopInFlight(host) {
+  for (const [name, file, holdAt, status] of [
+    ['flight-403', 'last.ts', 1, 403], ['flight-404', 'last.ts', 1, 404],
+    ['flight-500', 'last.ts', 1, 500], ['flight-success', 'last.ts', 1, 200],
+    ['flight-refresh', 'index.m3u8', 2, 403], ['flight-entry-refresh', 'index.m3u8', 3, 404],
+    ['flight-validation', 'first.ts', 1, 403], ['flight-checkpoint', 'last.ts', 1, 404],
+    ['flight-refresh-checkpoint', 'index.m3u8', 2, 200]
+  ]) {
+    const control = { file, holdAt, status, seen: 0, release: null };
+    inFlight.set(name, control);
+    const request = payload(name, { subtitles: false });
+    request.hlsPlan.version = 3; request.hlsPlan.duration = 0; request.hlsPlan.pollIntervalSeconds = 1;
+    let text = request.hlsPlan.videoManifest.text.replace('#EXT-X-ENDLIST\n', '');
+    if (file === 'index.m3u8') text = text.replace(`#EXTINF:1,\n${origin}/${name}/last.ts\n`, '');
+    else text += `#EXTINF:1,\n${origin}/${name}/never.ts\n`;
+    if (name === 'flight-validation') text = text.replace('#EXTINF:', `#EXT-X-KEY:METHOD=AES-128,URI="${origin}/${name}/media.key"\n#EXTINF:`);
+    request.hlsPlan.videoManifest.text = text;
+    liveManifests.set(`/${name}/index.m3u8`, text);
+    const created = await host.send('task.create', request);
+    assert.equal(created.ok, true, JSON.stringify(created));
+    await until(() => control.release, `${name} request barrier`);
+    const checkpointFile = path.join(temporary, 'StreamFirefly/tasks', created.task.id, 'checkpoint.json');
+    if (name.includes('checkpoint')) fs.mkdirSync(checkpointFile.replace(/\.json$/, '.tmp'));
+    assert.equal((await host.send('task.control', { id: created.task.id, action: 'stop' })).ok, true);
+    const boundary = requests.length;
+    control.release();
+    const saved = await until(async () => {
+      const current = (await host.send('task.list')).tasks.find(task => task.id === created.task.id);
+      return ['succeeded', 'partial', 'failed', 'interrupted'].includes(current?.state) && current;
+    }, `${name} stopped result`);
+    assert.equal(requests.length, boundary, `${name} started a new request after stopping`);
+    if (name.includes('checkpoint')) {
+      assert.equal(saved.state, 'failed');
+      assert.match(saved.error, /^hls_checkpoint_save_failed:/);
+      assert.equal(fs.existsSync(saved.output), false);
+      assert.equal(fs.existsSync(checkpointFile), true);
+    } else if (name === 'flight-validation') {
+      assert.equal(saved.state, 'failed');
+      assert.equal(saved.error, 'hls_no_completed_segments');
+      assert.equal(fs.existsSync(saved.output), false);
+    } else {
+      assert.equal(saved.state, 'succeeded', JSON.stringify(saved));
+      assert.equal(saved.recorded_duration, status === 200 ? 2 : 1);
+      const decoded = spawnSync(fixtureFfmpeg, ['-nostdin', '-v', 'error', '-i', saved.output, '-f', 'null', 'NUL'], { windowsHide: true });
+      assert.equal(decoded.status, 0, decoded.stderr?.toString());
+      const probe = spawnSync(fixtureFfprobe, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'json', saved.output], { windowsHide: true });
+      assert.equal(probe.status, 0, probe.stderr?.toString());
+      assert.ok(Math.abs(Number(JSON.parse(probe.stdout).format.duration) - saved.recorded_duration) < 0.15);
+    }
+  }
+  console.log('In-flight stop: 403/404/500, queue drain, successful request, both live refreshes, key validation and checkpoint failure passed');
+}
+async function credentialIsolation(host) {
+  for (const name of ['credentials-same', 'credentials-cross', 'credentials-map-cross', 'credentials-live-cross', 'credentials-redirect', 'credentials-denied']) {
+    const target = ['credentials-same', 'credentials-redirect'].includes(name) ? origin : cdnOrigin;
+    const request = payload(name, { subtitles: name !== 'credentials-map-cross' });
+    request.requestHeaders = { authorization: 'Bearer hls-synthetic', cookie: 'session=hls-synthetic', referer: `${origin}/watch` };
+    const manifest = (text, file) => ({ format: 'hls', baseUrl: `${target}/${name}/${file}`, text });
+    const playlist = file => `#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:1,\n${target}/${name}/${file}\n#EXT-X-ENDLIST\n`;
+    if (name === 'credentials-map-cross') {
+      request.hlsPlan.videoManifest = manifest(playlist('fragment.m4s').replace('#EXTINF:', `#EXT-X-MAP:URI="${target}/${name}/init.mp4"\n#EXTINF:`), 'index.m3u8');
+    } else {
+      request.hlsPlan.videoManifest = manifest(playlist('first.ts').replace('#EXTINF:', `#EXT-X-KEY:METHOD=AES-128,URI="${target}/${name}/media.key",IV=0x${'00'.repeat(16)}\n#EXTINF:`), 'index.m3u8');
+      request.hlsPlan.audioManifest = manifest(playlist('audio.aac'), 'audio.m3u8');
+      request.hlsPlan.subtitles[0].manifest = manifest(playlist('sub.vtt'), 'sub.m3u8');
+    }
+    request.hlsPlan.duration = 1;
+    if (name === 'credentials-live-cross') {
+      request.hlsPlan.version = 3;
+      request.hlsPlan.duration = 0;
+      for (const value of [request.hlsPlan.videoManifest, request.hlsPlan.audioManifest, request.hlsPlan.subtitles[0].manifest]) {
+        liveManifests.set(new URL(value.baseUrl).pathname, value.text);
+      }
+    }
+    const boundary = requests.length;
+    const created = await host.send('task.create', request);
+    assert.equal(created.ok, true, JSON.stringify(created));
+    const task = name === 'credentials-denied' ? await until(async () => {
+      const current = (await host.send('task.list')).tasks.find(task => task.id === created.task.id);
+      return current?.state === 'interrupted' && current;
+    }, 'cross-origin authorization denial') : await settled(host, created.task.id);
+    const traffic = requests.slice(boundary);
+    assert.ok(traffic.length > 0);
+    for (const entry of traffic) {
+      const same = entry.host === new URL(origin).host;
+      assert.equal(entry.authorization, same ? 'Bearer hls-synthetic' : undefined, `Authorization scope: ${entry.host}${entry.url}`);
+      assert.equal(entry.cookie, same ? 'session=hls-synthetic' : undefined, `Cookie scope: ${entry.host}${entry.url}`);
+      assert.equal(entry.referer, `${origin}/watch`);
+    }
+    if (name === 'credentials-denied') {
+      assert.equal(task.error, 'http_status_403');
+      assert.equal(task.resume_requirement, 'authorization_required');
+      assert.equal(traffic.length, 1, 'credentials were retried against a foreign origin');
+      assert.equal(fs.existsSync(task.output), false);
+    } else {
+      assert.equal(task.state, 'succeeded', JSON.stringify(task));
+      const decoded = spawnSync(fixtureFfmpeg, ['-nostdin', '-v', 'error', '-i', task.output, '-f', 'null', 'NUL'], { windowsHide: true });
+      assert.equal(decoded.status, 0, decoded.stderr?.toString());
+      const probe = spawnSync(fixtureFfprobe, ['-v', 'error', '-show_entries', 'stream=codec_type', '-of', 'json', task.output], { windowsHide: true });
+      assert.equal(probe.status, 0, probe.stderr?.toString());
+      assert.deepEqual(JSON.parse(probe.stdout).streams.map(stream => stream.codec_type).sort(), name === 'credentials-map-cross' ? ['video'] : ['audio', 'video']);
+      if (request.hlsPlan.subtitles.length) assert.match(fs.readFileSync(task.outputs.find(output => output.kind === 'subtitle').path, 'utf8'), /subtitle sentinel/);
+      if (name === 'credentials-live-cross') assert.equal(traffic.filter(entry => entry.url.endsWith('.m3u8')).length, 3, 'live manifests were not refreshed');
+    }
+  }
+  console.log('HLS same-origin credentials, public cross-origin media/key/map/audio/subtitle/live refresh, redirect and 403 isolation passed');
+}
 async function stopWithoutCredentials(host) {
-  for (const name of ['auth-stop', 'map-stop', 'empty-stop', 'key-stop', 'subtitle-stop']) {
+  for (const name of ['expired-auth-stop', 'paused-auth-stop', 'auth-stop', 'map-stop', 'empty-stop', 'key-stop', 'subtitle-stop']) {
     const request = payload(name, { subtitles: name === 'subtitle-stop' });
     request.hlsPlan.version = 3;
     request.hlsPlan.duration = 0;
     request.hlsPlan.pollIntervalSeconds = 1;
     request.hlsPlan.videoManifest.text = request.hlsPlan.videoManifest.text.replace('#EXT-X-ENDLIST\n', '');
+    if (['expired-auth-stop', 'paused-auth-stop'].includes(name)) request.requestHeaders = { authorization: 'Bearer expired-synthetic', cookie: 'session=expired-synthetic' };
+    if (name === 'paused-auth-stop') blocked.add(name);
     if (name === 'map-stop') {
       request.hlsPlan.videoManifest.text = request.hlsPlan.videoManifest.text.replace('#EXTINF:', `#EXT-X-MAP:URI="${origin}/${name}/init.mp4"\n#EXTINF:`);
     }
@@ -143,6 +273,10 @@ async function stopWithoutCredentials(host) {
     liveManifests.set(`/${name}/index.m3u8`, request.hlsPlan.videoManifest.text);
     const created = await host.send('task.create', request);
     assert.equal(created.ok, true, JSON.stringify(created));
+    if (name === 'paused-auth-stop') {
+      await until(() => waiting.some(entry => entry.name === name), 'paused live segment barrier');
+      assert.equal((await host.send('task.control', { id: created.task.id, action: 'pause' })).task.state, 'paused');
+    }
     if (name === 'key-stop') {
       await until(() => waiting.some(entry => entry.name === name), 'encrypted live segment barrier');
       await closeHost(host);
@@ -151,9 +285,9 @@ async function stopWithoutCredentials(host) {
     }
     const interrupted = await until(async () => {
       const task = (await host.send('task.list')).tasks.find(task => task.id === created.task.id);
-      return task?.state === 'interrupted' && task;
+      return task?.state === (name === 'paused-auth-stop' ? 'paused' : 'interrupted') && task;
     }, `${name} interruption`);
-    assert.equal(interrupted.resume_requirement, name === 'key-stop' ? 'key_required' : 'authorization_required');
+    assert.equal(interrupted.resume_requirement, name === 'paused-auth-stop' ? null : name === 'key-stop' ? 'key_required' : 'authorization_required');
     const checkpointFile = path.join(temporary, 'StreamFireFly/tasks', created.task.id, 'checkpoint.json');
     const checkpointBeforeStop = fs.readFileSync(checkpointFile, 'utf8');
     const checkpoint = JSON.parse(checkpointBeforeStop);
@@ -291,6 +425,8 @@ try {
     }
   }
 
+  await stopInFlight(host);
+  await credentialIsolation(host);
   host = await stopWithoutCredentials(host);
   host = await subtitleEofRecovery(host);
   await closeHost(host);
@@ -320,8 +456,8 @@ try {
     fs.writeFileSync(path.join(barrier.directory, 'stop'), 'stop');
     if (barrier.watcher.exitCode === null) await until(() => barrier.watcher.exitCode !== null, 'barrier cleanup');
   }
-  server.closeAllConnections(); proxy.closeAllConnections();
-  await Promise.all([new Promise(resolve => server.close(resolve)), new Promise(resolve => proxy.close(resolve))]);
+  server.closeAllConnections(); cdn.closeAllConnections(); proxy.closeAllConnections();
+  await Promise.all([new Promise(resolve => server.close(resolve)), new Promise(resolve => cdn.close(resolve)), new Promise(resolve => proxy.close(resolve))]);
   const resolved = fs.realpathSync(temporary);
   assert.equal(path.dirname(resolved), fs.realpathSync(os.tmpdir()));
   assert.ok(path.basename(resolved).startsWith('streamfirefly-hls-output-'));

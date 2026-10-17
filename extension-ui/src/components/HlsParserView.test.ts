@@ -67,19 +67,20 @@ describe("HLS parser selection preview entry", () => {
       expect(requests[2]).toMatchObject({ restrictOrigin: true, url: "https://media.example/other-audio.m3u8" });
     } finally { wrapper.unmount(); }
   });
-  it("explains a rejected cross-origin preview without blocking the download loader", async () => {
+  it("explains cross-origin denial for preview and download without caching the failure", async () => {
     send.mockImplementation(async (message: any) => message.type === "task.prepare"
       ? { ok: true, payload: { fileName: "默认文件名" } }
-      : message.restrictOrigin ? { ok: false, error: "media_fetch_failed", status: 403 }
+      : String(message.url).includes('cdn.example') ? { ok: false, error: "media_fetch_failed", status: 403 }
       : { ok: true, text: message.url.includes("audio") ? audioText : videoText, url: message.url });
     const wrapper = mount(HlsParserView, { props: props() });
     try {
       await flushPromises();
       const load = wrapper.findComponent({ name: "HlsSelectionPreview" }).props("loadTrack");
       const track = { id: "external", uri: "https://cdn.example/audio.m3u8" };
-      await expect(load(track, { restrictOrigin: true })).rejects.toThrow("预览不会转发来源凭据");
-      expect((await load(track)).segments).toHaveLength(2);
-      await expect(load(track, { restrictOrigin: true })).rejects.toThrow("预览不会转发来源凭据");
+      await expect(load(track, { restrictOrigin: true })).rejects.toThrow("不会转发来源登录凭据");
+      await expect(load(track)).rejects.toThrow("不会转发来源登录凭据");
+      await expect(load(track)).rejects.toThrow("不会转发来源登录凭据");
+      expect(send.mock.calls.filter(([message]) => message.url === track.uri)).toHaveLength(3);
     } finally { wrapper.unmount(); }
   });
   it("starts the preview from the entry and invalidates it on media-affecting edits only", async () => {

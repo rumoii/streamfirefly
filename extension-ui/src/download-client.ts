@@ -6,7 +6,10 @@ export async function prepareCandidate(candidate: MediaCandidate, tabId: number 
   if (candidate.url.startsWith("blob:")) throw new Error("blob_resource_requires_capture");
   return prepareDefaultDownload(candidate, async url => {
     const result = await sendMessage({ type: "media.fetchText", tabId, id: candidate.id, url });
-    if (!result?.ok) throw new Error(result?.error || "media_fetch_failed");
+    if (!result?.ok) {
+      if (candidate.type === "hls" && (result?.status === 401 || result?.status === 403) && new URL(url).origin !== new URL(candidate.url).origin) throw new Error("跨域清单请求被拒绝；不会转发来源登录凭据。");
+      throw new Error(result?.error || "media_fetch_failed");
+    }
     return { text: result.text as string, url: (result.url || url) as string };
   });
 }

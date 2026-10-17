@@ -7,7 +7,7 @@ export function createDownloadsState(candidates: Ref<MediaCandidate[]>) {
   const activeTasks = computed(() => taskState.tasks.value.filter(task => ["queued", "starting", "running", "retrying", "pausing", "cancelling", "stopping"].includes(task.state)));
   async function controlTask(task: DownloadTask, action: string, suppliedContext: any = null) {
     const resumeContext: any = suppliedContext ? { ...suppliedContext } : {};
-    if (task.resume_requirement?.includes("authorization")) {
+    if (["resume", "retry", "reauthorize"].includes(action) && task.resume_requirement?.includes("authorization")) {
       const candidate = candidates.value.find(item => item.id === task.source_candidate_id) || candidates.value.find(item => item.url === task.url);
       if (!candidate) throw new Error("hls_source_candidate_missing");
       resumeContext.requestHeaders = candidate.requestHeaders || {};

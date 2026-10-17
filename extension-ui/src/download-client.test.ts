@@ -4,7 +4,17 @@ const mocks = vi.hoisted(() => ({ send: vi.fn() }));
 vi.mock("./api", () => ({ sendMessage: (message: unknown) => mocks.send(message) }));
 
 describe("download submission identity", () => {
-  beforeEach(() => mocks.send.mockReset());
+  beforeEach(() => { mocks.send.mockReset(); });
+
+  it("explains a denied cross-origin variant without retrying or submitting a task", async () => {
+    const candidate = { id: 'hls', type: 'hls' as const, url: 'https://source.test/master.m3u8' };
+    mocks.send.mockImplementation(async (message: any) => message.url === candidate.url
+      ? { ok: true, url: message.url, text: '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000\nhttps://cdn.test/video.m3u8\n' }
+      : { ok: false, error: 'media_fetch_failed', status: 403 });
+    await expect(prepareCandidate(candidate, 1)).rejects.toThrow('不会转发来源登录凭据');
+    expect(mocks.send).toHaveBeenCalledTimes(2);
+    expect(mocks.send.mock.calls.every(([message]) => message.type === 'media.fetchText')).toBe(true);
+  });
 
   it("recovers an accepted task after the creation response times out", async () => {
     const task = { id: "accepted", title: "video", state: "queued", progress: 0 };

@@ -166,6 +166,7 @@ try {
       { id: 'live-task', title: '直播间录制', state: 'running', phase: 'recording', live_recording: true, progress: 0, recorded_duration: 754, source_context_id: 'workspace-page' },
       { id: 'running-task', title: '正在下载的 HLS 正片', state: 'running', phase: 'downloading_segments', progress: 47, segments_total: 912, segments_completed: 428, downloaded_bytes: 612 * 1024 * 1024, total_bytes: 1300 * 1024 * 1024, speed_bytes_per_second: 8.6 * 1024 * 1024, eta_seconds: 82, source_context_id: 'workspace-page' }
     ];
+    window.__workspaceDownloads = { tasks, listeners, controls: [] };
     window.chrome = {
       storage: { local: { get: async query => Object.fromEntries((Array.isArray(query) ? query : [query]).filter(key => key in stored).map(key => [key, structuredClone(stored[key])])), set: async values => Object.assign(stored, structuredClone(values)) } },
       runtime: {
@@ -175,6 +176,12 @@ try {
           if (message.type === 'native.connect') return { ok: true, capabilities: ['hls-selection-v1', 'hls-segment-engine-v1', 'task-queue-v1', 'task-idempotency-v1'] };
           if (message.type === 'ui.context.get') return { ok: true, context };
           if (message.type === 'task.list') return { ok: true, tasks };
+          if (message.type === 'task.control') {
+            window.__workspaceDownloads.controls.push(structuredClone(message.payload));
+            const task = tasks.find(task => task.id === message.payload.id);
+            Object.assign(task, { state: 'stopping', phase: 'stopping' });
+            return { ok: true, task: structuredClone(task) };
+          }
           if (message.type === 'media.fetchText') { const url = new URL(message.url, location.origin); return { ok: true, text: playlists[url.pathname.split('/').pop()] || mediaPlaylist, url: url.href }; }
           if (message.type === 'workspace.ready') return { ok: true };
           if (message.type === 'workspace.close') { queueMicrotask(() => window.dispatchEvent(new Event('streamfirefly-workspace-unmount'))); return { ok: true }; }
@@ -324,6 +331,18 @@ try {
   await workspacePage.screenshot({ path: path.join(output, 'floating-workspace-dark.png') });
   await workspace.getByRole('button', { name: '关闭详情', exact: true }).click();
   await workspacePage.emulateMedia({ colorScheme: 'light' });
+  await workspacePage.evaluate(() => {
+    const task = { id: 'expired-live', title: '授权中断的直播', url: 'https://closed-source.test/live.m3u8', state: 'interrupted', progress: 30, live_recording: true, resume_requirement: 'authorization_and_key_required', source_context_id: 'closed-page', source_candidate_id: 'closed-candidate' };
+    window.__workspaceDownloads.tasks.push(task);
+    for (const listener of window.__workspaceDownloads.listeners) listener({ type: 'task.progress', task: structuredClone(task) });
+  });
+  await workspace.getByRole('navigation', { name: '流萤功能' }).getByRole('button', { name: /^下载/ }).click();
+  await workspace.getByRole('button', { name: /^全部/ }).click();
+  await workspace.getByRole('button', { name: '停止并保存：授权中断的直播', exact: true }).click();
+  await workspacePage.waitForFunction(() => window.__workspaceDownloads.controls.some(control => control.id === 'expired-live'));
+  assert.deepEqual(await workspacePage.evaluate(() => window.__workspaceDownloads.controls.find(control => control.id === 'expired-live')), { id: 'expired-live', action: 'stop', resumeContext: null });
+  await workspace.locator('.task-row', { hasText: '授权中断的直播' }).getByText('正在停止并保存', { exact: true }).waitFor();
+  assert.equal(await workspace.getByRole('dialog').count(), 0, 'saving local media must not ask for a key');
   const beforeClose = await workspacePage.evaluate(() => ({ width: document.documentElement.clientWidth, overflow: document.documentElement.style.overflow, bodyOverflow: document.body.style.overflow }));
   await workspace.getByRole('button', { name: '关闭流萤', exact: true }).click();
   await workspacePage.locator('#streamfirefly-workspace-host').waitFor({ state: 'detached' });

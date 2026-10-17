@@ -279,6 +279,34 @@ for (const [url, restrictOrigin, auth, credentials] of [
   } else if (restrictOrigin) assert.equal(previewRuleUpdates.length, beforeRules);
 }
 console.log('Preview-only manifest credentials and unchanged download defaults passed');
+listeners.beforeHeaders({ tabId: 7, url: 'https://media.example/credential-master.m3u8', requestId: 'hls-credentials', requestHeaders: [{ name: 'Authorization', value: 'Bearer hls-synthetic' }, { name: 'Cookie', value: 'session=hls-synthetic' }, { name: 'Referer', value: 'https://media.example/page' }, { name: 'Origin', value: 'https://media.example' }] });
+listeners.headers({ tabId: 7, url: 'https://media.example/credential-master.m3u8', requestId: 'hls-credentials', statusCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'application/vnd.apple.mpegurl' }] });
+await flush();
+const hlsOwner = (await send({ type: 'ui.context.get', scope: 'active' })).context.candidates.find(item => item.url === 'https://media.example/credential-master.m3u8');
+assert.equal(hlsOwner.type, 'hls');
+for (const [url, restricted, same] of [
+  ['https://media.example/audio.m3u8', false, true], ['https://media.example:443/audio.m3u8', false, true],
+  ['https://cdn.example/audio.m3u8', false, false], ['https://media.example:9443/audio.m3u8', false, false],
+  ['https://cdn.example/subtitle.m3u8', true, false]
+]) {
+  const before = previewRuleUpdates.length;
+  const result = await send({ type: 'media.fetchText', tabId: 7, id: hlsOwner.id, url, restrictOrigin: restricted });
+  assert.equal(result.ok, true);
+  const request = fetchCalls.at(-1);
+  assert.equal(new Headers(request.init.headers).get('authorization'), same ? 'Bearer hls-synthetic' : null);
+  assert.equal(new Headers(request.init.headers).get('cookie'), null);
+  assert.equal(request.init.credentials, same ? 'include' : 'omit');
+  const rule = previewRuleUpdates.slice(before).find(update => update.addRules)?.addRules[0];
+  if (!restricted) assert.deepEqual(rule.action.requestHeaders.map(header => header.header).sort(), ['Origin', 'Referer']);
+  else assert.equal(rule, undefined);
+}
+const deniedBoundary = fetchCalls.length;
+fetchResponse = new Response('denied', { status: 403 });
+const deniedHls = await send({ type: 'media.fetchText', tabId: 7, id: hlsOwner.id, url: 'https://cdn.example/denied.m3u8' });
+assert.equal(deniedHls.status, 403);
+assert.equal(fetchCalls.length, deniedBoundary + 1);
+assert.equal(new Headers(fetchCalls.at(-1).init.headers).get('authorization'), null);
+console.log('HLS manifest credentials isolated with download Referer/Origin preserved and strict preview unchanged');
 fetchResponse = new Response('too large', { headers: { 'content-length': String(4 * 1024 * 1024 + 1) } });
 const oversizedManifest = await send({ type: 'media.fetchText', tabId: 7, id: video.id, url: 'https://media.example/large.m3u8' });
 if (oversizedManifest.ok || oversizedManifest.error !== 'media_manifest_too_large') throw new Error(`Oversized manifest was not rejected: ${JSON.stringify(oversizedManifest)}`);

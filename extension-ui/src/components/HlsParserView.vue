@@ -84,7 +84,7 @@ async function fetchText(url: string, restrictOrigin = false): Promise<{ text: s
   if (!extensionApi()?.runtime?.sendMessage) return previewManifest(url);
   const result: any = await sendMessage({ type: "media.fetchText", tabId: props.context.sourceTabId, id: props.candidate.id, url, ...(restrictOrigin ? { restrictOrigin: true } : {}) });
   if (!result?.ok) {
-    if (restrictOrigin && (result?.status === 401 || result?.status === 403) && new URL(url).origin !== new URL(props.candidate.url).origin) throw new Error("跨域音轨请求被拒绝；预览不会转发来源凭据，可改用下载。");
+    if ((result?.status === 401 || result?.status === 403) && new URL(url).origin !== new URL(props.candidate.url).origin) throw new Error("跨域清单请求被拒绝；不会转发来源登录凭据。");
     throw new Error(result?.error || "media_fetch_failed");
   }
   return { text: result.text, url: result.url || url };

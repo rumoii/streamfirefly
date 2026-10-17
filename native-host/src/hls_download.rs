@@ -199,7 +199,7 @@ pub(crate) fn execute_hls_job(
                     error: Some(error),
                 }
             }
-            Err(error) if retryable_error(&error) && retries < 3 => {
+            Err(error) if retryable_error(&error) && retries < 3 && !stop_requested(store, &task.id) => {
                 retries += 1;
                 let delay = retry_after_seconds(&error).unwrap_or(1 << (retries - 1));
                 if !wait_retry(store, &task.id, abort, delay) {
@@ -209,6 +209,9 @@ pub(crate) fn execute_hls_job(
                         retries,
                         error: Some("cancelled".into()),
                     };
+                }
+                if stop_requested(store, &task.id) {
+                    return HlsDownloadResult { job: job.clone(), bytes: 0, retries, error: Some(error) };
                 }
             }
             Err(error) => {
@@ -720,34 +723,8 @@ fn hls_checkpoint_round(
             .keys()
             .all(|name| !is_sensitive_request_header(name));
     let key_required = task.requires_key_override && key_override.is_none();
-    if (authorization_required || key_required) && stopping {
-        let checkpoint = completed_hls_checkpoint(checkpoint, &work_dir);
-        if !checkpoint
-            .tracks
-            .iter()
-            .any(|track| track.kind == "video" && !track.segments.is_empty())
-        {
-            update(&store, &writer, &task.id, |current| {
-                current.state = "failed".into();
-                current.phase = "failed".into();
-                current.active_connections = 0;
-                current.speed_bytes_per_second = 0;
-                current.eta_seconds = None;
-                current.error = Some("hls_no_completed_segments".into());
-                current.checkpoint_state = Some("recoverable".into());
-                set_output_state(
-                    current,
-                    "media",
-                    0,
-                    "failed",
-                    Some("hls_no_completed_segments".into()),
-                );
-                current.message = Some("没有可合并的完整切片，无法保存录制；可补充授权或密钥后继续下载".into());
-            });
-            clear_stop(&store, &task.id);
-            return None;
-        }
-        return finalize_hls_round(&store, &writer, &task, &output, checkpoint, &work_dir);
+    if stopping {
+        return save_stopped_hls_round(&store, &writer, &task, &output, checkpoint, &work_dir);
     }
     if authorization_required {
         update(&store, &writer, &task.id, |current| {
@@ -769,7 +746,15 @@ fn hls_checkpoint_round(
     }
     let mut checkpoint = checkpoint;
     if task.live_recording && !stopping {
-        if let Err(error) = refresh_live_checkpoint(&store, &task, &mut checkpoint, &work_dir) {
+        let refreshed = refresh_live_checkpoint(&store, &task, &mut checkpoint, &work_dir);
+        if cancel_requested(&store, &task.id) {
+            mark_stopped(&store, &writer, &task.id);
+            return None;
+        }
+        if stop_requested(&store, &task.id) {
+            return save_stopped_hls_round(&store, &writer, &task, &output, checkpoint, &work_dir);
+        }
+        if let Err(error) = refreshed {
             // A cancellation that lands while the live manifest is being refreshed must be
             // honored instead of being mistaken for a refresh failure.
             if error == "cancelled" {
@@ -850,6 +835,14 @@ fn hls_checkpoint_round(
                 return None;
             }
         }
+        if cancel_requested(&store, &task.id) {
+            mark_stopped(&store, &writer, &task.id);
+            return None;
+        }
+        if stop_requested(&store, &task.id) {
+            let checkpoint = checkpoint.lock().unwrap().clone();
+            return save_stopped_hls_round(&store, &writer, &task, &output, checkpoint, &work_dir);
+        }
         if let Some(error) = result.error {
             if error == "cancelled" {
                 mark_stopped(&store, &writer, &task.id);
@@ -912,6 +905,9 @@ fn hls_checkpoint_round(
         let work_dir = work_dir.clone();
         let key_override = key_override.clone();
         workers.push(thread::spawn(move || loop {
+            if stop_requested(&store, &task.id) {
+                break;
+            }
             let job = queue.lock().unwrap().pop_front();
             let Some(job) = job else { break };
             if abort.load(Ordering::Relaxed) {
@@ -948,6 +944,7 @@ fn hls_checkpoint_round(
     let mut dirty_results = 0_usize;
     let mut received_results = 0_usize;
     let mut failure = None;
+    let mut checkpoint_failure = None;
     for result in receiver {
         received_results += 1;
         let terminal_result = result.error.is_some();
@@ -962,7 +959,7 @@ fn hls_checkpoint_round(
                 || last_result
             {
                 if let Err(error) = save_checkpoint(&checkpoint_file, &checkpoint) {
-                    failure = Some(format!("hls_checkpoint_save_failed:{error}"));
+                    checkpoint_failure = Some(format!("hls_checkpoint_save_failed:{error}"));
                     abort.store(true, Ordering::Relaxed);
                 }
                 dirty_results = 0;
@@ -999,7 +996,7 @@ fn hls_checkpoint_round(
         let checkpoint = checkpoint.lock().unwrap();
         if dirty_results > 0 {
             if let Err(error) = save_checkpoint(&checkpoint_file, &checkpoint) {
-                failure.get_or_insert_with(|| format!("hls_checkpoint_save_failed:{error}"));
+                checkpoint_failure.get_or_insert_with(|| format!("hls_checkpoint_save_failed:{error}"));
             }
         }
         publish_hls_progress(
@@ -1016,6 +1013,22 @@ fn hls_checkpoint_round(
     if cancel_requested(&store, &task.id) {
         mark_stopped(&store, &writer, &task.id);
         return None;
+    }
+    if let Some(error) = checkpoint_failure {
+        update(&store, &writer, &task.id, |current| {
+            current.state = "failed".into();
+            current.phase = "failed".into();
+            current.error = Some(error);
+            current.checkpoint_state = Some("invalid".into());
+            current.active_connections = 0;
+            current.message = Some("无法保存 HLS 检查点".into());
+        });
+        clear_stop(&store, &task.id);
+        return None;
+    }
+    if stop_requested(&store, &task.id) {
+        let checkpoint = checkpoint.lock().unwrap().clone();
+        return save_stopped_hls_round(&store, &writer, &task, &output, checkpoint, &work_dir);
     }
     if let Some(error) = failure {
         let authorization = authorization_error(&error);
@@ -1099,11 +1112,34 @@ fn hls_checkpoint_round(
                 let refreshed = {
                     let mut checkpoint = checkpoint.lock().unwrap();
                     let result = refresh_live_checkpoint(&store, &task, &mut checkpoint, &work_dir);
+                    if cancel_requested(&store, &task.id) {
+                        mark_stopped(&store, &writer, &task.id);
+                        return None;
+                    }
                     if result.is_ok() {
-                        let _ = save_checkpoint(&checkpoint_file, &checkpoint);
+                        if let Err(error) = save_checkpoint(&checkpoint_file, &checkpoint) {
+                            update(&store, &writer, &task.id, |current| {
+                                current.state = "failed".into();
+                                current.phase = "failed".into();
+                                current.error = Some(format!("hls_checkpoint_save_failed:{error}"));
+                                current.checkpoint_state = Some("invalid".into());
+                                current.active_connections = 0;
+                                current.message = Some("无法保存 HLS 检查点".into());
+                            });
+                            clear_stop(&store, &task.id);
+                            return None;
+                        }
                     }
                     result
                 };
+                if cancel_requested(&store, &task.id) {
+                    mark_stopped(&store, &writer, &task.id);
+                    return None;
+                }
+                if stop_requested(&store, &task.id) {
+                    let checkpoint = checkpoint.lock().unwrap().clone();
+                    return save_stopped_hls_round(&store, &writer, &task, &output, checkpoint, &work_dir);
+                }
                 if let Err(error) = refreshed {
                     // Honor a cancellation that lands during a refresh rather than
                     // surfacing it as a recovery error.
@@ -1155,7 +1191,42 @@ fn hls_checkpoint_round(
         }
     }
     let checkpoint_value = checkpoint.lock().unwrap().clone();
+    if stop_requested(&store, &task.id) {
+        return save_stopped_hls_round(&store, &writer, &task, &output, checkpoint_value, &work_dir);
+    }
     finalize_hls_round(&store, &writer, &task, &output, checkpoint_value, &work_dir)
+}
+
+/// Saves only completed local media after producers have stopped; recovery data stays intact.
+fn save_stopped_hls_round(
+    store: &TaskRuntime,
+    writer: &Writer,
+    task: &Task,
+    output: &str,
+    checkpoint: HlsCheckpoint,
+    work_dir: &Path,
+) -> Option<(Task, Option<HlsPlan>)> {
+    if cancel_requested(store, &task.id) {
+        mark_stopped(store, writer, &task.id);
+        return None;
+    }
+    let checkpoint = completed_hls_checkpoint(checkpoint, work_dir);
+    if !checkpoint.tracks.iter().any(|track| track.kind == "video" && !track.segments.is_empty()) {
+        update(store, writer, &task.id, |current| {
+            current.state = "failed".into();
+            current.phase = "failed".into();
+            current.active_connections = 0;
+            current.speed_bytes_per_second = 0;
+            current.eta_seconds = None;
+            current.error = Some("hls_no_completed_segments".into());
+            current.checkpoint_state = Some("recoverable".into());
+            set_output_state(current, "media", 0, "failed", Some("hls_no_completed_segments".into()));
+            current.message = Some("没有可合并的完整切片，无法保存录制；可补充授权或密钥后继续下载".into());
+        });
+        clear_stop(store, &task.id);
+        return None;
+    }
+    finalize_hls_round(store, writer, task, output, checkpoint, work_dir)
 }
 
 /// Runs the final merge for a checkpoint whose downloads are done (or stopped early)
@@ -1245,7 +1316,7 @@ pub(crate) fn fetch_live_manifest(
     loop {
         match curl_once(store, task, url, None, destination, &abort) {
             Ok(_) => break,
-            Err(error) if retryable_error(&error) && retries < 3 => {
+            Err(error) if retryable_error(&error) && retries < 3 && !stop_requested(store, &task.id) => {
                 retries += 1;
                 if !wait_retry(
                     store,
@@ -1254,6 +1325,9 @@ pub(crate) fn fetch_live_manifest(
                     retry_after_seconds(&error).unwrap_or(retries),
                 ) {
                     return Err("cancelled".into());
+                }
+                if stop_requested(store, &task.id) {
+                    return Err(error);
                 }
             }
             Err(error) => return Err(error),

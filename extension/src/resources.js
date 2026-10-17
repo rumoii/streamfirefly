@@ -446,16 +446,18 @@ async function prepareOwnedFetch(tabId, id, requestedUrl, options = {}) {
   if (blockedSite(url.href) || blockedSite(owner.pageUrl)) return { ok: false, error: "site_blocked" };
   let ownerOrigin;
   try { ownerOrigin = new URL(owner.url).origin; } catch (_) {}
-  const allowCredentials = options.restrictOrigin !== true || url.origin === ownerOrigin;
+  const sameOrigin = url.origin === ownerOrigin;
+  const allowCredentials = sameOrigin || (owner.type !== "hls" && options.restrictOrigin !== true);
+  const allowPageHeaders = options.restrictOrigin !== true || sameOrigin;
   const headers = new Headers();
   const pageHeaders = {};
   for (const [name, value] of Object.entries(owner.requestHeaders || {})) {
     const key = name.toLowerCase();
     if (typeof value !== "string" || !value) continue;
     if (key === "authorization" && allowCredentials) headers.set(name, value);
-    else if (["origin", "referer"].includes(key) && allowCredentials) pageHeaders[key] = value;
+    else if (["origin", "referer"].includes(key) && allowPageHeaders) pageHeaders[key] = value;
   }
-  if (allowCredentials && !pageHeaders.referer && /^https?:/i.test(owner.referer || owner.pageUrl || "")) pageHeaders.referer = owner.referer || owner.pageUrl;
+  if (allowPageHeaders && !pageHeaders.referer && /^https?:/i.test(owner.referer || owner.pageUrl || "")) pageHeaders.referer = owner.referer || owner.pageUrl;
   return { ok: true, owner, url, headers, pageHeaders, credentials: allowCredentials ? "include" : "omit" };
 }
 
