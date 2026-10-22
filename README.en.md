@@ -257,3 +257,20 @@ Cookies and Authorization headers are kept in memory only while a download runs 
 ## Acknowledgements
 
 StreamFirefly uses [Vue](https://github.com/vuejs/core), [Pinia](https://github.com/vuejs/pinia), [hls.js](https://github.com/video-dev/hls.js), [Tabler Icons](https://github.com/tabler/tabler-icons), [curl](https://curl.se/) and [FFmpeg](https://ffmpeg.org/). See [THIRD_PARTY_NOTICES.md](extension/THIRD_PARTY_NOTICES.md) for third-party licenses and [installer/FFMPEG-SOURCE.txt](installer/FFMPEG-SOURCE.txt) for FFmpeg's source.
+
+## The name
+
+流萤 (liú yíng) means a drifting firefly. The sprawling web is like a dim forest: a firefly drifts past, and by its faint light, resources hidden in the dark are seen again. That is what StreamFirefly does.
+
+---
+
+<p align="center">
+  <a href="https://github.com/paralcor">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/images/brand/paralcor-horizontal-dark.png">
+      <img alt="PARALCOR" src="docs/images/brand/paralcor-horizontal-light.png" width="120">
+    </picture>
+  </a>
+  <br>
+  <sub>StreamFirefly is a product of the PARALCOR brand.</sub>
+</p>

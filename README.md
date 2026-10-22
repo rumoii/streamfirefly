@@ -263,3 +263,20 @@ Cookie 和 Authorization 只在下载过程中保存在内存里，不写入任�
 ## 致谢
 
 流萤使用了 [Vue](https://github.com/vuejs/core)、[Pinia](https://github.com/vuejs/pinia)、[hls.js](https://github.com/video-dev/hls.js)、[Tabler Icons](https://github.com/tabler/tabler-icons)、[curl](https://curl.se/) 和 [FFmpeg](https://ffmpeg.org/)。第三方许可见 [THIRD_PARTY_NOTICES.md](extension/THIRD_PARTY_NOTICES.md)，FFmpeg 来源见 [installer/FFMPEG-SOURCE.txt](installer/FFMPEG-SOURCE.txt)。
+
+## 名字
+
+庞杂的互联网像一片幽暗的森林。流萤掠过，借一点微光，让原本隐没在暗处的资源重新被看见——这便是「流萤」在做的事。
+
+---
+
+<p align="center">
+  <a href="https://github.com/paralcor">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/images/brand/paralcor-horizontal-dark.png">
+      <img alt="PARALCOR" src="docs/images/brand/paralcor-horizontal-light.png" width="120">
+    </picture>
+  </a>
+  <br>
+  <sub>流萤是帕拉珂 / PARALCOR 品牌下的产品。</sub>
+</p>
