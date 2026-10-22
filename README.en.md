@@ -15,6 +15,17 @@ Local-first media discovery and download for the web
 
 **[Download](https://github.com/rumoii/streamfirefly/releases/latest)** · [Installation guide](INSTALL.md) (Chinese) · [Usage](#usage) · [Privacy](PRIVACY.md) · [简体中文](README.md)
 
+<p align="center">
+  <a href="https://github.com/paralcor">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/images/brand/paralcor-horizontal-dark.png">
+      <img alt="PARALCOR" src="docs/images/brand/paralcor-horizontal-light.png" width="120">
+    </picture>
+  </a>
+  <br>
+  <sub>StreamFirefly is a product of the PARALCOR brand.</sub>
+</p>
+
 </div>
 
 StreamFirefly has two parts: a browser extension and a native helper for Windows. The extension finds video, audio, images and HLS/DASH manifests on web pages. The helper, written in Rust, handles downloading, queueing, recovery and FFmpeg merging. Tasks and settings stay on your machine.
@@ -262,15 +273,3 @@ StreamFirefly uses [Vue](https://github.com/vuejs/core), [Pinia](https://github.
 
 流萤 (liú yíng) means a drifting firefly. The sprawling web is like a dim forest: a firefly drifts past, and by its faint light, resources hidden in the dark are seen again. That is what StreamFirefly does.
 
----
-
-<p align="center">
-  <a href="https://github.com/paralcor">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="docs/images/brand/paralcor-horizontal-dark.png">
-      <img alt="PARALCOR" src="docs/images/brand/paralcor-horizontal-light.png" width="120">
-    </picture>
-  </a>
-  <br>
-  <sub>StreamFirefly is a product of the PARALCOR brand.</sub>
-</p>

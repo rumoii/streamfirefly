@@ -15,6 +15,17 @@
 
 **[下载](https://github.com/rumoii/streamfirefly/releases/latest)** · [安装指南](INSTALL.md) · [使用说明](#使用) · [隐私政策](PRIVACY.md) · [English](README.en.md)
 
+<p align="center">
+  <a href="https://github.com/paralcor">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/images/brand/paralcor-horizontal-dark.png">
+      <img alt="PARALCOR" src="docs/images/brand/paralcor-horizontal-light.png" width="120">
+    </picture>
+  </a>
+  <br>
+  <sub>流萤是帕拉珂 / PARALCOR 品牌下的产品。</sub>
+</p>
+
 </div>
 
 流萤由浏览器扩展和 Windows 本地助手两部分组成。扩展在网页里发现视频、音频、图片和 HLS/DASH 清单；本地助手用 Rust 编写，负责下载、排队、断点恢复和 FFmpeg 合并。任务和设置只保存在本机。
@@ -268,15 +279,3 @@ Cookie 和 Authorization 只在下载过程中保存在内存里，不写入任�
 
 庞杂的互联网像一片幽暗的森林。流萤掠过，借一点微光，让原本隐没在暗处的资源重新被看见——这便是「流萤」在做的事。
 
----
-
-<p align="center">
-  <a href="https://github.com/paralcor">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="docs/images/brand/paralcor-horizontal-dark.png">
-      <img alt="PARALCOR" src="docs/images/brand/paralcor-horizontal-light.png" width="120">
-    </picture>
-  </a>
-  <br>
-  <sub>流萤是帕拉珂 / PARALCOR 品牌下的产品。</sub>
-</p>
