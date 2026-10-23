@@ -32,6 +32,26 @@ describe("shared download plans", () => {
     await expect(buildHlsPlan({ video: parseHls(text, url), audio: parseHls(encrypted, url), container: "mp4" })).rejects.toThrow("SAMPLE-AES");
   });
 
+  it("adds the audio its master names to a variant playlist found inside that master", async () => {
+    const masterUrl = "https://media.example/master.m3u8", variantUrl = "https://media.example/v/720.m3u8";
+    const masterText = `#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="main",DEFAULT=YES,URI="a/128.m3u8"\n#EXT-X-STREAM-INF:BANDWIDTH=1000,RESOLUTION=1280x720,CODECS="vp09.00.10.08,opus",AUDIO="aud"\nv/720.m3u8\n`;
+    const files: Record<string, string> = { [masterUrl]: masterText, [variantUrl]: text, "https://media.example/a/128.m3u8": text };
+    const requested: string[] = [];
+    const load = async (target: string) => { requested.push(target); if (!(target in files)) throw new Error("media_fetch_failed"); return { text: files[target], url: target }; };
+    const variant = { id: "720", type: "hls", url: variantUrl, parents: [masterUrl] };
+    const linked = await prepareDefaultDownload(variant, load);
+    expect(linked.hlsPlan?.audioManifest?.baseUrl).toMatch(/^https:\/\/media\.example\/a\//);
+    expect(linked.hlsPlan?.container).toBe("mkv");
+    expect(linked.url).toBe(variantUrl);
+    // A parent that cannot be read, or that does not list the variant, leaves it video-only as before.
+    expect((await prepareDefaultDownload({ ...variant, parents: ["https://media.example/gone.m3u8"] }, load)).hlsPlan?.audioManifest).toBeNull();
+    files[masterUrl] = masterText.replace("v/720.m3u8", "v/1080.m3u8");
+    expect((await prepareDefaultDownload(variant, load)).hlsPlan?.audioManifest).toBeNull();
+    requested.length = 0;
+    await prepareDefaultDownload({ id: "720", type: "hls", url: variantUrl }, load);
+    expect(requested).toEqual([variantUrl]);
+  });
+
   it("does not invent a title for untitled candidates", () => {
     // A placeholder title would win over the server file name and the URL name in
     // page-title naming; untitled candidates must carry null so the native fallbacks run.

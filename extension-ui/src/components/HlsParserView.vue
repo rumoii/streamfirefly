@@ -5,7 +5,7 @@ import { chooseHlsContainer, defaultAudio, defaultVariant, deriveMediaPlaylist, 
 import { formatDuration } from "../format";
 import { extensionApi, sendMessage } from "../api";
 import { humanError } from "../store";
-import { buildHlsPlan, captureHlsSelection, planSelectionFor, type HlsSelectionSnapshot } from "../download-plan";
+import { buildHlsPlan, captureHlsSelection, linkedMaster, planSelectionFor, type HlsSelectionSnapshot } from "../download-plan";
 import HlsSelectionPreview from "./HlsSelectionPreview.vue";
 import { createDownload } from "../download-client";
 import KeyCandidates from "../features/configuration/KeyCandidates.vue";
@@ -151,6 +151,9 @@ async function initialize() {
     } else {
       videoManifest.value = master.value;
       resetRange();
+      // A variant opened on its own is shown through its master, so its audio and subtitles can be chosen.
+      const linked = master.value.live ? null : await linkedMaster(props.candidate, url => fetchText(url));
+      if (linked && !disposed) { master.value = linked.master; selectedVariantId.value = linked.variant.id; }
     }
     const prepared: any = await sendMessage({ type: "task.prepare", payload: basePayload() }).catch(() => null);
     form.name = prepared?.payload?.fileName || props.candidate.pageTitle || "";

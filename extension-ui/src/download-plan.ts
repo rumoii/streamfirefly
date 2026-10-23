@@ -118,15 +118,32 @@ export function candidatePayload(candidate: MediaCandidate) {
   return { url: candidate.url, candidateId: candidate.id, title: candidate.title || candidate.pageTitle || null, pageTitle: candidate.pageTitle || null, pageUrl: candidate.pageUrl || null, mime: candidate.mime || null, contentDisposition: candidate.contentDisposition || null, referer: candidate.referer || candidate.pageUrl || null, requestHeaders: candidate.requestHeaders || {}, inlineManifest: candidate.inlineManifest || null };
 }
 
+/** A variant playlist listed in a master carries no audio of its own; the master names the rendition that plays with it. */
+export async function linkedMaster(candidate: MediaCandidate, fetchManifest: ManifestLoader): Promise<{ master: HlsManifest; variant: HlsVariant } | null> {
+  for (const parent of candidate.parents || []) {
+    try {
+      const response = await fetchManifest(parent);
+      const master = parseHls(response.text, response.url);
+      const variant = master.variants.find(item => item.uri === candidate.url);
+      if (variant) return { master, variant };
+    } catch { /* An unreachable parent leaves the variant on its own, as before. */ }
+  }
+  return null;
+}
+
 export async function prepareDefaultDownload(candidate: MediaCandidate, fetchManifest: ManifestLoader) {
   if (candidate.type === "dash") throw new Error("DASH 请进入解析页面选择画质和音轨。");
   const payload = candidatePayload(candidate);
   if (candidate.type !== "hls") return { ...payload, hlsPlan: null };
   const root = candidate.inlineManifest ? { text: candidate.inlineManifest.text, url: candidate.inlineManifest.baseUrl || candidate.url } : await fetchManifest(candidate.url);
-  const master = parseHls(root.text, root.url);
-  const variant = defaultVariant(master.variants);
+  let master = parseHls(root.text, root.url);
+  let variant = defaultVariant(master.variants);
   const response = variant ? await fetchManifest(variant.uri) : root;
   const video = parseHls(response.text, response.url);
+  if (!variant && !video.live) {
+    const linked = await linkedMaster(candidate, fetchManifest);
+    if (linked) ({ master, variant } = linked);
+  }
   if (video.live) throw new Error("直播清单请使用解析页面开始录制。");
   const audioTrack = variant ? defaultAudio(master.tracks, variant.audioGroup) : null;
   let audio = null;

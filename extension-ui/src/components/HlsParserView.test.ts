@@ -171,6 +171,25 @@ describe("HLS parser selection preview entry", () => {
     wrapper.unmount();
   });
 
+  it("opens a variant playlist through the master that lists it, keeping that variant and its audio", async () => {
+    const requested: string[] = [];
+    send.mockImplementation(async (message: any) => {
+      if (message.type === "task.prepare") return { ok: true, payload: { fileName: "默认文件名" } };
+      requested.push(message.url);
+      return { ok: true, text: message.url.endsWith("master.m3u8") ? masterText : message.url.includes("audio") ? audioText : videoText, url: message.url };
+    });
+    const base = props();
+    const wrapper = mount(HlsParserView, { props: { ...base, candidate: { id: "720", type: "hls", url: "https://media.example/720.m3u8", title: "测试 HLS", parents: ["https://media.example/master.m3u8"] } as any } });
+    await flushPromises();
+    await wrapper.findAll("button").find(button => button.text() === "开始可靠下载")!.trigger("click");
+    await flushPromises();
+    expect(requested).toContain("https://media.example/master.m3u8");
+    expect(requested).not.toContain("https://media.example/1080.m3u8");
+    expect(create).toHaveBeenCalledOnce();
+    expect(create.mock.calls[0][0].hlsPlan.audioManifest).not.toBeNull();
+    wrapper.unmount();
+  });
+
   it("blocks the preview entry while the range inputs are invalid", async () => {
     const wrapper = mount(HlsParserView, { props: props() });
     await flushPromises();
