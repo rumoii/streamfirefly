@@ -106,11 +106,21 @@ function startHost() {
   const host = { child, send, events }; hosts.push(host); return host;
 }
 async function closeHost(host) {
-  if (host.child.exitCode !== null) return;
+  if (host.child.exitCode !== null || host.child.signalCode !== null) return;
   const exited = once(host.child, 'exit');
   host.child.stdin.end();
   let timer;
-  try { assert.equal((await Promise.race([exited, new Promise((_, reject) => { timer = setTimeout(() => { host.child.kill(); reject(Error('EOF timeout')); }, 15000); })]))[0], 0); }
+  try { assert.equal((await Promise.race([exited, new Promise((_, reject) => { timer = setTimeout(() => reject(Error('EOF timeout')), 15000); })]))[0], 0); }
+  catch (error) {
+    if (host.child.exitCode === null && host.child.signalCode === null) {
+      host.child.kill();
+      let forcedTimer;
+      try { await Promise.race([exited, new Promise((_, reject) => { forcedTimer = setTimeout(() => reject(Error('Native host did not exit after kill')), 5000); })]); }
+      catch (cleanupError) { console.error(cleanupError.stack); }
+      finally { clearTimeout(forcedTimer); }
+    }
+    throw error;
+  }
   finally { clearTimeout(timer); }
 }
 async function until(check, label) {
@@ -329,19 +339,55 @@ async function stopWithoutCredentials(host) {
   console.log('Live stop/save without authorization or a custom key keeps only complete media; empty save skips merging');
   return host;
 }
-async function subtitleEofRecovery(host) {
-  assert.equal(process.platform, 'win32', 'subtitle EOF barrier requires Windows');
+function startSubtitleBarrier(host) {
   const directory = path.join(temporary, 'subtitle-barrier');
   fs.mkdirSync(directory);
   const watcher = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'tools/hold-test-subtitle-process.ps1'), '-NativePid', String(host.child.pid), '-ControlDirectory', directory], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-  let diagnostic = '';
-  watcher.stderr.on('data', bytes => { diagnostic += bytes.toString(); });
-  const barrier = { watcher, directory, marker: null }; barriers.push(barrier);
+  const barrier = { watcher, directory, marker: null, stage: 'initializing', startedAt: Date.now(), output: '', spawnError: null, exited: false, closed: false };
+  const append = bytes => { barrier.output = (barrier.output + bytes.toString()).slice(-16000); };
+  watcher.stdout.on('data', append); watcher.stderr.on('data', append);
+  watcher.once('error', error => { barrier.spawnError = error; });
+  watcher.once('exit', () => { barrier.exited = true; });
+  barrier.completion = new Promise(resolve => watcher.once('close', () => { barrier.closed = true; resolve(); }));
+  barriers.push(barrier);
+  return barrier;
+}
+function subtitleBarrierDetails(barrier) {
+  return JSON.stringify({ stage: barrier.stage, elapsedMs: Date.now() - barrier.startedAt, pid: barrier.watcher.pid,
+    exitCode: barrier.watcher.exitCode, signalCode: barrier.watcher.signalCode, closed: barrier.closed,
+    ready: fs.existsSync(path.join(barrier.directory, 'ready')), held: fs.existsSync(path.join(barrier.directory, 'held.json')),
+    subtitlePid: barrier.marker?.pid, spawnError: barrier.spawnError?.message, output: barrier.output });
+}
+async function closeSubtitleBarrier(barrier) {
+  try { await until(() => barrier.closed, 'barrier cleanup'); }
+  catch (error) {
+    console.error(`Subtitle barrier: ${subtitleBarrierDetails(barrier)}`);
+    if (!barrier.exited && !barrier.spawnError && barrier.watcher.pid) {
+      // A stop file cannot interrupt Add-Type or CIM. Kill only this watcher's tree, including its compiler.
+      const deadline = Date.now() + 5000;
+      const killed = spawnSync('taskkill.exe', ['/PID', String(barrier.watcher.pid), '/T', '/F'], { windowsHide: true, encoding: 'utf8', timeout: 5000 });
+      let timer;
+      try {
+        await Promise.race([barrier.completion, new Promise((_, reject) => {
+          timer = setTimeout(() => reject(Error(`Subtitle barrier did not close after taskkill: ${killed.error?.message || killed.stderr || killed.status}`)), Math.max(0, deadline - Date.now()));
+        })]);
+      } finally { clearTimeout(timer); }
+      console.error(`Forced subtitle barrier process-tree cleanup: pid=${barrier.watcher.pid}, taskkill=${killed.status}`);
+    }
+    throw error;
+  }
+}
+async function subtitleEofRecovery(host) {
+  assert.equal(process.platform, 'win32', 'subtitle EOF barrier requires Windows');
+  const barrier = startSubtitleBarrier(host);
+  const { watcher, directory } = barrier;
   const checkWatcher = () => {
+    if (barrier.spawnError) throw barrier.spawnError;
     if (fs.existsSync(path.join(directory, 'error'))) throw Error(fs.readFileSync(path.join(directory, 'error'), 'utf8'));
-    if (watcher.exitCode !== null) throw Error(`Subtitle barrier exited early: ${watcher.exitCode} ${diagnostic}`);
+    if (barrier.exited) throw Error(`Subtitle barrier exited early: ${watcher.exitCode} ${barrier.output}`);
   };
   await until(() => { checkWatcher(); return fs.existsSync(path.join(directory, 'ready')); }, 'subtitle barrier ready');
+  barrier.stage = 'waiting for subtitle FFmpeg';
   const request = payload('subtitle-eof');
   // Multiple valid tracks make the short real FFmpeg processes observable without synthetic media.
   request.hlsPlan.subtitles = Array.from({ length: 16 }, (_, index) => ({ ...request.hlsPlan.subtitles[0], label: `English ${index}` }));
@@ -357,10 +403,13 @@ async function subtitleEofRecovery(host) {
   assert.match(marker.commandLine, /\.streamfirefly-part-[^\\/"]+\.vtt/);
   assert.ok(alive(marker.pid), 'subtitle FFmpeg was not alive before EOF');
   const mediaHash = digest(created.task.output);
+  barrier.stage = 'closing native host';
   await closeHost(host);
   assert.equal(alive(marker.pid), false, 'EOF left the owned subtitle FFmpeg alive');
-  await until(() => watcher.exitCode !== null, 'subtitle barrier exit');
-  assert.equal(watcher.exitCode, 0, diagnostic);
+  barrier.stage = 'waiting for watcher exit';
+  await until(() => barrier.closed, 'subtitle barrier exit');
+  assert.equal(watcher.exitCode, 0, barrier.output);
+  barrier.stage = 'recovering subtitles';
   const persisted = JSON.parse(fs.readFileSync(path.join(temporary, 'StreamFireFly/tasks.json'), 'utf8')).tasks.find(task => task.id === created.task.id);
   assert.ok(['running', 'interrupted'].includes(persisted.state), `EOF turned subtitle work into terminal partial: ${persisted.state}`);
   assert.equal(persisted.outputs.find(output => output.kind === 'media').state, 'succeeded');
@@ -377,9 +426,11 @@ async function subtitleEofRecovery(host) {
     assert.equal(output.state, 'succeeded');
     assert.match(fs.readFileSync(output.path, 'utf8'), /WEBVTT[\s\S]*subtitle sentinel/);
   }
+  barrier.stage = 'complete';
   console.log('Real subtitle FFmpeg EOF cleanup and automatic subtitle recovery passed');
   return host;
 }
+let failure;
 try {
   let host = startHost();
   assert.equal((await host.send('network.configure', { mode: 'direct' })).ok, true);
@@ -449,18 +500,38 @@ try {
   assert.ok(recoveredTraffic.some(entry => entry.url.endsWith('last.ts')));
   assert.ok(requests.filter(entry => entry.url.startsWith('/proxy-recovery/')).every(entry => entry.proxied), 'HLS request bypassed custom proxy');
   await closeHost(host);
-  console.log('HLS media/subtitle publication, late conflicts, retry preservation and encrypted HLS proxy recovery passed');
+} catch (error) {
+  failure = error;
+  for (const barrier of barriers) console.error(`Subtitle barrier: ${subtitleBarrierDetails(barrier)}`);
 } finally {
-  const cleanup = await Promise.allSettled(hosts.filter(host => host.child.exitCode === null).map(closeHost));
+  const clean = async (stage, action) => {
+    try { await action(); }
+    catch (error) {
+      if (!failure) failure = error;
+      console.error(`HLS test cleanup failed (${stage}): ${error.stack || error}`);
+    }
+  };
   for (const barrier of barriers) {
-    fs.writeFileSync(path.join(barrier.directory, 'stop'), 'stop');
-    if (barrier.watcher.exitCode === null) await until(() => barrier.watcher.exitCode !== null, 'barrier cleanup');
+    await clean('signal subtitle barrier', () => fs.writeFileSync(path.join(barrier.directory, 'stop'), 'stop'));
   }
-  server.closeAllConnections(); cdn.closeAllConnections(); proxy.closeAllConnections();
-  await Promise.all([new Promise(resolve => server.close(resolve)), new Promise(resolve => cdn.close(resolve)), new Promise(resolve => proxy.close(resolve))]);
-  const resolved = fs.realpathSync(temporary);
-  assert.equal(path.dirname(resolved), fs.realpathSync(os.tmpdir()));
-  assert.ok(path.basename(resolved).startsWith('streamfirefly-hls-output-'));
-  fs.rmSync(resolved, { recursive: true, force: true });
-  for (const result of cleanup) if (result.status === 'rejected') throw result.reason;
+  await Promise.all([
+    ...hosts.map(host => clean(`native host ${host.child.pid}`, () => closeHost(host))),
+    ...barriers.map(barrier => clean('subtitle barrier', () => closeSubtitleBarrier(barrier)))
+  ]);
+  for (const [name, fixture] of [['server', server], ['cdn', cdn], ['proxy', proxy]]) {
+    await clean(`${name} connections`, () => fixture.closeAllConnections());
+    await clean(name, () => new Promise((resolve, reject) => fixture.close(error => error ? reject(error) : resolve())));
+  }
+  await clean('temporary directory', () => {
+    if (hosts.some(host => host.child.pid && host.child.exitCode === null && host.child.signalCode === null) ||
+        barriers.some(barrier => !barrier.closed || (barrier.marker && alive(barrier.marker.pid)))) {
+      throw Error(`Processes remain alive. Preserved HLS test directory: ${temporary}`);
+    }
+    const resolved = fs.realpathSync(temporary);
+    assert.equal(path.dirname(resolved), fs.realpathSync(os.tmpdir()));
+    assert.ok(path.basename(resolved).startsWith('streamfirefly-hls-output-'));
+    fs.rmSync(resolved, { recursive: true, force: true });
+  });
 }
+if (failure) throw failure;
+console.log('HLS media/subtitle publication, late conflicts, retry preservation and encrypted HLS proxy recovery passed');
