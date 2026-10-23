@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { copyResources } from "../features/configuration/copy";
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
-import type { MediaCandidate, PageFocus, ResourceViewState } from "../types";
-import { betterAlternative, filterCandidates, focusedCandidateIds, isBlobCandidate, sortCandidates } from "../media";
+import type { MediaCandidate, PageFocus, PagePick, ResourceViewState } from "../types";
+import { betterAlternative, filterCandidates, focusedCandidateIds, isBlobCandidate, pickedCandidateIds, sortCandidates } from "../media";
 import { formatBytes, formatDuration, sourceLabel, typeLabel } from "../format";
-import { sendMessage } from "../api";
+import { extensionApi, sendMessage } from "../api";
 import SfIcon from "../ui/SfIcon.vue";
 import SfMenu, { type MenuItem } from "../ui/SfMenu.vue";
 import SfPopover from "../ui/SfPopover.vue";
@@ -14,7 +14,7 @@ import { loadHls, PREVIEW_HLS_CONFIG, type HlsConstructor } from "../hls-loader"
 
 type PreviewState = "idle" | "preparing" | "ready" | "playing" | "failed";
 
-const props = defineProps<{ candidates: MediaCandidate[]; focus?: PageFocus | null; loading: boolean; viewState: ResourceViewState; compact?: boolean; coverOnly?: boolean; suspended?: boolean; connected?: boolean; externalEnabled?: boolean }>();
+const props = defineProps<{ candidates: MediaCandidate[]; focus?: PageFocus | null; pick?: PagePick | null; picking?: boolean; pickAvailable?: boolean; loading: boolean; viewState: ResourceViewState; compact?: boolean; coverOnly?: boolean; suspended?: boolean; connected?: boolean; externalEnabled?: boolean }>();
 const emit = defineEmits<{
   download: [candidate: MediaCandidate];
   externalDownload: [candidates: MediaCandidate[]];
@@ -25,6 +25,9 @@ const emit = defineEmits<{
   remove: [ids: string[]];
   updateViewState: [patch: Partial<Omit<ResourceViewState, "revision">>];
   metadata: [candidate: MediaCandidate, metadata: Partial<Pick<MediaCandidate, "duration" | "width" | "height" | "poster" | "live">>];
+  pickStart: [];
+  pickCancel: [];
+  pickClear: [];
 }>();
 const typeOptions: { value: ResourceViewState["type"]; label: string }[] = [{ value: "all", label: "全部类型" }, { value: "video", label: "视频与流媒体" }, { value: "audio", label: "音频" }, { value: "image", label: "图片" }];
 const sortOptions: { value: ResourceViewState["sortMode"]; label: string }[] = [{ value: "detected", label: "嗅探顺序" }, { value: "size", label: "文件大小" }, { value: "duration", label: "媒体时长" }];
@@ -48,7 +51,34 @@ let preparationTimer = 0;
 const resourceCandidates = computed(() => props.candidates.filter(item => item.type !== "segment"));
 const filtered = computed(() => filterCandidates(resourceCandidates.value, props.viewState.pattern, props.viewState.type, props.viewState.minMb, props.viewState.maxMb, props.viewState.minDuration, props.viewState.maxDuration));
 const focused = computed(() => focusedCandidateIds(resourceCandidates.value, props.focus));
-const visible = computed(() => sortCandidates(filtered.value.items, props.viewState.sortMode, focused.value));
+const picked = computed(() => pickedCandidateIds(resourceCandidates.value, props.pick));
+const visible = computed(() => sortCandidates(filtered.value.items, props.viewState.sortMode, focused.value, picked.value));
+const pickedHidden = computed(() => picked.value.size > 0 && !visible.value.some(item => picked.value.has(item.id)));
+const pickSummary = computed(() => {
+  const pick = props.pick;
+  if (!pick) return "";
+  return [{ video: "视频", audio: "音频", image: "图片" }[pick.kind], pick.width && pick.height ? `${pick.width}×${pick.height}` : "", pick.duration ? formatDuration(pick.duration) : ""].filter(Boolean).join(" · ");
+});
+const pickMessage = computed(() => {
+  if (!props.pick) return "";
+  if (!picked.value.size) return props.pick.kind === "image" ? "没找到这张图片的地址。" : "没找到对应的可下载资源。让它播放一会儿后重新拾取，或对它使用缓存捕捉。";
+  return pickedHidden.value ? `${picked.value.size} 个相关资源被当前筛选隐藏。` : `${picked.value.size} 个相关资源已置顶`;
+});
+// A long list suggests picking once; closing the hint or picking at all retires it for good.
+const pickHintDismissed = ref<boolean | null>(null);
+void (async () => {
+  let dismissed = true;
+  try { dismissed = (await extensionApi()?.storage?.local?.get(["pickHintDismissed"]))?.pickHintDismissed === true; } catch { /* Keep the hint hidden. */ }
+  if (pickHintDismissed.value === null) pickHintDismissed.value = dismissed;
+})();
+const showPickHint = computed(() => pickHintDismissed.value === false && !props.pick && !props.picking && props.pickAvailable !== false && resourceCandidates.value.length > 10);
+function dismissPickHint() {
+  if (pickHintDismissed.value === true) return;
+  pickHintDismissed.value = true;
+  try { void extensionApi()?.storage?.local?.set({ pickHintDismissed: true })?.catch?.(() => {}); } catch { /* Hidden for this view only. */ }
+}
+function startPick() { dismissPickHint(); emit("pickStart"); }
+function clearFilters() { emit("updateViewState", { pattern: "", type: "all", minMb: "", maxMb: "", minDuration: "", maxDuration: "" }); }
 const expanded = computed(() => visible.value.find(item => item.id === props.viewState.expandedId) || null);
 const captureExplanation = "缓存捕捉也能把视频保存到本地：有些网站不提供可直接下载的地址（显示为 Blob），流萤会在视频播放时录下加载的视频数据，播完自动保存成文件。";
 const captureCount = computed(() => visible.value.filter(isBlobCandidate).length);
@@ -353,6 +383,7 @@ onBeforeUnmount(() => { void disposePreview(); });
           <button class="button ghost" type="button" :disabled="!advancedFilterCount" @click="$emit('updateViewState', { minMb: '', maxMb: '', minDuration: '', maxDuration: '' })">清除大小与时长条件</button>
         </div>
       </SfPopover>
+      <button class="button" :class="{ active: picking }" type="button" :aria-pressed="Boolean(picking)" :disabled="!picking && pickAvailable === false" :title="picking ? '取消拾取（Esc）' : pickAvailable === false ? '继续嗅探后才能拾取' : '在页面上点选一个视频、音频或图片，把它和它的各个分辨率置顶'" @click="picking ? $emit('pickCancel') : startPick()"><SfIcon name="focus-2" /><span>{{ picking ? '拾取中…' : '拾取' }}</span></button>
       <slot name="header-tools" />
     </div>
     <div v-else class="resource-toolbar selection-bar" role="toolbar" aria-label="已选资源操作">
@@ -364,6 +395,17 @@ onBeforeUnmount(() => { void disposePreview(); });
         <button class="button danger-ghost" @click="$emit('remove', [...selectedIds])"><SfIcon name="trash" /><span>移除</span></button>
         <button class="icon-button" aria-label="取消选择" title="取消选择" @click="clearSelection"><SfIcon name="x" /></button>
       </div>
+    </div>
+    <div v-if="pick && !loading" class="pick-status" :class="{ warn: !picked.size || pickedHidden }" role="status">
+      <SfIcon :name="picked.size && !pickedHidden ? 'focus-2' : 'alert-triangle'" />
+      <span class="pick-text">已拾取 <strong>{{ pickSummary }}</strong><small>{{ pickMessage }}</small></span>
+      <button v-if="pickedHidden" class="button sm" type="button" @click="clearFilters">清除筛选</button>
+      <button class="button sm ghost" type="button" :disabled="picking || pickAvailable === false" @click="startPick">重新拾取</button>
+      <button class="icon-button" type="button" aria-label="取消拾取" title="取消拾取" @click="$emit('pickClear')"><SfIcon name="x" /></button>
+    </div>
+    <div v-if="!loading && showPickHint" class="capture-hint deep-search-hint pick-hint">
+      <button type="button" class="deep-search-hint-open" @click="startPick"><SfIcon name="focus-2" /><span>资源太多？点「拾取」，直接在页面上点选想要的视频，它和它的各个分辨率会排到最前面。</span></button>
+      <button type="button" class="deep-search-hint-close" aria-label="关闭提示" title="关闭提示" @click="dismissPickHint"><SfIcon name="x" /></button>
     </div>
     <button v-if="!loading && showCaptureHint" type="button" class="capture-hint" @click="scrollToCapture"><SfIcon name="info-circle" /><span>找不到能下载的视频？列表底部有 {{ captureCount }} 个可以<span class="term-hint" :title="captureExplanation">「缓存捕捉」</span>的视频</span><SfIcon name="chevron-down" /></button>
     <slot v-if="!loading" name="hints" />
@@ -377,11 +419,11 @@ onBeforeUnmount(() => { void disposePreview(); });
         </div>
         <div ref="resourceScroll" class="resource-scroll">
           <template v-if="loading"><div v-for="index in 4" :key="index" class="resource-row skeleton-row"><i></i><b></b></div></template>
-          <article v-for="item in visible" v-else :key="item.id" :data-candidate-id="item.id" class="resource-row" :class="{ selected: selectedIds.has(item.id), active: viewState.expandedId === item.id }">
+          <article v-for="item in visible" v-else :key="item.id" :data-candidate-id="item.id" class="resource-row" :class="{ selected: selectedIds.has(item.id), active: viewState.expandedId === item.id, picked: picked.has(item.id) }">
             <label class="row-check"><input type="checkbox" class="checkbox" :checked="selectedIds.has(item.id)" :aria-label="`选择${resourceName(item)}`" @change="toggleSelection(item.id)"></label>
             <span class="type-tile" :class="{ thumb: coverUrl(item) }" :data-type="item.type" :title="typeLabel(item.type)"><img v-if="coverUrl(item)" :src="coverUrl(item)" alt="" loading="lazy" decoding="async" @error="markImageFailed(coverUrl(item))"><SfIcon v-else :name="typeIcons[item.type] || 'file'" /></span>
             <button class="row-main" type="button" :aria-expanded="viewState.expandedId === item.id" :title="resourceName(item)" @click="toggleDetails(item)">
-              <span class="row-title"><strong>{{ resourceName(item) }}</strong><em v-if="isStream(item)" class="chip">{{ typeLabel(item.type) }}</em><em v-if="item.live" class="chip live">直播</em><em v-if="focused.has(item.id)" class="chip current">当前视频</em></span>
+              <span class="row-title"><strong>{{ resourceName(item) }}</strong><em v-if="isStream(item)" class="chip">{{ typeLabel(item.type) }}</em><em v-if="item.live" class="chip live">直播</em><em v-if="picked.has(item.id)" class="chip picked">已拾取</em><em v-if="item.userPicked && picked.has(item.id)" class="chip added" title="「识别图片」关闭时，你拾取的图片仍会加入列表">拾取加入</em><em v-if="focused.has(item.id)" class="chip current">当前视频</em></span>
               <span class="row-meta">{{ resourceMeta(item) }}</span>
             </button>
             <span class="cell-resolution">{{ item.width && item.height ? `${item.width}×${item.height}` : '—' }}</span><span class="cell-duration">{{ item.duration ? formatDuration(item.duration) : '—' }}</span><span class="cell-size">{{ sizeText(item) }}</span>

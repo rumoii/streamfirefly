@@ -73,7 +73,7 @@ async function uiContextForTab(tab) {
     await clearTab(sourceTabId, pageUrl);
     state = await loadTabState(sourceTabId);
   }
-  return { sourceTabId, sourceContextId: state.sourceContextId, pageUrl, pageTitle: pageTitleFor(tab), favIconUrl: tab?.favIconUrl || "", supported: true, paused: Boolean(state.paused), sniffingActive: !state.paused && sniffing.allowed(sourceTabId), resourceViewState: normalizeResourceViewState(state.resourceViewState), candidates: candidatesForUi(state), focus: state.focus || null };
+  return { sourceTabId, sourceContextId: state.sourceContextId, pageUrl, pageTitle: pageTitleFor(tab), favIconUrl: tab?.favIconUrl || "", supported: true, paused: Boolean(state.paused), sniffingActive: !state.paused && sniffing.allowed(sourceTabId), resourceViewState: normalizeResourceViewState(state.resourceViewState), candidates: candidatesForUi(state), focus: state.focus || null, pick: state.pick || null, picking: Boolean(state.pickId) };
 }
 
 function candidatesForUi(state) {
@@ -222,7 +222,7 @@ async function hashInlineManifest(inlineManifest) {
   return `inline-${inlineManifest.format}:${[...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, "0")).join("")}`;
 }
 
-async function addCandidate(tabId, item) {
+async function addCandidate(tabId, item, expectedContextId = "") {
   if (!Number.isInteger(tabId) || tabId < 0 || !item?.url) return false;
   if (isHeuristicNamespaceCandidate(item)) return false;
   if (blockedSite(item.url) || blockedSite(item.pageUrl)) return false;
@@ -235,6 +235,8 @@ async function addCandidate(tabId, item) {
   }
   return queueTab(tabId, async () => {
     const state = await loadTabState(tabId);
+    // A pick result belongs to the page it was picked from; never re-enter this queue to recheck.
+    if (expectedContextId && state.sourceContextId !== expectedContextId) return false;
     if (state.paused || !sniffing.allowed(tabId) || sniffing.revision(tabId) !== revision) return false;
     const draft = { ...state, candidates: new Map(state.candidates) };
     const canonicalUrl = canonicalize(item.url);
@@ -247,6 +249,13 @@ async function addCandidate(tabId, item) {
     const normalizedItem = { ...item, pageTitle: item.pageTitle ? cleanPageTitle(item.pageTitle) : item.pageTitle, pageUrl: sourceUrl };
     const enriched = context ? { ...normalizedItem, requestHeaders: normalizedItem.requestHeaders && Object.keys(normalizedItem.requestHeaders).length ? normalizedItem.requestHeaders : inlineHeaders, referer: normalizedItem.referer || context.referer, contentDisposition: normalizedItem.contentDisposition || context.contentDisposition } : normalizedItem;
     const merged = mergeCandidate(existing, { ...enriched, canonicalUrl });
+    // A variant playlist remembers the master playlists that list it, so all resolutions of one video stay together.
+    // parents are rebuilt from the stored candidate every time; a merged-in page value would be forged.
+    const parent = typeof item.parentUrl === "string" && item.parentUrl.length <= 4096 && /^(?:https?|blob):/i.test(item.parentUrl) ? canonicalize(item.parentUrl) : "";
+    delete merged.parentUrl;
+    const keptParents = (Array.isArray(existing?.parents) ? existing.parents : []).filter(value => typeof value === "string" && value.length <= 4096);
+    const parents = [...new Set(parent && parent !== canonicalUrl ? [...keptParents, parent] : keptParents)].slice(-8);
+    if (parents.length) merged.parents = parents; else delete merged.parents;
     if (existing?.extraction) merged.extraction = { ...existing.extraction, observed: existing.extraction.observed || item.source === "network" };
     else delete merged.extraction;
     const changed = [];
@@ -285,6 +294,8 @@ async function clearTab(tabId, pageUrl = "", remove = false) {
   if (!Number.isInteger(tabId) || tabId < 0) return;
   await queueTab(tabId, async () => {
     cancelScheduledPersist(tabId);
+    // A same-document navigation keeps the old document's picker running unless it is told to stop.
+    if (candidatesByTab.get(tabId)?.pickId) sendPickControl(tabId, false);
     for (const key of recentRequestContexts.keys()) if (key.startsWith(`${tabId}|`)) recentRequestContexts.delete(key);
     if (remove) { candidatesByTab.delete(tabId); try { await api.storage.session.remove(stateKey(tabId)); } catch (_) {} }
     else { const state = emptyState(tabId, pageUrl); candidatesByTab.set(tabId, state); await persistState(state); sniffing.setPaused(tabId, false); }
@@ -309,6 +320,7 @@ async function setSniffingPaused(tabId, paused) {
   return queueTab(tabId, async () => {
     const state = await loadTabState(tabId);
     state.paused = Boolean(paused);
+    if (state.paused && state.pickId) { state.pickId = null; sendPickControl(tabId, false); }
     state.lastTouchedAt = Date.now();
     await persistState(state);
     sniffing.setPaused(tabId, state.paused);
@@ -380,6 +392,89 @@ async function setPageFocus(tabId, payload = {}) {
     const poster = typeof payload.poster === "string" && payload.poster.length <= 4096 && /^https?:/i.test(payload.poster) ? payload.poster : null;
     const duration = Number(payload.duration);
     state.focus = { url, poster, duration: Number.isFinite(duration) && duration > 0 ? duration : null };
+    notifyUiContext(tabId);
+    return { ok: true };
+  });
+}
+
+function sendPickControl(tabId, active, pickId = "") {
+  api.tabs.sendMessage?.(tabId, { type: "media.pick.control", active, pickId })?.catch?.(() => {});
+}
+
+function normalizePick(value) {
+  if (!value || !["video", "audio", "image"].includes(value.kind) || !Array.isArray(value.urls)) return null;
+  const positive = input => { const number = Number(input); return Number.isFinite(number) && number > 0 ? number : null; };
+  const urls = [...new Set(value.urls.filter(url => typeof url === "string" && url.length <= 4096 && /^(?:https?:|blob:)/i.test(url)))].slice(0, 32);
+  const poster = typeof value.poster === "string" && value.poster.length <= 4096 && /^https?:/i.test(value.poster) ? value.poster : null;
+  return { kind: value.kind, urls, poster, duration: positive(value.duration), width: positive(value.width), height: positive(value.height) };
+}
+
+/**
+ * Starts the page's media picker in every frame. Only the latest session may report a result;
+ * the pick itself is kept in memory like the focus, so a reload or navigation starts without it.
+ */
+async function startPick(tabId, sourceContextId) {
+  if (!Number.isInteger(tabId) || tabId < 0) return { ok: false, error: "source_tab_unavailable" };
+  return queueTab(tabId, async () => {
+    const state = await loadTabState(tabId);
+    if (!sourceContextId || sourceContextId !== state.sourceContextId) return { ok: false, error: "resource_view_context_stale" };
+    if (state.paused || !sniffing.allowed(tabId)) return { ok: false, error: "sniffing_inactive" };
+    state.pickId = newId();
+    sendPickControl(tabId, true, state.pickId);
+    notifyUiContext(tabId);
+    return { ok: true };
+  });
+}
+
+/** Ends picking without a result: Escape in the page, the panel's cancel button, or the panel closing. */
+async function cancelPick(tabId, pickId = "") {
+  if (!Number.isInteger(tabId) || tabId < 0) return { ok: false, error: "source_tab_unavailable" };
+  return queueTab(tabId, async () => {
+    const state = await loadTabState(tabId);
+    // With no session the frames may still run a picker left behind by a restarted worker; stop it anyway.
+    if (!state.pickId) { sendPickControl(tabId, false); return { ok: false, error: "media_pick_inactive" }; }
+    if (pickId && pickId !== state.pickId) return { ok: false, error: "media_pick_inactive" };
+    state.pickId = null;
+    sendPickControl(tabId, false);
+    notifyUiContext(tabId);
+    return { ok: true };
+  });
+}
+
+async function finishPick(tabId, pickId, payload) {
+  if (!Number.isInteger(tabId) || tabId < 0) return { ok: false, error: "source_tab_unavailable" };
+  const pick = normalizePick(payload);
+  if (!pick) return { ok: false, error: "media_pick_invalid" };
+  const sourceContextId = await queueTab(tabId, async () => {
+    const state = await loadTabState(tabId);
+    // No remembered session means pickers left running by a restarted worker; tell them to stop.
+    if (!state.pickId) { sendPickControl(tabId, false); return ""; }
+    // A result for another session is an old document's and must not stop the current one.
+    if (typeof pickId !== "string" || !pickId || pickId !== state.pickId) return "";
+    state.pickId = null;
+    state.pick = pick;
+    // Other frames are still highlighting; only the clicked one stopped by itself.
+    sendPickControl(tabId, false);
+    return state.sourceContextId;
+  });
+  if (!sourceContextId) return { ok: false, error: "media_pick_inactive" };
+  // Images are listed only when image detection is on; the ones the user picked are listed regardless.
+  if (pick.kind === "image") {
+    const pageTitle = (await api.tabs.get(tabId).catch(() => null))?.title || "";
+    for (const [index, url] of pick.urls.entries()) {
+      if (/^https?:/i.test(url)) await addCandidate(tabId, { url, mime: "image/unknown", pageTitle, width: index ? null : pick.width, height: index ? null : pick.height, source: "pick", userPicked: true }, sourceContextId);
+    }
+  }
+  notifyUiContext(tabId);
+  return { ok: true };
+}
+
+async function clearPick(tabId, sourceContextId) {
+  if (!Number.isInteger(tabId) || tabId < 0) return { ok: false, error: "source_tab_unavailable" };
+  return queueTab(tabId, async () => {
+    const state = await loadTabState(tabId);
+    if (!sourceContextId || sourceContextId !== state.sourceContextId) return { ok: false, error: "resource_view_context_stale" };
+    state.pick = null;
     notifyUiContext(tabId);
     return { ok: true };
   });
@@ -556,5 +651,5 @@ async function clearExtracted() {
     updateBadge(state); notifyUiContext(tabId);
   });
 }
-return { refreshBadgeForContext, subscribeCandidates(listener) { candidateListeners.add(listener); return () => candidateListeners.delete(listener); }, clearExtracted, reevaluate, loadTabState, uiContextForTab, resolveUiTab, notifyUiContext, queueTab, rememberRequestContext, parseContentRange, addCandidate, clearTab, resolveRequestTabId, setSniffingPaused, patchResourceViewState, updateCandidateMetadata, removeCandidates, candidateFor, fetchMediaText, probeMediaSize, setPageFocus };
+return { refreshBadgeForContext, subscribeCandidates(listener) { candidateListeners.add(listener); return () => candidateListeners.delete(listener); }, clearExtracted, reevaluate, loadTabState, uiContextForTab, resolveUiTab, notifyUiContext, queueTab, rememberRequestContext, parseContentRange, addCandidate, clearTab, resolveRequestTabId, setSniffingPaused, patchResourceViewState, updateCandidateMetadata, removeCandidates, candidateFor, fetchMediaText, probeMediaSize, setPageFocus, startPick, cancelPick, finishPick, clearPick };
 }

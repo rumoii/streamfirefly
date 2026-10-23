@@ -9,7 +9,8 @@ export function createDiscovery(api, settings, evaluation) {
   async function detect(candidate, fallbackKind) {
     await ready;
     if (loadError) throw new Error(loadError);
-    const snapshot = { ...config, detectImages: settings.get().detectImages, rules: config.rules.filter(rule => !disabled.has(rule.id)) };
+    // An image the user picked on the page is listed even with image detection off.
+    const snapshot = { ...config, detectImages: settings.get().detectImages || candidate.userPicked === true, rules: config.rules.filter(rule => !disabled.has(rule.id)) };
     return detectResource(candidate, snapshot, async (pattern, flags, value, ruleId) => {
       try { return await evaluation.run({ kind: "regex", pattern, flags, value }); }
       catch (error) { if (error.message === "worker_timeout") disabled.set(ruleId, "执行超时，已停用；修改并保存后重试"); throw error; }

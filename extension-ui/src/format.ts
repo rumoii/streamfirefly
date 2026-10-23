@@ -19,7 +19,7 @@ export function formatSpeed(value?: number | null): string { return Number(value
 /** Page-probe sources are composed (`xhr-json`, `fetch-body-member`, ...), so they are matched by prefix and suffix. */
 export function sourceLabel(value?: string): string {
   const source = value || "";
-  const labels: Record<string, string> = { dom: "页面元素", network: "网络响应", timing: "资源记录", rule: "提取规则", worker: "Worker", "blob-manifest": "内存清单" };
+  const labels: Record<string, string> = { dom: "页面元素", network: "网络响应", timing: "资源记录", rule: "提取规则", worker: "Worker", "blob-manifest": "内存清单", pick: "页面拾取" };
   if (labels[source]) return labels[source];
   if (source.endsWith("-member")) return "清单成员";
   if (source.startsWith("inline-script") || source.startsWith("page-probe")) return "页面脚本";

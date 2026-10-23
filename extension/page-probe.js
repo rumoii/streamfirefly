@@ -62,25 +62,40 @@
     return Reflect.apply(joinLines, lines, ["\n"]);
   };
 
-  const emitManifestMembers = (text, baseUrl, source) => {
+  // Variant and rendition playlists carry the playlist that lists them, so every resolution of a video can be grouped.
+  const emitManifestMembers = (text, baseUrl, source, parentUrl = baseUrl) => {
     let emitted = 0;
+    let nextIsPlaylist = false;
+    const playlist = url => /\.m3u8?(?:$|[?#&])/i.test(url);
     for (const line of String(text).split(/\r?\n/)) {
       if (emitted >= 1000) return;
       const trimmed = line.trim();
       if (!trimmed) continue;
       if (!trimmed.startsWith("#")) {
         const url = absoluteUrl(trimmed, baseUrl);
-        if (url && /^https?:/i.test(url)) { emit(url, "", `${source}-member`, { segmentKind: /\.m3u8?(?:$|[?#&])/i.test(url) ? null : "segment" }); emitted += 1; }
+        if (url && /^https?:/i.test(url)) { emit(url, nextIsPlaylist ? "application/vnd.apple.mpegurl" : "", `${source}-member`, nextIsPlaylist || playlist(url) ? { segmentKind: null, parentUrl } : { segmentKind: "segment" }); emitted += 1; }
+        nextIsPlaylist = false;
         continue;
       }
+      // A stream entry or a rendition URI names its sub-playlist even without an .m3u8 suffix.
+      if (/^#EXT-X-STREAM-INF:/i.test(trimmed)) { nextIsPlaylist = true; continue; }
+      const rendition = /^#EXT-X-(?:MEDIA|I-FRAME-STREAM-INF):/i.test(trimmed);
       for (const match of trimmed.matchAll(/URI=(?:"([^"]+)"|'([^']+)')/gi)) {
         const url = absoluteUrl(match[1] ?? match[2], baseUrl);
         if (!url || !/^https?:/i.test(url)) continue;
         const segmentKind = /^#EXT-X-KEY:/i.test(trimmed) ? "key" : /^#EXT-X-MAP:/i.test(trimmed) ? "init" : null;
-        emit(url, "", `${source}-member`, segmentKind ? { segmentKind } : {});
+        emit(url, rendition ? "application/vnd.apple.mpegurl" : "", `${source}-member`, segmentKind ? { segmentKind } : rendition ? { segmentKind: null, parentUrl } : playlist(url) ? { parentUrl } : {});
         emitted += 1;
       }
     }
+  };
+
+  // A finished media playlist knows its length, which matches it to the video playing it.
+  const playlistDuration = text => {
+    if (!/#EXT-X-ENDLIST/i.test(text) || /#EXT-X-STREAM-INF/i.test(text)) return {};
+    let total = 0;
+    for (const match of String(text).matchAll(/#EXTINF:\s*([\d.]+)/gi)) total += Number(match[1]) || 0;
+    return total > 0 ? { duration: total } : {};
   };
 
   const emitInlineManifest = (text, baseUrl, sourceUrl, source) => {
@@ -92,9 +107,10 @@
     const byteLength = encoder.encode(normalized).byteLength;
     if (!byteLength || byteLength > INLINE_MANIFEST_LIMIT) return false;
     emit(sourceUrl || resolvedBase, dash ? "application/dash+xml" : "application/vnd.apple.mpegurl", source, {
-      inlineManifest: { format: dash ? "dash" : "hls", text: normalized, baseUrl: resolvedBase, sourceUrl: sourceUrl || null }
+      inlineManifest: { format: dash ? "dash" : "hls", text: normalized, baseUrl: resolvedBase, sourceUrl: sourceUrl || null },
+      ...(dash ? {} : playlistDuration(normalized))
     });
-    if (!dash) emitManifestMembers(normalized, resolvedBase, source);
+    if (!dash) emitManifestMembers(normalized, resolvedBase, source, sourceUrl || resolvedBase);
     return true;
   };
 
@@ -176,7 +192,7 @@
     const isInlineHls = /^\s*#EXTM3U(?:\s|$)/i.test(text);
     if (isInlineHls) {
       if (method !== "GET") emitInlineManifest(text, url, url, `${source}-body`);
-      else { emit(url, "application/vnd.apple.mpegurl", `${source}-body`); emitManifestMembers(normalizeManifest(text, url), url, `${source}-body`); }
+      else { emit(url, "application/vnd.apple.mpegurl", `${source}-body`, playlistDuration(text)); emitManifestMembers(normalizeManifest(text, url), url, `${source}-body`); }
     } else scanText(text, url, `${source}-body`);
     if (/json/i.test(mime) || /^[\s\r\n]*[\[{]/.test(text)) {
       try { scanValue(JSON.parse(text), url, `${source}-json`); } catch (_) {}
@@ -220,7 +236,7 @@
           const text = this.responseText;
           if (/^\s*#EXTM3U(?:\s|$)/i.test(text)) {
             if (request.method !== "GET") emitInlineManifest(text, url, url, "xhr-body");
-            else { emit(url, "application/vnd.apple.mpegurl", "xhr-body"); emitManifestMembers(normalizeManifest(text, url), url, "xhr-body"); }
+            else { emit(url, "application/vnd.apple.mpegurl", "xhr-body", playlistDuration(text)); emitManifestMembers(normalizeManifest(text, url), url, "xhr-body"); }
           } else scanText(text, url, "xhr-body");
         } else if (this.responseType === "arraybuffer" && this.response?.byteLength <= BODY_LIMIT) scanValue(this.response, url, "xhr-buffer");
         else if (this.responseType === "blob" && this.response?.size <= BODY_LIMIT && !/^(?:video|audio|image)\//i.test(this.response.type)) {

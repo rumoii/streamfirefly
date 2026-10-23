@@ -22,6 +22,8 @@ if (!existing) {
   root.id = "app";
   shadow.append(style, root);
   document.documentElement.append(host);
+  // The content script recognizes this host by reference; a page element with the same id must not pass.
+  (globalThis as any).__streamFireflyWorkspaceHost = host;
 
   const app = createApp(WorkspaceApp).use(createPinia());
   app.mount(root);
@@ -31,6 +33,7 @@ if (!existing) {
     disposed = true;
     window.removeEventListener("streamfirefly-workspace-unmount", dispose);
     app.unmount();
+    if ((globalThis as any).__streamFireflyWorkspaceHost === host) delete (globalThis as any).__streamFireflyWorkspaceHost;
     host.remove();
   };
   window.addEventListener("streamfirefly-workspace-unmount", dispose, { once: true });

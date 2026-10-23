@@ -27,6 +27,10 @@ export interface MediaCandidate {
   requestHeaders?: Record<string, string>;
   contentDisposition?: string;
   inlineManifest?: { format: string; baseUrl: string; text: string } | null;
+  /** Canonical addresses of the master playlists that list this variant playlist. */
+  parents?: string[];
+  /** Set on images the user picked on the page; they stay listed with image detection off. */
+  userPicked?: boolean;
 }
 
 export interface ResourceViewState {
@@ -56,12 +60,26 @@ export interface UiContext {
   resourceViewState: ResourceViewState;
   /** The video the page is currently playing, used to pin it and its downloadable copies. */
   focus?: PageFocus | null;
+  /** The element the user picked on the page; it and its other resolutions are pinned first. */
+  pick?: PagePick | null;
+  /** True while the page is waiting for the user to click a video, audio or image. */
+  picking?: boolean;
 }
 
 export interface PageFocus {
   url: string;
   poster?: string | null;
   duration?: number | null;
+}
+
+export interface PagePick {
+  kind: "video" | "audio" | "image";
+  /** The element's current address first, then its other sources (`<source>`, srcset, `<picture>`). */
+  urls: string[];
+  poster?: string | null;
+  duration?: number | null;
+  width?: number | null;
+  height?: number | null;
 }
 
 export interface TaskOutput {

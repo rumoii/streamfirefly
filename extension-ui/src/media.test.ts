@@ -1,4 +1,4 @@
-import { betterAlternative, chooseHlsContainer, defaultAudio, defaultVariant, deriveMediaPlaylist, filterCandidates, focusedCandidateIds, hlsEncryptionMethods, isBlobCandidate, parseHls, segmentRangeForTime, sortCandidates, validateHlsKeyOverride, validateHlsRange } from "./media";
+import { betterAlternative, chooseHlsContainer, defaultAudio, defaultVariant, deriveMediaPlaylist, filterCandidates, focusedCandidateIds, hlsEncryptionMethods, isBlobCandidate, parseHls, pickedCandidateIds, segmentRangeForTime, sortCandidates, validateHlsKeyOverride, validateHlsRange } from "./media";
 import type { MediaCandidate } from "./types";
 
 const masterText = `#EXTM3U
@@ -130,6 +130,87 @@ test("pins the page's current video and its downloadable copies only in the defa
   expect(focusedCandidateIds(items, null).size).toBe(0);
   const byPoster = focusedCandidateIds(items, { url: "blob:https://example/other-player", poster: "https://example/other.jpg" });
   expect([...byPoster]).toEqual(["other"]);
+});
+
+test("the current video brings along every resolution its master playlist lists", () => {
+  const items: MediaCandidate[] = [
+    { id: "blob", url: "blob:https://example/current", type: "video", duration: 600, detectedAt: 1 },
+    { id: "master", url: "https://cdn.example/index.m3u8", canonicalUrl: "https://cdn.example/index.m3u8", type: "hls", detectedAt: 2 },
+    { id: "720", url: "https://cdn.example/720/index.m3u8", canonicalUrl: "https://cdn.example/720/index.m3u8", type: "hls", duration: 600.4, parents: ["https://cdn.example/index.m3u8"], detectedAt: 3 },
+    { id: "1080", url: "https://cdn.example/1080/index.m3u8", canonicalUrl: "https://cdn.example/1080/index.m3u8", type: "hls", parents: ["https://cdn.example/index.m3u8"], detectedAt: 4 },
+    { id: "audio", url: "https://cdn.example/audio/index.m3u8", canonicalUrl: "https://cdn.example/audio/index.m3u8", type: "hls", parents: ["https://cdn.example/index.m3u8"], detectedAt: 5 },
+    { id: "other", url: "https://cdn.example/other/index.m3u8", canonicalUrl: "https://cdn.example/other/index.m3u8", type: "hls", parents: ["https://cdn.example/other.m3u8"], detectedAt: 6 }
+  ];
+  // Only the 720p playlist matches by length; the master and its other renditions come through the playlist links.
+  expect([...focusedCandidateIds(items, { url: "blob:https://example/current", duration: 600 })].sort()).toEqual(["1080", "720", "audio", "blob", "master"]);
+  expect([...pickedCandidateIds(items, { kind: "video", urls: ["https://cdn.example/1080/index.m3u8"] })].sort()).toEqual(["1080", "720", "audio", "master"]);
+});
+
+test("a corrupted parents value from old session data counts as none", () => {
+  const items: MediaCandidate[] = [
+    { id: "good", url: "https://cdn.example/good/index.m3u8", canonicalUrl: "https://cdn.example/good/index.m3u8", type: "hls", parents: ["https://cdn.example/index.m3u8"], detectedAt: 1 },
+    { id: "bad", url: "https://cdn.example/bad/index.m3u8", canonicalUrl: "https://cdn.example/bad/index.m3u8", type: "hls", parents: {} as any, detectedAt: 2 }
+  ];
+  // The stale value must not break the playlist closure in either entry point.
+  expect([...pickedCandidateIds(items, { kind: "video", urls: ["https://cdn.example/good/index.m3u8"] })]).toEqual(["good"]);
+  expect([...focusedCandidateIds(items, { url: "https://cdn.example/good/index.m3u8" })]).toEqual(["good"]);
+});
+
+test("children of the same master bring each other in without the master listed", () => {
+  const items: MediaCandidate[] = [
+    { id: "720", url: "https://cdn.example/720/index.m3u8", canonicalUrl: "https://cdn.example/720/index.m3u8", type: "hls", parents: ["https://cdn.example/index.m3u8"], detectedAt: 1 },
+    { id: "1080", url: "https://cdn.example/1080/index.m3u8", canonicalUrl: "https://cdn.example/1080/index.m3u8", type: "hls", parents: ["https://cdn.example/index.m3u8"], detectedAt: 2 }
+  ];
+  expect([...pickedCandidateIds(items, { kind: "video", urls: ["https://cdn.example/720/index.m3u8"] })].sort()).toEqual(["1080", "720"]);
+});
+
+test("a picked element is matched by all of its own addresses; an image only by them", () => {
+  const items: MediaCandidate[] = [
+    { id: "small", url: "https://img.example/still_400.jpg", type: "image", detectedAt: 1 },
+    { id: "large", url: "https://img.example/still_1600.jpg", type: "image", detectedAt: 2 },
+    { id: "other-image", url: "https://img.example/other.jpg", type: "image", detectedAt: 3 },
+    { id: "trailer-360", url: "https://cdn.example/trailer_360.mp4", type: "video", duration: 238, detectedAt: 4 },
+    { id: "trailer-720", url: "https://cdn.example/trailer_720.mp4", type: "video", duration: 238, detectedAt: 5 }
+  ];
+  expect([...pickedCandidateIds(items, { kind: "image", urls: ["https://img.example/still_400.jpg#x", "https://img.example/still_1600.jpg"], duration: 238 })].sort()).toEqual(["large", "small"]);
+  expect([...pickedCandidateIds(items, { kind: "video", urls: ["https://cdn.example/trailer_360.mp4"], duration: 238 })].sort()).toEqual(["trailer-360", "trailer-720"]);
+  expect(pickedCandidateIds(items, { kind: "video", urls: ["blob:https://example/live"] }).size).toBe(0);
+  expect(pickedCandidateIds(items, null).size).toBe(0);
+});
+
+test("a picked audio element matches only its own addresses, never a same-length video", () => {
+  const items: MediaCandidate[] = [
+    { id: "song-a", url: "https://cdn.example/song_a.mp3", type: "audio", duration: 238, detectedAt: 1 },
+    { id: "song-b", url: "https://cdn.example/song_b.mp3", type: "audio", duration: 238, detectedAt: 2 },
+    { id: "clip", url: "https://cdn.example/clip.mp4", type: "video", duration: 238, detectedAt: 3 }
+  ];
+  // Not matching the other mp3 by length is a deliberate trade-off, see the picker decision record.
+  expect([...pickedCandidateIds(items, { kind: "audio", urls: ["https://cdn.example/song_a.mp3"], duration: 238 })]).toEqual(["song-a"]);
+});
+
+test("the picked group comes first in every order, then the current video in the default order", () => {
+  const items: MediaCandidate[] = [
+    { id: "big", url: "https://example/big.mp4", type: "video", size: 900, duration: 900, detectedAt: 5 },
+    { id: "playing", url: "https://example/playing.mp4", type: "video", size: 10, duration: 10, detectedAt: 1 },
+    { id: "picked-blob", url: "blob:https://example/picked", type: "video", detectedAt: 4 },
+    { id: "picked", url: "https://example/picked.mp4", type: "video", size: 20, duration: 20, detectedAt: 2 }
+  ];
+  const focused = new Set(["playing"]);
+  const picked = new Set(["picked", "picked-blob"]);
+  expect(sortCandidates(items, "detected", focused, picked).map(item => item.id)).toEqual(["picked", "picked-blob", "playing", "big"]);
+  expect(sortCandidates(items, "size", focused, picked).map(item => item.id)).toEqual(["picked", "picked-blob", "big", "playing"]);
+  expect(sortCandidates(items, "duration", focused, picked).map(item => item.id)).toEqual(["picked", "picked-blob", "big", "playing"]);
+  // The same video picked and playing is shown once, in the picked group.
+  expect(sortCandidates(items, "detected", new Set(["picked"]), picked).map(item => item.id)).toEqual(["picked", "picked-blob", "big", "playing"]);
+});
+
+test("the picked group keeps blobs last instead of promoting the current video inside it", () => {
+  const items: MediaCandidate[] = [
+    { id: "picked-blob", url: "blob:https://example/picked", type: "video", detectedAt: 1 },
+    { id: "picked-mp4", url: "https://example/picked.mp4", type: "video", size: 20, detectedAt: 2 }
+  ];
+  const picked = new Set(["picked-blob", "picked-mp4"]);
+  expect(sortCandidates(items, "detected", new Set(["picked-blob"]), picked).map(item => item.id)).toEqual(["picked-mp4", "picked-blob"]);
 });
 
 test("a frame captured by the preview player does not count as a different cover", () => {

@@ -84,6 +84,29 @@ const inline = messages.find(item => item.source === 'blob-test' && item.inlineM
 if (!inline?.inlineManifest.text.includes('URI="https://cdn.example/path/key.bin"') || !inline.inlineManifest.text.includes('https://cdn.example/path/segment-1.ts')) throw new Error(`Inline HLS URLs were not normalized: ${JSON.stringify(inline)}`);
 if (!messages.some(item => item.url === 'https://cdn.example/path/key.bin' && item.segmentKind === 'key')) throw new Error('Extensionless HLS key was not emitted as a segment candidate');
 
+const beforeFamily = messages.length;
+nextFetchResponse = new Response('#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",URI="audio/index.m3u8"\n#EXT-X-STREAM-INF:BANDWIDTH=1,RESOLUTION=1280x720\n720/index.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=2,RESOLUTION=1920x1080\n1080/index.m3u8\n', { headers: { 'content-type': 'application/vnd.apple.mpegurl' } });
+await context.fetch('https://cdn.example/show/master.m3u8');
+nextFetchResponse = new Response('#EXTM3U\n#EXT-X-MAP:URI="init.mp4"\n#EXTINF:4.5,\na.m4s\n#EXTINF:5.5,\nb.m4s\n#EXT-X-ENDLIST\n', { headers: { 'content-type': 'application/vnd.apple.mpegurl' } });
+await context.fetch('https://cdn.example/show/720/index.m3u8');
+await new Promise(resolve => setImmediate(resolve));
+const family = messages.slice(beforeFamily);
+assert.deepEqual(family.filter(item => item.parentUrl).map(item => [item.url, item.parentUrl]), [['https://cdn.example/show/audio/index.m3u8', 'https://cdn.example/show/master.m3u8'], ['https://cdn.example/show/720/index.m3u8', 'https://cdn.example/show/master.m3u8'], ['https://cdn.example/show/1080/index.m3u8', 'https://cdn.example/show/master.m3u8']], 'Variant and rendition playlists must name their master playlist; segments and init sections must not');
+assert.equal(family.find(item => item.url === 'https://cdn.example/show/720/index.m3u8' && item.source === 'fetch-body')?.duration, 10, 'A finished media playlist reports its length');
+assert.equal(family.find(item => item.url === 'https://cdn.example/show/master.m3u8' && item.source === 'fetch-body')?.duration, undefined, 'A master playlist has no length of its own');
+const beforeInlineFamily = messages.length;
+context.__streamFireflyProbeApi.emitInlineManifest('#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nlow/index.m3u8\n', 'https://cdn.example/live/master.m3u8', 'blob:https://page.example/master', 'blob-test');
+assert.deepEqual(messages.slice(beforeInlineFamily).filter(item => item.parentUrl).map(item => [item.url, item.parentUrl]), [['https://cdn.example/live/low/index.m3u8', 'blob:https://page.example/master']], 'A playlist listed by an in-memory master names the address that master is listed under');
+
+const beforeQueryFamily = messages.length;
+nextFetchResponse = new Response('#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",URI="audio?lang=zh"\n#EXT-X-STREAM-INF:BANDWIDTH=1\nvariant?quality=720\n', { headers: { 'content-type': 'application/vnd.apple.mpegurl' } });
+await context.fetch('https://cdn.example/query/master.m3u8');
+await new Promise(resolve => setImmediate(resolve));
+const queryFamily = messages.slice(beforeQueryFamily).filter(item => item.parentUrl);
+assert.deepEqual(queryFamily.map(item => [item.url, item.parentUrl]), [['https://cdn.example/query/audio?lang=zh', 'https://cdn.example/query/master.m3u8'], ['https://cdn.example/query/variant?quality=720', 'https://cdn.example/query/master.m3u8']], 'Sub-playlists without an .m3u8 suffix must still name their master playlist');
+for (const item of queryFamily) assert.equal(item.mime, 'application/vnd.apple.mpegurl', 'a structure-recognized sub-playlist must carry the HLS type');
+assert.ok(!queryFamily.some(item => item.segmentKind === 'segment'), 'a structure-recognized sub-playlist must not be marked as a segment');
+
 const beforePause = messages.length;
 context.__streamFireflyProbeApi.setActive(false);
 nextFetchResponse = new Response('#EXTM3U\n#EXTINF:2,\npaused.ts\n', { headers: { 'content-type': 'text/plain' } });

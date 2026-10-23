@@ -56,7 +56,9 @@ input[type="radio"] { accent-color: var(--sf-accent); }
 
 .chip, .tag { display: inline-flex; align-items: center; flex: none; height: 18px; padding: 0 6px; border-radius: 4px; background: var(--sf-surface-3); color: var(--sf-text-2); font-size: 10.5px; font-style: normal; font-weight: 600; letter-spacing: .02em; }
 .chip.live { background: var(--sf-danger-soft); color: var(--sf-danger); }
-.chip.current { background: var(--sf-accent-soft); color: var(--sf-accent-text); }
+/* What the user picked carries the brand colour; the automatically found current video stays neutral. */
+.chip.picked { background: var(--sf-accent-soft); color: var(--sf-accent-text); }
+.chip.added { background: var(--sf-warning-soft); color: var(--sf-warning); }
 .tag { background: var(--sf-accent-soft); color: var(--sf-accent-text); }
 
 .panel { border: 1px solid var(--sf-border); border-radius: var(--sf-radius-lg); background: var(--sf-surface); }

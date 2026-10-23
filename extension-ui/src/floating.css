@@ -44,6 +44,12 @@
 .floating-launcher b { position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 4px; display: grid; place-items: center; border: 2px solid var(--sf-surface); border-radius: 9px; background: var(--sf-accent); color: var(--sf-on-accent); font: 600 10px/1 var(--sf-font); }
 .floating-launcher i { position: absolute; left: 4px; bottom: 4px; width: 8px; height: 8px; border: 1.5px solid var(--sf-surface); box-sizing: content-box; }
 
+.floating-picking { position: fixed; pointer-events: auto; height: 46px; display: flex; align-items: center; gap: 10px; padding: 0 8px 0 14px; border: 1px solid var(--sf-border); border-radius: var(--sf-radius-xl); background: var(--sf-surface); box-shadow: var(--sf-shadow-lg); color: var(--sf-text); font-size: var(--sf-text-md); }
+.floating-picking i { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--sf-accent); box-shadow: 0 0 0 4px var(--sf-accent-soft); animation: floating-pick-pulse 1.4s infinite; }
+.floating-picking span { min-width: 0; flex: 1; overflow: hidden; color: var(--sf-text-2); text-overflow: ellipsis; white-space: nowrap; }
+.floating-picking b { color: var(--sf-text); font-weight: 600; }
+@keyframes floating-pick-pulse { 50% { box-shadow: 0 0 0 7px transparent; } }
+
 .resize-handle { position: absolute; z-index: 40; touch-action: none; }
 .resize-handle.n, .resize-handle.s { height: 6px; left: 10px; right: 10px; cursor: ns-resize; }
 .resize-handle.n { top: 0; }

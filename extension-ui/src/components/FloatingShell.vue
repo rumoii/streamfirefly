@@ -6,8 +6,8 @@ import logoUrl from "../../../extension/icon48.png?inline";
 import SfIcon from "../ui/SfIcon.vue";
 import { hasOpenPopover } from "../ui/popover";
 
-const props = defineProps<{ count: number; paused: boolean; sniffing: boolean; loading: boolean; canExpand: boolean; beforeLeave: () => boolean }>();
-const emit = defineEmits<{ change: [mode: DisplayMode]; close: []; refresh: []; toggleSniffing: [] }>();
+const props = defineProps<{ count: number; paused: boolean; sniffing: boolean; loading: boolean; canExpand: boolean; beforeLeave: () => boolean; picking?: boolean }>();
+const emit = defineEmits<{ change: [mode: DisplayMode]; close: []; refresh: []; toggleSniffing: []; cancelPick: [] }>();
 const shell = ref<HTMLElement | null>(null);
 const mode = ref<DisplayMode>("panel");
 const previousMode = ref<Exclude<DisplayMode, "collapsed">>("panel");
@@ -21,6 +21,8 @@ let scrollSnapshot: { element: HTMLElement; overflow: string; overscroll: string
 let writeQueue = Promise.resolve();
 const stateText = computed(() => props.paused ? "已暂停" : props.sniffing ? "正在嗅探" : "等待嗅探");
 const launcherStyle = computed(() => ({ left: `${layout.value.launcher.edge === "left" ? 12 : Math.max(12, viewport.value.width - 56)}px`, top: `${12 + layout.value.launcher.yRatio * Math.max(0, viewport.value.height - 68)}px` }));
+// While the user picks on the page the window steps aside for a one-line bar at its top edge.
+const pickingStyle = computed(() => mode.value === "maximized" ? { left: "50%", top: "12px", transform: "translateX(-50%)" } : { left: `${rect.value.x}px`, top: `${rect.value.y}px`, width: `${Math.min(rect.value.width, 440)}px` });
 const windowStyle = computed(() => mode.value === "maximized" ? { inset: "0", width: "100%", height: "100%" } : { left: `${rect.value.x}px`, top: `${rect.value.y}px`, width: `${rect.value.width}px`, height: `${rect.value.height}px` });
 function saveLayout() {
   const value = JSON.parse(JSON.stringify(layout.value));
@@ -122,7 +124,8 @@ defineExpose({ setMode, restore, mode });
 
 <template>
   <button v-if="mode === 'collapsed'" class="floating-launcher" :style="launcherStyle" :title="`流萤 · ${count} 个资源 · ${stateText}`" aria-label="恢复流萤面板" @pointerdown="beginPointer($event, '', true)" @click="($event.detail === 0) && restore()"><img :src="logoUrl" alt="流萤"><b v-if="count">{{ count > 99 ? '99+' : count }}</b><i :class="{ paused: paused || !sniffing }"></i></button>
-  <section v-show="mode !== 'collapsed'" ref="shell" class="floating-window" :class="[mode, { 'is-collapsed': mode === 'collapsed' }]" :style="windowStyle" tabindex="-1" aria-label="流萤" :data-display-mode="mode">
+  <div v-if="picking && mode !== 'collapsed'" class="floating-picking" :style="pickingStyle" role="status"><i></i><span><b>正在拾取</b> · 点击页面上的视频、音频或图片</span><button class="button sm" type="button" @click="emit('cancelPick')">取消 (Esc)</button></div>
+  <section v-show="mode !== 'collapsed' && !picking" ref="shell" class="floating-window" :class="[mode, { 'is-collapsed': mode === 'collapsed' }]" :style="windowStyle" tabindex="-1" aria-label="流萤" :data-display-mode="mode">
     <header class="floating-titlebar" @pointerdown="beginPointer($event)">
       <img class="brand-logo" :src="logoUrl" alt="流萤"><h1>流萤</h1>
       <span class="floating-state" :title="stateText"><i :class="{ paused: paused || !sniffing }"></i><span>{{ stateText }}</span></span>

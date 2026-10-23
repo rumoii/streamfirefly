@@ -35,7 +35,8 @@ vi.mock("hls.js", async () => {
 });
 
 const sent: any[] = [];
-vi.stubGlobal("chrome", { runtime: { sendMessage: vi.fn(async (message: any) => { sent.push(message); return { ok: true }; }) } });
+const stored: Record<string, unknown> = {};
+vi.stubGlobal("chrome", { runtime: { sendMessage: vi.fn(async (message: any) => { sent.push(message); return { ok: true }; }) }, storage: { local: { get: vi.fn(async (keys: string[]) => Object.fromEntries(keys.filter(key => key in stored).map(key => [key, stored[key]]))), set: vi.fn(async (values: Record<string, unknown>) => { Object.assign(stored, values); }) } } });
 vi.stubGlobal("browser", undefined);
 vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(0); return 1; });
 
@@ -353,6 +354,35 @@ describe("resource guidance", () => {
     await wrapper.setProps({ candidates: [blob] });
     expect(wrapper.find(".capture-hint").exists()).toBe(false);
     wrapper.unmount();
+  });
+  it("suggests picking on a long list until the user closes the hint or picks once", async () => {
+    delete stored.pickHintDismissed;
+    const many = Array.from({ length: 11 }, (_, index) => ({ ...candidate, id: `hls-${index}`, url: `https://media.example/${index}.m3u8` }));
+    const wrapper = mount(ResourcesView, { props: { candidates: many.slice(0, 10), loading: false, viewState: defaultState(""), compact: true, coverOnly: true, pickAvailable: true } });
+    await flushPromises();
+    expect(wrapper.find(".pick-hint").exists()).toBe(false);
+    await wrapper.setProps({ candidates: many });
+    expect(wrapper.get(".pick-hint").text()).toContain("拾取");
+    await wrapper.setProps({ picking: true });
+    expect(wrapper.find(".pick-hint").exists()).toBe(false);
+    await wrapper.setProps({ picking: false });
+    await wrapper.get(".pick-hint .deep-search-hint-open").trigger("click");
+    expect(wrapper.emitted("pickStart")).toHaveLength(1);
+    expect(stored.pickHintDismissed).toBe(true);
+    expect(wrapper.find(".pick-hint").exists()).toBe(false);
+    wrapper.unmount();
+    const again = mount(ResourcesView, { props: { candidates: many, loading: false, viewState: defaultState(""), compact: true, coverOnly: true, pickAvailable: true } });
+    await flushPromises();
+    expect(again.find(".pick-hint").exists()).toBe(false);
+    again.unmount();
+    delete stored.pickHintDismissed;
+    const closing = mount(ResourcesView, { props: { candidates: many, loading: false, viewState: defaultState(""), compact: true, coverOnly: true, pickAvailable: true } });
+    await flushPromises();
+    await closing.get(".pick-hint .deep-search-hint-close").trigger("click");
+    expect(closing.emitted("pickStart")).toBeUndefined();
+    expect(stored.pickHintDismissed).toBe(true);
+    expect(closing.find(".pick-hint").exists()).toBe(false);
+    closing.unmount();
   });
   it("renders extra hints below the capture hint once loading finishes", async () => {
     const wrapper = mount(ResourcesView, { props: { candidates: [], loading: true, viewState: defaultState(), compact: true }, slots: { hints: '<p class="extra-hint">提示</p>' } });

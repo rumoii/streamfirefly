@@ -356,6 +356,41 @@ const pageFocus = (await send({ type: 'ui.context.get', scope: 'active' })).cont
 if (!focusSet.ok || pageFocus?.url !== 'blob:https://media.example/generated' || pageFocus.poster !== null || pageFocus.duration !== 18.5) throw new Error(`Page focus was not exposed safely: ${JSON.stringify(pageFocus)}`);
 if ((await send({ type: 'media.focus', focus: { url: 'javascript:alert(1)' } }, { tab: { id: 7 } })).ok) throw new Error('Page focus accepted a script address');
 
+const pageTab = { tab: { id: 7 } };
+const pickContextId = (await send({ type: 'ui.context.get', scope: 'active' })).context.sourceContextId;
+if ((await send({ type: 'media.pick.start', scope: 'sender', sourceContextId: 'stale-context' }, pageTab)).ok) throw new Error('A stale resource view started picking');
+const pickMessagesStart = tabMessages.length;
+const pickStarted = await send({ type: 'media.pick.start', scope: 'sender', sourceContextId: pickContextId }, pageTab);
+const pickControl = tabMessages.slice(pickMessagesStart).find(entry => entry.id === 7 && entry.message.type === 'media.pick.control');
+if (!pickStarted.ok || !pickControl?.message.active || !pickControl.message.pickId || !(await send({ type: 'ui.context.get', scope: 'active' })).context.picking) throw new Error(`Picking did not start in the page: ${JSON.stringify(pickStarted)}`);
+const pickId = pickControl.message.pickId;
+if ((await send({ type: 'media.pick.result', pickId: 'forged', pick: { kind: 'image', urls: ['https://media.example/forged.jpg'] } }, pageTab)).ok) throw new Error('A result for another pick session was accepted');
+const pickResult = await send({ type: 'media.pick.result', pickId, pick: { kind: 'image', urls: ['https://media.example/still_800.jpg', 'javascript:alert(1)', 'https://media.example/still_1600.jpg?w=1600'], poster: 'javascript:alert(1)', duration: -1, width: 800, height: 533 } }, pageTab);
+const pickedContext = (await send({ type: 'ui.context.get', scope: 'active' })).context;
+if (!pickResult.ok || pickedContext.picking || JSON.stringify(pickedContext.pick) !== JSON.stringify({ kind: 'image', urls: ['https://media.example/still_800.jpg', 'https://media.example/still_1600.jpg?w=1600'], poster: null, duration: null, width: 800, height: 533 })) throw new Error(`Pick result was not exposed safely: ${JSON.stringify(pickedContext)}`);
+if (!tabMessages.slice(pickMessagesStart).some(entry => entry.id === 7 && entry.message.type === 'media.pick.control' && !entry.message.active)) throw new Error('Other frames were not told to stop picking');
+if ((await send({ type: 'media.pick.result', pickId, pick: { kind: 'video', urls: [] } }, pageTab)).ok) throw new Error('A finished pick session reported a second result');
+await send({ type: 'media.add', candidate: { url: 'https://media.example/unpicked.jpg', mime: 'image/jpeg' } }, pageTab);
+const listedImages = (await send({ type: 'media.candidates', tabId: 7 })).filter(item => item.type === 'image');
+if (JSON.stringify(listedImages.map(item => [item.url, item.userPicked, item.width ?? null]).sort()) !== JSON.stringify([['https://media.example/still_1600.jpg?w=1600', true, null], ['https://media.example/still_800.jpg', true, 800]])) throw new Error(`Only the picked images should be listed with image detection off: ${JSON.stringify(listedImages)}`);
+await send({ type: 'media.pick.start', scope: 'sender', sourceContextId: pickContextId }, pageTab);
+const cancelledPickId = tabMessages.findLast(entry => entry.message.type === 'media.pick.control' && entry.message.active).message.pickId;
+if ((await send({ type: 'media.pick.cancel', pickId: 'forged' }, pageTab)).ok || !(await send({ type: 'media.pick.cancel', pickId: cancelledPickId }, pageTab)).ok || (await send({ type: 'ui.context.get', scope: 'active' })).context.picking) throw new Error('Escape in the page did not end only its own pick session');
+await send({ type: 'media.pick.start', scope: 'sender', sourceContextId: pickContextId }, pageTab);
+if (!(await send({ type: 'media.pick.cancel', scope: 'active' })).ok || (await send({ type: 'ui.context.get', scope: 'active' })).context.picking) throw new Error('The sidebar could not cancel picking');
+await send({ type: 'media.pick.start', scope: 'sender', sourceContextId: pickContextId }, pageTab);
+await send({ type: 'media.sniffing.set', tabId: 7, payload: { paused: true } });
+if ((await send({ type: 'ui.context.get', scope: 'active' })).context.picking || (await send({ type: 'media.pick.start', scope: 'sender', sourceContextId: pickContextId }, pageTab)).error !== 'sniffing_inactive') throw new Error('Pausing sniffing did not end or block picking');
+await send({ type: 'media.sniffing.set', tabId: 7, payload: { paused: false } });
+if (!(await send({ type: 'media.pick.clear', scope: 'sender', sourceContextId: pickContextId }, pageTab)).ok || (await send({ type: 'ui.context.get', scope: 'active' })).context.pick) throw new Error('The pick was not cleared');
+await send({ type: 'media.add', candidate: { url: 'https://media.example/hls/720.m3u8', source: 'fetch-body-member', segmentKind: null, parentUrl: 'https://media.example/hls/master.m3u8#start' } }, pageTab);
+await send({ type: 'media.add', candidate: { url: 'https://media.example/hls/720.m3u8', source: 'xhr-body-member', parentUrl: 'blob:https://media.example/inline-master' } }, pageTab);
+await send({ type: 'media.add', candidate: { url: 'https://media.example/hls/720.m3u8', source: 'xhr-body-member', parentUrl: 'javascript:alert(1)' } }, pageTab);
+const variantPlaylist = (await send({ type: 'media.candidates', tabId: 7 })).find(item => item.url === 'https://media.example/hls/720.m3u8');
+if (JSON.stringify(variantPlaylist?.parents) !== JSON.stringify(['https://media.example/hls/master.m3u8', 'blob:https://media.example/inline-master']) || 'parentUrl' in variantPlaylist) throw new Error(`Variant playlist did not keep its master playlists: ${JSON.stringify(variantPlaylist)}`);
+await send({ type: 'media.pick.start', scope: 'sender', sourceContextId: pickContextId }, pageTab);
+const navigationPickMessages = tabMessages.length;
+
 await send({ type: 'preview.headers.apply', payload: { previewSessionId: 'preview-a', candidateId: video.id, url: video.url, headers: video.requestHeaders } }, { tab: { id: 7 } });
 if (listeners.previewRules?.addRules?.[0]?.condition?.tabIds?.[0] !== 7) throw new Error(`Preview rule was not scoped to the source tab: ${JSON.stringify(listeners.previewRules)}`);
 if (listeners.previewRules?.addRules?.[0]?.condition?.regexFilter !== '^https://media\\.example(?:/|$)') throw new Error(`Preview rule was not scoped to the media origin: ${JSON.stringify(listeners.previewRules)}`);
@@ -376,6 +411,53 @@ await settle();
 candidates = await send({ type: 'media.candidates', tabId: 7 });
 if (candidates.length) throw new Error('SPA navigation did not clear candidates');
 if ((await send({ type: 'ui.context.get', scope: 'active' })).context.focus) throw new Error('SPA navigation kept the previous page focus');
+if ((await send({ type: 'ui.context.get', scope: 'active' })).context.picking || !tabMessages.slice(navigationPickMessages).some(entry => entry.id === 7 && entry.message.type === 'media.pick.control' && !entry.message.active)) throw new Error('SPA navigation left the old document picking');
+
+// A page must not forge the candidate fields the background owns.
+await send({ type: 'media.add', candidate: { url: 'https://media.example/x/forged.m3u8', parents: {}, userPicked: true } }, pageTab);
+const forgedCandidate = (await send({ type: 'media.candidates', tabId: 7 })).find(item => item.url === 'https://media.example/x/forged.m3u8');
+if (!forgedCandidate) throw new Error('The forged-field candidate was not listed');
+if ('userPicked' in forgedCandidate || ('parents' in forgedCandidate && !Array.isArray(forgedCandidate.parents))) throw new Error(`A page forged background-owned candidate fields: ${JSON.stringify(forgedCandidate)}`);
+await send({ type: 'media.add', candidate: { url: 'https://media.example/x/forged.jpg', mime: 'image/jpeg', userPicked: true } }, pageTab);
+if ((await send({ type: 'media.candidates', tabId: 7 })).some(item => item.url === 'https://media.example/x/forged.jpg')) throw new Error('A forged userPicked flag bypassed image detection');
+
+// A pick result may only land in the page it was picked from, even when that page navigates while the result travels.
+const raceContextId = (await send({ type: 'ui.context.get', scope: 'active' })).context.sourceContextId;
+await send({ type: 'media.pick.start', scope: 'sender', sourceContextId: raceContextId }, pageTab);
+const racePickId = tabMessages.findLast(entry => entry.message.type === 'media.pick.control' && entry.message.active).message.pickId;
+const realTabsGet = api.tabs.get;
+api.tabs.get = async id => { await settle(); return realTabsGet(id); };
+const raceResult = send({ type: 'media.pick.result', pickId: racePickId, pick: { kind: 'image', urls: ['https://media.example/race.jpg'] } }, pageTab);
+tabsById.get(7).url = 'https://media.example/raced';
+listeners.history({ tabId: 7, frameId: 0, url: tabsById.get(7).url });
+await raceResult;
+api.tabs.get = realTabsGet;
+await flush();
+if ((await send({ type: 'media.candidates', tabId: 7 })).some(item => item.url === 'https://media.example/race.jpg')) throw new Error('A pick result leaked into the page that navigated meanwhile');
+
+// Suspending sniffing ends the background pick session along with the page's own picker.
+const sniffContextId = (await send({ type: 'ui.context.get', scope: 'active' })).context.sourceContextId;
+await send({ type: 'media.pick.start', scope: 'sender', sourceContextId: sniffContextId }, pageTab);
+listeners.storageChanged({ sniffMode: { newValue: 'on_open' } }, 'local');
+await flush();
+const suspendedContext = (await send({ type: 'ui.context.get', scope: 'active' })).context;
+if (suspendedContext.picking || suspendedContext.sniffingActive) throw new Error('Suspending sniffing left the background pick session running');
+listeners.storageChanged({ sniffMode: { newValue: 'always' } }, 'local');
+await flush();
+
+// A restarted worker forgets pickId while frames keep picking; cancel and result must still reach them.
+const strayCancelMessages = tabMessages.length;
+await send({ type: 'media.pick.cancel', pickId: 'stale' }, pageTab);
+if (!tabMessages.slice(strayCancelMessages).some(entry => entry.id === 7 && entry.message.type === 'media.pick.control' && !entry.message.active)) throw new Error('Cancelling without a pick session did not broadcast the stop');
+const strayResultMessages = tabMessages.length;
+await send({ type: 'media.pick.result', pickId: 'stale', pick: { kind: 'video', urls: ['https://media.example/stray.mp4'] } }, pageTab);
+if (!tabMessages.slice(strayResultMessages).some(entry => entry.id === 7 && entry.message.type === 'media.pick.control' && !entry.message.active)) throw new Error('A result without a pick session did not broadcast the stop');
+const forgedResultMessages = tabMessages.length;
+await send({ type: 'media.pick.start', scope: 'sender', sourceContextId: sniffContextId }, pageTab);
+const forgedResultPickId = tabMessages.findLast(entry => entry.message.type === 'media.pick.control' && entry.message.active).message.pickId;
+await send({ type: 'media.pick.result', pickId: 'forged', pick: { kind: 'video', urls: ['https://media.example/forged.mp4'] } }, pageTab);
+if (tabMessages.slice(forgedResultMessages).some(entry => entry.id === 7 && entry.message.type === 'media.pick.control' && !entry.message.active) || !(await send({ type: 'ui.context.get', scope: 'active' })).context.picking) throw new Error('A forged result stopped the current pick');
+await send({ type: 'media.pick.cancel', pickId: forgedResultPickId }, pageTab);
 
 listeners.storageChanged({ detectImages: { newValue: true } }, 'local');
 await send({ type: 'media.add', candidate: { url: 'https://media.example/enabled.jpg', mime: 'image/jpeg' } }, { tab: { id: 7 } });

@@ -1,4 +1,4 @@
-import type { MediaCandidate, PageFocus } from "./types";
+import type { MediaCandidate, PageFocus, PagePick } from "./types";
 
 export interface HlsKey { method: string; uri: string | null; iv: string | null; keyFormat: string | null }
 export interface HlsMap { uri: string; byteRange: string | null }
@@ -255,10 +255,15 @@ export function isBlobCandidate(item: MediaCandidate): boolean { return item.url
 /** A cover captured from the preview player is display-only; it must not move the row into the "has cover" tier. */
 function hasListedPoster(item: MediaCandidate): boolean { return Boolean(item.poster) && item.posterSource !== "preview"; }
 
-/** In the default order the page's current video and its copies come first; explicit size or duration sorting is left alone. */
-export function sortCandidates(items: MediaCandidate[], mode: string, focused: ReadonlySet<string> = new Set()): MediaCandidate[] {
+/**
+ * What the user picked on the page comes first in every order. In the default order the page's current video
+ * and its copies follow, but never reorder the picked group itself; explicit size or duration sorting is otherwise left alone.
+ */
+export function sortCandidates(items: MediaCandidate[], mode: string, focused: ReadonlySet<string> = new Set(), picked: ReadonlySet<string> = new Set()): MediaCandidate[] {
   return [...items].sort((a, b) => {
-    const focusOrder = mode === "detected" ? Number(!focused.has(a.id)) - Number(!focused.has(b.id)) : 0;
+    const pickOrder = Number(!picked.has(a.id)) - Number(!picked.has(b.id));
+    if (pickOrder) return pickOrder;
+    const focusOrder = mode === "detected" && !picked.has(a.id) && !picked.has(b.id) ? Number(!focused.has(a.id)) - Number(!focused.has(b.id)) : 0;
     if (focusOrder) return focusOrder;
     const captureOrder = Number(isBlobCandidate(a)) - Number(isBlobCandidate(b));
     if (captureOrder) return captureOrder;
@@ -287,16 +292,57 @@ function sameVideoCopies(item: MediaCandidate, candidates: MediaCandidate[]): Me
   });
 }
 
-/** The page's current video (matched by address) plus the copies that look like the same video. */
-export function focusedCandidateIds(candidates: MediaCandidate[], focus?: PageFocus | null): Set<string> {
-  const ids = new Set<string>();
-  if (!focus?.url) return ids;
-  const withoutHash = (url: string) => url.split("#", 1)[0];
-  const own = candidates.find(item => withoutHash(item.url) === withoutHash(focus.url));
-  if (own) ids.add(own.id);
-  const current: MediaCandidate = { ...own, id: own?.id || "page-focus", url: focus.url, type: own?.type || "video", poster: own?.poster || focus.poster || null, duration: own?.duration || focus.duration || null };
-  for (const copy of sameVideoCopies(current, candidates)) ids.add(copy.id);
+const withoutHash = (url: string) => url.split("#", 1)[0];
+const addressOf = (candidate: MediaCandidate) => candidate.canonicalUrl || withoutHash(candidate.url);
+
+/** Session storage may still hold candidates with a corrupted `parents` value; those count as parentless. */
+function parentsOf(item: MediaCandidate): string[] { return Array.isArray(item.parents) ? item.parents.filter(parent => typeof parent === "string") : []; }
+
+/** Grows the set with linked playlists: the master playlists of its members, the variants those list, siblings sharing a parent, and so on. */
+function withPlaylistFamily(ids: Set<string>, candidates: MediaCandidate[]): Set<string> {
+  const byId = new Map(candidates.map(item => [item.id, item]));
+  for (let grew = true; grew;) {
+    grew = false;
+    const addresses = new Set<string>();
+    const parents = new Set<string>();
+    for (const id of ids) {
+      const item = byId.get(id);
+      if (!item) continue;
+      addresses.add(addressOf(item));
+      for (const parent of parentsOf(item)) parents.add(parent);
+    }
+    for (const item of candidates) {
+      // A candidate joins when its address is a family parent, or one of its parents is a family address or
+      // parent; the last case brings in siblings under a master that is not listed itself.
+      if (ids.has(item.id) || !parents.has(addressOf(item)) && !parentsOf(item).some(parent => addresses.has(parent) || parents.has(parent))) continue;
+      ids.add(item.id);
+      grew = true;
+    }
+  }
   return ids;
+}
+
+/** Candidates at the given addresses, optionally the copies that look like the same video, and their playlist family. */
+function relatedCandidateIds(candidates: MediaCandidate[], urls: string[], hint: { poster?: string | null; duration?: number | null }, withCopies: boolean): Set<string> {
+  const wanted = urls.map(withoutHash);
+  const own = wanted.flatMap(url => candidates.filter(item => withoutHash(item.url) === url));
+  const ids = new Set(own.map(item => item.id));
+  if (withCopies && urls.length) {
+    const first = own[0];
+    const current: MediaCandidate = { ...first, id: first?.id || "page-focus", url: first?.url || urls[0], type: first?.type || "video", poster: first?.poster || hint.poster || null, duration: first?.duration || hint.duration || null };
+    for (const copy of sameVideoCopies(current, candidates)) ids.add(copy.id);
+  }
+  return withPlaylistFamily(ids, candidates);
+}
+
+/** The page's current video (matched by address) plus the copies and other resolutions of the same video. */
+export function focusedCandidateIds(candidates: MediaCandidate[], focus?: PageFocus | null): Set<string> {
+  return focus?.url ? relatedCandidateIds(candidates, [focus.url], focus, true) : new Set();
+}
+
+/** What the user picked: its own addresses, and for a video also its copies and other resolutions. */
+export function pickedCandidateIds(candidates: MediaCandidate[], pick?: PagePick | null): Set<string> {
+  return pick ? relatedCandidateIds(candidates, pick.urls, pick, pick.kind === "video") : new Set();
 }
 
 /** Finds a likely better copy of the same video: matching cover image or duration, then higher resolution or direct download. */

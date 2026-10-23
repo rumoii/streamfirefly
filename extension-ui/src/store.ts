@@ -166,6 +166,17 @@ export const useAppStore = defineStore("app", () => {
     candidates.value = candidates.value.filter(item => !ids.includes(item.id));
   }
 
+  /** Starts, cancels or forgets the page's media pick; the result arrives with the next context update. */
+  async function sendPick(type: "media.pick.start" | "media.pick.cancel" | "media.pick.clear") {
+    if (!context.value?.supported) return;
+    const result: any = await sendMessage({ type, scope: surface.value === "workspace" ? "sender" : "active", tabId: context.value.sourceTabId, windowId: sidebarWindowId, sourceContextId: context.value.sourceContextId });
+    // Cancelling a pick that already ended is not an error the user needs to see.
+    if (!result?.ok && !(type === "media.pick.cancel" && result?.error === "media_pick_inactive")) throw new Error(result?.error || "media_pick_failed");
+  }
+  const startPick = () => sendPick("media.pick.start");
+  const cancelPick = () => sendPick("media.pick.cancel");
+  const clearPick = () => sendPick("media.pick.clear");
+
   function patchResourceView(patch: Partial<Omit<ResourceViewState, "revision">>): Promise<void> {
     if (!context.value?.supported) return Promise.resolve();
     const sourceContextId = context.value.sourceContextId;
@@ -252,7 +263,7 @@ export const useAppStore = defineStore("app", () => {
   }
   onBeforeUnmount(dispose);
 
-  return { surface, context, candidates, tasks, capabilities, connection, connectionError, loading, error, status, settings, resourceViewState, sourceTasks, activeTasks, initialize, dispose, refresh, toggleSniffing, openWorkspace, closeWorkspace, removeCandidates, patchResourceView, updateCandidateMetadata, saveSettings, controlTask, deleteTask };
+  return { surface, context, candidates, tasks, capabilities, connection, connectionError, loading, error, status, settings, resourceViewState, sourceTasks, activeTasks, initialize, dispose, refresh, toggleSniffing, openWorkspace, closeWorkspace, removeCandidates, startPick, cancelPick, clearPick, patchResourceView, updateCandidateMetadata, saveSettings, controlTask, deleteTask };
 });
 
 export function cleanSourceTitle(value: string): string {
@@ -268,6 +279,7 @@ export function humanError(value: string): string {
     workspace_sidebar_close_failed: "工作区已撤销，因为浏览器侧栏未能关闭。",
     workspace_sidebar_open_failed: "浏览器侧栏未能恢复，工作区仍保持打开。",
     blob_resource_requires_capture: "Blob 是来源页面内的临时媒体，请使用缓存捕捉。",
+    sniffing_inactive: "嗅探已暂停，继续嗅探后才能拾取。",
     site_blocked: "根据 Chrome 应用商店政策，流萤不识别和下载 YouTube 内容。",
     workspace_close_failed: "工作区未能正常收起，请刷新页面后重试。",
     native_host_unavailable: "未连接到本地助手，请安装或重新启动流萤本地助手。",
