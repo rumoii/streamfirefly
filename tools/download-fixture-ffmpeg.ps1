@@ -5,10 +5,11 @@ param(
 $Architecture = 'x64'
 
 $ErrorActionPreference = 'Stop'
-$release = 'autobuild-2026-10-01-13-06'
+# BtbN prunes daily builds after about two weeks but keeps each month-end build, so pin a month-end one.
+$release = 'autobuild-2026-09-30-13-08'
 $files = @{
-  x64 = @{ Name = 'ffmpeg-n8.1.3-14-g330caae0c1-win64-gpl-8.1.zip'; Hash = '6aca87b75999c4793871754c5c2e211129a56a160c1654a7d1c9c518a7eda9c0' }
-  arm64 = @{ Name = 'ffmpeg-n8.1.3-14-g330caae0c1-winarm64-gpl-8.1.zip'; Hash = '3dd51c0c37f8f6d6c6779da0af4b370589728abdcb16559bd9aa8318a187764e' }
+  x64 = @{ Name = 'ffmpeg-n8.1.3-9-g29e619e767-win64-gpl-8.1.zip'; Hash = '7b801cdd3a1a0bb54ae6f572187e68b4ed54f52086cfee133fab2180bfb429fa' }
+  arm64 = @{ Name = 'ffmpeg-n8.1.3-9-g29e619e767-winarm64-gpl-8.1.zip'; Hash = '061a770557c30bbf8e0b6ca3810288a60f72b85088378b84be03277746f34f17' }
 }
 $item = $files[$Architecture]
 $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/$release/$($item.Name)"
