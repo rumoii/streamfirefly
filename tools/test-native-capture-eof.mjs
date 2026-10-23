@@ -177,8 +177,10 @@ try {
     const deadline = Date.now() + 20000;
     let mergePids = [];
     while (Date.now() < deadline) {
-      if (fs.existsSync(diagnosticsPath)) {
-        const diagnostics = JSON.parse(fs.readFileSync(diagnosticsPath, 'utf8'));
+      // The host rewrites the file in place, so a poll can land between truncate and write; read again next round.
+      let diagnostics = null;
+      try { diagnostics = JSON.parse(fs.readFileSync(diagnosticsPath, 'utf8')); } catch (error) { if (!(error instanceof SyntaxError) && error.code !== 'ENOENT') throw error; }
+      if (diagnostics) {
         mergePids = diagnostics.filter(event => event.stage === 'merge-started').map(event => event.details.pid).filter(pid => pid && processAlive(pid));
         if (mergePids.length > 0) break;
       }
