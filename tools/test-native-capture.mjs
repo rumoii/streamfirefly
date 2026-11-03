@@ -45,7 +45,7 @@ try {
   let initLength = 0;
   while (initLength < bytes.length && bytes.toString('ascii', initLength + 4, initLength + 8) !== 'moof') initLength += bytes.readUInt32BE(initLength);
   const initialization = bytes.subarray(0, initLength), media = bytes.subarray(initLength);
-  async function exercise(chunks, expectedError, partialInitialization = false) {
+  async function exercise(chunks, expectedError, partialInitialization = false, mergeStarted = expectedError === null || expectedError === 'capture_merge_failed') {
     socket?.terminate();
     const response = await send('capture.open', { origin }); assert.equal(response.ok, true, JSON.stringify(response));
     socket = new WebSocket(response.value.endpoint, { origin }); await once(socket, 'open');
@@ -59,12 +59,13 @@ try {
     const snapshot = await until(async () => (await send('capture.list')).value.find(item => item.id === response.value.id && ['complete', 'partial', 'interrupted'].includes(item.state)));
     assert.equal(snapshot.error || null, expectedError, JSON.stringify(snapshot));
     const diagnostics = JSON.parse(fs.readFileSync(path.join(temporary, 'StreamFirefly', 'captures', `capture-${snapshot.id}`, 'diagnostics.json')));
-    assert.equal(diagnostics.some(event => event.stage === 'merge-started'), expectedError === null || expectedError === 'capture_merge_failed');
+    assert.equal(diagnostics.some(event => event.stage === 'merge-started'), mergeStarted);
     if (!expectedError) {
       assert.equal(snapshot.state, 'complete'); assert.equal(snapshot.tracks[0].initialized, true);
       const probe = spawnSync(ffprobe, ['-v', 'error', '-show_entries', 'format=duration:stream=codec_type,codec_name', '-of', 'json', snapshot.output], { windowsHide: true, encoding: 'utf8' });
       assert.equal(probe.status, 0, probe.stderr); const value = JSON.parse(probe.stdout); assert.ok(Number(value.format.duration) >= 0.9); assert.equal(value.streams[0].codec_type, 'video');
     }
+    return snapshot;
   }
   await exercise([], 'capture_no_media_data');
   await exercise([initialization], 'capture_no_media_data');
@@ -73,6 +74,20 @@ try {
   const invalidMedia = Buffer.alloc(16); invalidMedia.writeUInt32BE(16); invalidMedia.write('moof', 4);
   await exercise([initialization, invalidMedia], 'capture_merge_failed');
   await exercise([initialization.subarray(0, 5), initialization.subarray(5), media], null, true);
+  const bundledFfmpeg = path.join(path.dirname(executable), 'ffmpeg.exe');
+  const restoredFfmpeg = `${bundledFfmpeg}.restore`;
+  let missingFfmpeg;
+  fs.renameSync(bundledFfmpeg, restoredFfmpeg);
+  try { missingFfmpeg = await exercise([initialization, media], 'capture_merge_failed', false, false); }
+  finally { fs.renameSync(restoredFfmpeg, bundledFfmpeg); }
+  assert.equal(missingFfmpeg.state, 'partial');
+  assert.equal((await send('capture.stop', { id: missingFfmpeg.id })).ok, true);
+  const regenerated = await until(async () => {
+    const current = (await send('capture.list')).value.find(item => item.id === missingFfmpeg.id);
+    return current?.state === 'complete' && current;
+  });
+  assert.equal(regenerated.error, null);
+  assert.ok(regenerated.outputs.length > 0 && regenerated.outputs.every(output => fs.existsSync(output)));
   assert.equal((await send('integration.test', { executable: 'C:\\Windows\\System32\\cmd.exe', arguments: [] })).ok, false);
   const program = { requestId: 'native-program-test', executable: path.join(process.env.SystemRoot, 'System32/where.exe'), arguments: ['streamfirefly-nonexistent-test-command'] };
   const launched = await send('integration.invoke', program); assert.equal(launched.ok, true, JSON.stringify(launched)); assert.equal(launched.receipt.state, 'started');

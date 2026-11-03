@@ -150,7 +150,7 @@ pub(crate) fn probe_size(store: &TaskRuntime, task: &Task) -> ProbeInfo {
     }
 }
 
-pub(crate) fn single_download_args(task: &Task, output: &str) -> Vec<String> {
+pub(crate) fn single_download_args(task: &Task, output: &std::path::Path) -> Vec<String> {
     let mut args = curl_base_args();
     args.extend([
         "--silent".to_string(),
@@ -167,11 +167,35 @@ pub(crate) fn single_download_args(task: &Task, output: &str) -> Vec<String> {
         "--continue-at".to_string(),
         "-".to_string(),
         "--output".to_string(),
-        output.to_string(),
+        output.file_name().unwrap_or_default().to_string_lossy().into_owned(),
     ]);
     add_request_args(&mut args, task, &task.url);
     args.push(task.url.clone());
     args
+}
+
+fn single_temporary_path(output: &std::path::Path, task_id: &str) -> PathBuf {
+    let id: String = task_id.as_bytes().iter().map(|byte| format!("{byte:02x}")).collect();
+    output.with_file_name(format!(".streamfirefly-{id}.download"))
+}
+
+fn prepare_single_output(output: &std::path::Path, temporary: &std::path::Path) -> io::Result<()> {
+    if temporary.exists() {
+        if output.exists() {
+            fs::remove_file(output)?;
+        }
+    } else if output.exists() {
+        fs::rename(output, temporary)?;
+    }
+    Ok(())
+}
+
+fn finish_single_output(output: &std::path::Path, temporary: &std::path::Path) -> io::Result<()> {
+    if temporary.exists() {
+        crate::persistence::replace_file(temporary, output)
+    } else {
+        Ok(())
+    }
 }
 
 pub(crate) fn start_single_http_download(
@@ -190,7 +214,10 @@ pub(crate) fn start_single_http_download(
         t.segments_total = 0;
         t.message = Some("正在连接资源".into());
     });
-    let child = match crate::media_process::curl_command() {
+    let output_path = PathBuf::from(&output);
+    let temporary = single_temporary_path(&output_path, &task.id);
+    let mut command = match crate::media_process::curl_command() {
+        Ok(command) => command,
         Err(error) => {
             update(&store, &writer, &task.id, |t| {
                 t.state = "failed".into();
@@ -200,27 +227,39 @@ pub(crate) fn start_single_http_download(
             });
             return;
         }
-        Ok(mut command) => match spawn_process(&store, &task.id, command
-            .args(single_download_args(&task, &output))
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-        )
-        {
-            Ok(child) => child,
-            Err(error) => {
-                update(&store, &writer, &task.id, |t| {
-                    t.state = "failed".into();
-                    t.phase = "failed".into();
-                    t.error = Some(error.to_string());
-                    t.message = Some("无法启动下载程序".into());
-                });
-                return;
-            }
+    };
+    if let Err(error) = prepare_single_output(&output_path, &temporary) {
+        update(&store, &writer, &task.id, |t| {
+            t.state = "failed".into();
+            t.phase = "failed".into();
+            t.error = Some(error.to_string());
+            t.message = Some("无法准备下载文件".into());
+        });
+        return;
+    }
+    if let Some(parent) = output_path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        command.current_dir(parent);
+    }
+    let child = match spawn_process(&store, &task.id, command
+        .args(single_download_args(&task, &temporary))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+    ) {
+        Ok(child) => child,
+        Err(error) => {
+            let _ = finish_single_output(&output_path, &temporary);
+            update(&store, &writer, &task.id, |t| {
+                t.state = "failed".into();
+                t.phase = "failed".into();
+                t.error = Some(error.to_string());
+                t.message = Some("无法启动下载程序".into());
+            });
+            return;
         }
     };
     let mut sampled_at = Instant::now();
     let mut smoothed_speed = 0u64;
-    let mut last_bytes = fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
+    let mut last_bytes = fs::metadata(&temporary).map(|m| m.len()).unwrap_or(0);
     update(&store, &writer, &task.id, |t| {
         t.state = "running".into();
         t.phase = "downloading".into();
@@ -235,10 +274,11 @@ pub(crate) fn start_single_http_download(
                 let _ = child.kill();
                 let _ = child.wait();
             }
+            let _ = finish_single_output(&output_path, &temporary);
             mark_stopped(&store, &writer, &task.id);
             return;
         }
-        let bytes = fs::metadata(&output).map(|m| m.len()).unwrap_or(last_bytes);
+        let bytes = fs::metadata(&temporary).map(|m| m.len()).unwrap_or(last_bytes);
         let sample_seconds = sampled_at.elapsed().as_secs_f64().max(0.001);
         let sampled_speed = (bytes.saturating_sub(last_bytes)) as f64 / sample_seconds;
         if sampled_speed > 0.0 {
@@ -281,17 +321,17 @@ pub(crate) fn start_single_http_download(
         match process_status {
             Ok(Some(status)) => {
                 unregister_process(&store, &task.id, &child);
+                let published = finish_single_output(&output_path, &temporary);
                 if cancel_requested(&store, &task.id) {
                     mark_stopped(&store, &writer, &task.id);
                     return;
                 }
-                if status.success() {
+                if status.success() && published.is_ok() && output_path.is_file() {
                     update(&store, &writer, &task.id, |t| {
                         t.state = "succeeded".into();
                         t.phase = "completed".into();
                         t.progress = 100;
-                        t.downloaded_bytes =
-                            fs::metadata(&output).map(|m| m.len()).unwrap_or(bytes);
+                        t.downloaded_bytes = fs::metadata(&output_path).map(|m| m.len()).unwrap_or(bytes);
                         t.total_bytes = total.or(Some(t.downloaded_bytes));
                         t.active_connections = 0;
                         t.eta_seconds = Some(0);
@@ -302,7 +342,7 @@ pub(crate) fn start_single_http_download(
                         t.state = "failed".into();
                         t.phase = "failed".into();
                         t.active_connections = 0;
-                        t.error = Some("curl_download_failed".into());
+                        t.error = Some(if status.success() { "output_publish_failed" } else { "curl_download_failed" }.into());
                         t.message = Some("下载失败，请检查网络或资源地址".into());
                     });
                 }
@@ -310,6 +350,7 @@ pub(crate) fn start_single_http_download(
             }
             Err(error) => {
                 unregister_process(&store, &task.id, &child);
+                let _ = finish_single_output(&output_path, &temporary);
                 update(&store, &writer, &task.id, |t| {
                     t.state = "failed".into();
                     t.phase = "failed".into();
@@ -378,7 +419,7 @@ fn parallel_part_args(
         "--range".to_string(),
         format!("{}-{end}", start + existing),
         "--output".to_string(),
-        continuation.to_string_lossy().into_owned(),
+        continuation.file_name().unwrap_or_default().to_string_lossy().into_owned(),
     ]);
     add_request_args(&mut args, task, &task.url);
     args.push(task.url.clone());
@@ -431,6 +472,7 @@ pub(crate) fn start_parallel_http_download(
         if existing < transfer.length {
             match crate::media_process::curl_command() {
                 Ok(mut command) => match spawn_process(&store, &task.id, command
+                    .current_dir(&part_dir)
                     .args(parallel_part_args(
                         &task,
                         *start,
@@ -680,7 +722,7 @@ mod tests {
 
     #[test]
     fn single_download_args_start_with_proto_whitelist_and_stall_timeout() {
-        let args = single_download_args(&test_task(), "out.mp4");
+        let args = single_download_args(&test_task(), Path::new("中文目录/out.mp4"));
         assert!(args.starts_with(&curl_base_args()));
         assert!(args.windows(2).any(|pair| pair == ["--speed-limit", "1"]));
         assert!(args.windows(2).any(|pair| pair == ["--speed-time", "60"]));
@@ -693,7 +735,7 @@ mod tests {
 
     #[test]
     fn parallel_part_args_start_with_proto_whitelist_and_stall_timeout() {
-        let args = parallel_part_args(&test_task(), 100, 199, 40, Path::new("part.next"));
+        let args = parallel_part_args(&test_task(), 100, 199, 40, Path::new("中文目录/part.next"));
         assert!(args.starts_with(&curl_base_args()));
         assert!(args.windows(2).any(|pair| pair == ["--speed-limit", "1"]));
         assert!(args.windows(2).any(|pair| pair == ["--speed-time", "60"]));
@@ -703,5 +745,24 @@ mod tests {
             args.last().map(String::as_str),
             Some("http://127.0.0.1/media.mp4")
         );
+    }
+
+    #[test]
+    fn single_output_resumes_through_an_ascii_name_and_publishes_the_unicode_path() {
+        let directory = std::env::temp_dir().join(format!("streamfirefly-single-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        let output = directory.join("代理链路.mp4");
+        let temporary = single_temporary_path(&output, "任务-1");
+        assert!(temporary.file_name().unwrap().to_string_lossy().is_ascii());
+        fs::write(&output, b"prefix").unwrap();
+        prepare_single_output(&output, &temporary).unwrap();
+        assert!(!output.exists());
+        let mut file = OpenOptions::new().append(true).open(&temporary).unwrap();
+        std::io::Write::write_all(&mut file, b" suffix").unwrap();
+        drop(file);
+        finish_single_output(&output, &temporary).unwrap();
+        assert_eq!(fs::read(&output).unwrap(), b"prefix suffix");
+        assert!(!temporary.exists());
+        fs::remove_dir_all(&directory).unwrap();
     }
 }

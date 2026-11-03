@@ -172,7 +172,7 @@ fn merge(directory: &Path, tracks: &[Track], output: &Path, session: &Arc<Mutex<
                 "merge-start-failed",
                 json!({"error":error}),
             );
-            return Err(error);
+            return Err("capture_merge_failed");
         }
     };
     command.args(["-nostdin", "-y", "-v", "error", "-progress", "pipe:1", "-nostats"]);

@@ -192,6 +192,26 @@ pub(crate) fn run_ffmpeg_with_progress(
 mod tests {
     use super::*;
 
+    static TOOL_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn curl_command_uses_the_absolute_bundled_path() {
+        let _guard = TOOL_TEST_LOCK.lock().unwrap();
+        let dir = std::env::current_exe().unwrap().parent().unwrap().to_path_buf();
+        let bundled = dir.join("curl.exe");
+        let created = !bundled.is_file();
+        if created {
+            fs::write(&bundled, b"test fixture").unwrap();
+        }
+        let command = curl_command();
+        if created {
+            fs::remove_file(&bundled).unwrap();
+        }
+        let command = command.unwrap();
+        assert_eq!(command.get_program(), bundled.as_os_str());
+        assert!(PathBuf::from(command.get_program()).is_absolute());
+    }
+
     #[test]
     fn bundled_tool_without_file_returns_error_not_bare_name() {
         let missing = "definitely-not-a-streamfirefly-tool-xyz.exe";
@@ -205,6 +225,7 @@ mod tests {
 
     #[test]
     fn bundled_tool_reports_named_missing_tools() {
+        let _guard = TOOL_TEST_LOCK.lock().unwrap();
         let dir = std::env::current_exe().unwrap().parent().unwrap().to_path_buf();
         assert!(!dir.join("curl.exe").is_file());
         assert!(!dir.join("ffmpeg.exe").is_file());

@@ -25,6 +25,8 @@ let authorizationSeen = false;
 let forbiddenHeaderSeen = false;
 let slowHeadGets = 0;
 let slowBytesServed = 0;
+let stalledGets = 0;
+const stalledResponses = new Set();
 let notifySlowHeadStarted;
 const slowHeadStarted = new Promise(resolve => { notifySlowHeadStarted = resolve; });
 const server = http.createServer((request, response) => {
@@ -54,6 +56,13 @@ const server = http.createServer((request, response) => {
     response.writeHead(206, headers);
   } else {
     response.writeHead(200, headers);
+  }
+  if (request.url === '/stalled.mp4') {
+    stalledGets += 1;
+    stalledResponses.add(response);
+    response.on('close', () => stalledResponses.delete(response));
+    response.write(responseBody.subarray(0, 64 * 1024));
+    return;
   }
   let offset = 0;
   const timer = setInterval(() => {
@@ -105,8 +114,9 @@ function send(type, messagePayload = {}) {
   child.stdin.write(Buffer.concat([Buffer.from([value.length & 255, value.length >> 8 & 255, value.length >> 16 & 255, value.length >> 24 & 255]), value]));
   return new Promise(resolve => pending.set(id, resolve));
 }
-async function waitTask(taskId) {
-  for (let attempt = 0; attempt < 80; attempt++) {
+async function waitTask(taskId, timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 100));
     const listed = await send('task.list');
     const task = listed.tasks.find(item => item.id === taskId);
@@ -198,6 +208,14 @@ if (!await waitRunning(slowRemove.task.id)) throw new Error('Second slow task di
 const slowRemoveDelete = await send('task.delete', { id: slowRemove.task.id, deleteFile: true });
 if (!slowRemoveDelete.ok || fs.existsSync(slowRemove.task.output)) throw new Error(`Active file deletion failed: ${JSON.stringify(slowRemoveDelete)}`);
 await assertTaskAbsent(slowRemove.task.id);
+const stalled = await send('task.create', { url: `http://127.0.0.1:${port}/stalled.mp4`, title: 'stalled', fileName: '断流下载', mime: 'video/mp4', saveDir: customDir, downloadThreads: 1 });
+const stalledTask = await waitTask(stalled.task.id, 300000);
+if (stalledTask?.state !== 'failed' || stalledTask.error !== 'curl_download_failed' || stalledGets < 2) throw new Error(`Stalled download did not fail after curl retries: ${JSON.stringify({ stalledTask, stalledGets })}`);
+for (let attempt = 0; attempt < 50 && stalledResponses.size; attempt++) await new Promise(resolve => setTimeout(resolve, 100));
+if (stalledResponses.size) throw new Error('Stalled curl left a response connection open after exiting');
+const afterStall = await send('task.create', { url: `http://127.0.0.1:${port}/unknown.mp4`, title: 'after-stall', fileName: '断流后任务', mime: 'video/mp4', saveDir: customDir, downloadThreads: 1 });
+const afterStallTask = await waitTask(afterStall.task.id);
+if (afterStallTask?.state !== 'succeeded') throw new Error(`Scheduler slot was not released after a stalled download: ${JSON.stringify(afterStallTask)}`);
 const orphanCheck = await send('task.create', { url: `http://127.0.0.1:${port}/slow.mp4`, title: 'host-exit', fileName: '助手退出', mime: 'video/mp4', saveDir: customDir, downloadThreads: 1 });
 if (!await waitRunning(orphanCheck.task.id)) throw new Error('Host exit task did not enter running state');
 const exited = new Promise(resolve => child.once('exit', resolve));

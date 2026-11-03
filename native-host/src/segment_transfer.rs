@@ -9,10 +9,17 @@ use std::{
     io::Read,
     path::Path,
     process::Stdio,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
     thread,
     time::{Duration, Instant},
 };
+
+static NEXT_TEMPORARY_FILE: AtomicU64 = AtomicU64::new(0);
+
+fn ascii_temporary_path(destination: &Path, extension: &str) -> std::path::PathBuf {
+    let sequence = NEXT_TEMPORARY_FILE.fetch_add(1, Ordering::Relaxed);
+    destination.with_file_name(format!(".streamfirefly-{}-{sequence}.{extension}", std::process::id()))
+}
 
 pub(crate) fn curl_once_args(
     task: &Task,
@@ -35,11 +42,11 @@ pub(crate) fn curl_once_args(
         "--speed-time".to_string(),
         "60".to_string(),
         "--output".to_string(),
-        temporary.to_string_lossy().into_owned(),
+        temporary.file_name().unwrap_or_default().to_string_lossy().into_owned(),
     ]);
     args.extend([
         "--dump-header".to_string(),
-        response_headers.to_string_lossy().into_owned(),
+        response_headers.file_name().unwrap_or_default().to_string_lossy().into_owned(),
     ]);
     args.extend(["--write-out".to_string(), "%{http_code}".to_string()]);
     if let Some(range) = range {
@@ -64,23 +71,15 @@ pub(crate) fn curl_once(
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    let temporary = destination.with_extension(format!(
-        "{}.download",
-        destination
-            .extension()
-            .and_then(|value| value.to_str())
-            .unwrap_or("part")
-    ));
-    let response_headers = destination.with_extension(format!(
-        "{}.headers",
-        destination
-            .extension()
-            .and_then(|value| value.to_str())
-            .unwrap_or("part")
-    ));
+    let temporary = ascii_temporary_path(destination, "download");
+    let response_headers = ascii_temporary_path(destination, "headers");
     let _ = fs::remove_file(&temporary);
     let _ = fs::remove_file(&response_headers);
-    let child = spawn_process(store, &task.id, crate::media_process::curl_command()?
+    let mut command = crate::media_process::curl_command()?;
+    if let Some(parent) = destination.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        command.current_dir(parent);
+    }
+    let child = spawn_process(store, &task.id, command
         .args(curl_once_args(task, url, range, &temporary, &response_headers))
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -236,8 +235,8 @@ mod tests {
             &test_task(),
             "http://127.0.0.1/segment/0",
             Some(&ByteRange { start: 100, length: 100 }),
-            Path::new("seg.download"),
-            Path::new("seg.headers"),
+            Path::new("中文目录/seg.download"),
+            Path::new("中文目录/seg.headers"),
         );
         assert!(args.starts_with(&curl_base_args()));
         assert!(args.windows(2).any(|pair| pair == ["--max-time", "120"]));
@@ -252,8 +251,8 @@ mod tests {
             &test_task(),
             "http://127.0.0.1/segment/0",
             None,
-            Path::new("seg.download"),
-            Path::new("seg.headers"),
+            Path::new("中文目录/seg.download"),
+            Path::new("中文目录/seg.headers"),
         );
         assert!(!headless.windows(2).any(|pair| pair[0] == "--range"));
     }
