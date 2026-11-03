@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { workspaceFixturePage } from './workspace-test-fixture.mjs';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -10,7 +11,7 @@ import { execFileSync } from 'node:child_process';
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright-core');
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const output = path.join(root, 'test-results/ui');
+const output = process.env.STREAMFIREFLY_UI_ARCHIVE || path.join(root, 'test-results/ui');
 fs.mkdirSync(output, { recursive: true });
 fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ passed: false, status: 'running', startedAt: new Date().toISOString() }));
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'streamfirefly-ui-profile-'));
@@ -141,7 +142,7 @@ try {
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1), 'options settings have no horizontal overflow');
   await page.screenshot({ path: path.join(output, 'options-settings.png'), fullPage: true });
 
-  const workspacePage = await browser.newPage();
+  const workspacePage = await workspaceFixturePage(await browser.newPage(), require(process.env.PLAYWRIGHT_MODULE || 'playwright-core').selectors);
   await workspacePage.setViewportSize({ width: 1920, height: 1080 });
   const workspaceErrors = [];
   const workspaceFailedRequests = [];
@@ -192,7 +193,7 @@ try {
     };
   });
   await workspacePage.goto(`${origin}/workspace.html`);
-  const workspace = workspacePage.locator('#streamfirefly-workspace-host').locator('..');
+  const workspace = workspacePage.locator('sf-workspace=#app');
   await workspace.getByRole('heading', { name: '流萤', exact: true }).waitFor();
   const logo = workspace.locator('.brand-logo');
   assert.match(await logo.getAttribute('src'), /^data:image\/png;base64,/);
@@ -202,8 +203,8 @@ try {
   const hostBefore = await workspacePage.evaluate(() => ({ width: document.documentElement.clientWidth, overflow: document.documentElement.style.overflow, bodyOverflow: document.body.style.overflow }));
   assert.equal(await frame.getAttribute('data-display-mode'), 'panel');
   assert.equal(Math.round((await frame.boundingBox()).width), 480);
-  await workspacePage.locator('#host-action').click();
-  assert.equal(await workspacePage.locator('#host-action').getAttribute('data-clicked'), 'true');
+  await workspacePage.hostPage.locator('#host-action').click();
+  assert.equal(await workspacePage.hostPage.locator('#host-action').getAttribute('data-clicked'), 'true');
   await workspace.locator('.resource-row .type-tile.thumb img').first().waitFor();
   assert.equal(await workspace.locator('.resource-row .type-tile.thumb img').evaluateAll(images => Promise.all(images.slice(0, 3).map(image => image.decode().then(() => image.naturalWidth > 0)))).then(values => values.every(Boolean)), true);
   await workspacePage.screenshot({ path: path.join(output, 'floating-panel.png') });
@@ -219,7 +220,7 @@ try {
   assert.equal(await workspace.locator('.downloads-page .task-row').count(), 5);
   assert.equal(await workspace.locator('.downloads-page .task-percent').count(), 1, 'panel folds percentages except LIVE');
   await workspace.getByRole('button', { name: '暂停：正在下载的 HLS 正片', exact: true }).waitFor();
-  await workspacePage.waitForFunction(() => document.getElementById('streamfirefly-workspace-host').shadowRoot.getAnimations().every(animation => animation.effect?.getComputedTiming().iterations === Infinity || animation.playState !== 'running'));
+  await workspacePage.waitForFunction(() => globalThis.__sfTestWorkspaceRoot.getAnimations().every(animation => animation.effect?.getComputedTiming().iterations === Infinity || animation.playState !== 'running'));
   await workspacePage.screenshot({ path: path.join(output, 'floating-panel-downloads.png') });
   await workspace.getByRole('navigation', { name: '流萤功能' }).getByRole('button', { name: /^资源/ }).click();
   await workspace.getByRole('button', { name: '更多筛选', exact: true }).click();
@@ -243,13 +244,13 @@ try {
   await workspacePage.keyboard.press('Escape');
   await workspace.getByRole('spinbutton', { name: '最短时长（秒）' }).waitFor({ state: 'hidden' });
   assert.equal(await frame.getAttribute('data-display-mode'), 'panel', 'Escape closes the popover before the window');
-  await workspacePage.locator('#host-action').evaluate(element => {
+  await workspacePage.hostPage.locator('#host-action').evaluate(element => {
     window.__hostKeys = [];
     element.addEventListener('keydown', event => window.__hostKeys.push({ key: event.key, prevented: event.defaultPrevented }));
   });
   await workspace.getByRole('button', { name: '资源类型', exact: true }).click();
   await workspace.getByRole('listbox').waitFor();
-  await workspacePage.locator('#host-action').focus();
+  await workspacePage.hostPage.locator('#host-action').focus();
   await workspace.getByRole('listbox').waitFor({ state: 'hidden' });
   await workspacePage.keyboard.press('ArrowDown');
   await workspacePage.keyboard.press('Escape');
@@ -294,7 +295,7 @@ try {
   const viewports = [{ width: 1366, height: 768 }, { width: 1920, height: 1080 }, { width: 2560, height: 1440 }, { width: 430, height: 640 }];
   for (const viewport of viewports) {
     await workspacePage.setViewportSize(viewport);
-    await workspacePage.waitForFunction(({ width, height }) => { const box = document.getElementById('streamfirefly-workspace-host').shadowRoot.querySelector('.floating-window').getBoundingClientRect(); return box.x >= 11 && box.y >= 11 && box.right <= width - 11 && box.bottom <= height - 11; }, viewport);
+    await workspacePage.waitForFunction(({ width, height }) => { const box = globalThis.__sfTestWorkspaceRoot.querySelector('.floating-window').getBoundingClientRect(); return box.x >= 11 && box.y >= 11 && box.right <= width - 11 && box.bottom <= height - 11; }, viewport);
     const bounds = await frame.boundingBox();
     assert.ok(bounds.x >= 11 && bounds.y >= 11 && bounds.x + bounds.width <= viewport.width - 11 && bounds.y + bounds.height <= viewport.height - 11, 'window stays inside viewport');
     const overflow = await frame.evaluate(element => ({ scrollWidth: element.scrollWidth, clientWidth: element.clientWidth }));
@@ -309,7 +310,7 @@ try {
   const navigateParser = candidateId => workspacePage.evaluate(id => window.dispatchEvent(new CustomEvent('streamfirefly-workspace-navigate', { detail: { view: 'parser', candidateId: id } })), candidateId);
   await navigateParser('fixture-hls');
   await workspace.locator('.parser-page').getByText('1280 × 720', { exact: true }).waitFor();
-  await workspacePage.waitForFunction(() => document.getElementById('streamfirefly-workspace-host').shadowRoot.getAnimations().every(animation => animation.effect?.getComputedTiming().iterations === Infinity || animation.playState !== 'running'));
+  await workspacePage.waitForFunction(() => globalThis.__sfTestWorkspaceRoot.getAnimations().every(animation => animation.effect?.getComputedTiming().iterations === Infinity || animation.playState !== 'running'));
   let summaryBox = await workspace.locator('.parser-page > .download-summary').boundingBox();
   let frameBox = await frame.boundingBox();
   assert.ok(summaryBox.y + summaryBox.height <= frameBox.y + frameBox.height + 1, 'HLS download summary stays inside the window: ' + JSON.stringify({ summaryBox, frameBox }));
@@ -345,11 +346,11 @@ try {
   assert.equal(await workspace.getByRole('dialog').count(), 0, 'saving local media must not ask for a key');
   const beforeClose = await workspacePage.evaluate(() => ({ width: document.documentElement.clientWidth, overflow: document.documentElement.style.overflow, bodyOverflow: document.body.style.overflow }));
   await workspace.getByRole('button', { name: '关闭流萤', exact: true }).click();
-  await workspacePage.locator('#streamfirefly-workspace-host').waitFor({ state: 'detached' });
+  await workspacePage.hostPage.locator('#streamfirefly-workspace-host').waitFor({ state: 'detached' });
   assert.deepEqual(await workspacePage.evaluate(() => ({ width: document.documentElement.clientWidth, overflow: document.documentElement.style.overflow, bodyOverflow: document.body.style.overflow })), beforeClose);
   await workspacePage.addScriptTag({ url: origin + '/workspace.js' });
   await workspacePage.locator('.floating-window').waitFor();
-  await workspacePage.waitForFunction(width => Math.round(document.getElementById('streamfirefly-workspace-host').shadowRoot.querySelector('.floating-window').getBoundingClientRect().width) === width, Math.round(resized.width));
+  await workspacePage.waitForFunction(width => Math.round(globalThis.__sfTestWorkspaceRoot.querySelector('.floating-window').getBoundingClientRect().width) === width, Math.round(resized.width));
   assert.equal(await workspacePage.locator('.floating-window').getAttribute('data-display-mode'), 'panel');
   assert.equal(Math.round((await workspacePage.locator('.floating-window').boundingBox()).width), Math.round(resized.width), 'reopening remembers resized panel width');
   assert.deepEqual(workspaceErrors, []);

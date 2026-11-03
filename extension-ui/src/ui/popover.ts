@@ -14,7 +14,7 @@ export function usePopover(trigger: Ref<HTMLElement | null>, panel: Ref<HTMLElem
   const open = ref(false);
   const style = ref<Record<string, string>>({ position: "fixed", left: "0px", top: "0px", visibility: "hidden" });
   let listening = false;
-  let focusRoot: ShadowRoot | null = null;
+  let eventRoot: Window | ShadowRoot = window;
 
   function inside(event: Event) {
     const path = event.composedPath();
@@ -22,7 +22,11 @@ export function usePopover(trigger: Ref<HTMLElement | null>, panel: Ref<HTMLElem
   }
   const onPointer = (event: PointerEvent) => { if (!inside(event)) hide(false); };
   const onFocus = (event: FocusEvent) => { if (!inside(event)) hide(false); };
-  const onScroll = (event: Event) => { if (!panel.value || !event.composedPath().includes(panel.value)) hide(false); };
+  const onScroll = (event: Event) => {
+    if (panel.value && event.composedPath().includes(panel.value)) return;
+    // Scrolling a workspace ancestor must not remove a menu while its option is being clicked.
+    if (eventRoot instanceof ShadowRoot) position(); else hide(false);
+  };
   const onResize = () => hide(false);
   const onKey = (event: KeyboardEvent) => {
     if ([...keyboardOwners].reverse().find(owner => owner(event)) !== inside) return;
@@ -31,23 +35,30 @@ export function usePopover(trigger: Ref<HTMLElement | null>, panel: Ref<HTMLElem
     options.onKey?.(event);
   };
 
+  const onOutside = (event: Event) => {
+    // Window sees only the host of a closed root. Internal events are handled at the root.
+    if (eventRoot instanceof ShadowRoot && event.composedPath().includes(eventRoot.host)) return;
+    hide(false);
+  };
+
   function listen(active: boolean) {
     if (active === listening) return;
     listening = active;
-    if (active) keyboardOwners.add(inside); else keyboardOwners.delete(inside);
-    const method = active ? "addEventListener" : "removeEventListener";
     if (active) {
+      keyboardOwners.add(inside);
       const root = trigger.value?.getRootNode();
-      focusRoot = root instanceof ShadowRoot ? root : null;
+      eventRoot = root instanceof ShadowRoot ? root : window;
+    } else keyboardOwners.delete(inside);
+    const method = active ? "addEventListener" : "removeEventListener";
+    eventRoot[method]("pointerdown", onPointer as EventListener, true);
+    eventRoot[method]("focusin", onFocus as EventListener, true);
+    eventRoot[method]("scroll", onScroll, true);
+    eventRoot[method]("keydown", onKey as EventListener, true);
+    if (eventRoot !== window) {
+      for (const name of ["pointerdown", "focusin", "scroll"]) window[method](name, onOutside, true);
     }
-    // Focus changes within one shadow root may never reach window after retargeting.
-    focusRoot?.[method]("focusin", onFocus as EventListener, true);
-    if (!active) focusRoot = null;
-    window[method]("pointerdown", onPointer as EventListener, true);
-    window[method]("focusin", onFocus as EventListener, true);
-    window[method]("scroll", onScroll, true);
     window[method]("resize", onResize);
-    window[method]("keydown", onKey as EventListener, true);
+    if (!active) eventRoot = window;
   }
 
   function position() {

@@ -22,7 +22,7 @@ function key(element: Element, value: string) {
   return event;
 }
 
-describe.each([false, true])("popover keyboard ownership (shadow=%s)", shadow => {
+describe.each([false, "open", "closed"] as const)("popover keyboard ownership (shadow=%s)", shadow => {
   let host: HTMLElement;
   let root: Document | ShadowRoot;
   let wrapper: VueWrapper;
@@ -30,7 +30,7 @@ describe.each([false, true])("popover keyboard ownership (shadow=%s)", shadow =>
   beforeEach(() => {
     host = document.createElement("div");
     document.body.append(host);
-    root = shadow ? host.attachShadow({ mode: "open" }) : document;
+    root = shadow ? host.attachShadow({ mode: shadow }) : document;
     const container = document.createElement("div");
     (shadow ? root : host).appendChild(container);
     wrapper = mount(fixture, { attachTo: container });
@@ -51,6 +51,14 @@ describe.each([false, true])("popover keyboard ownership (shadow=%s)", shadow =>
     expect(wrapper.find('[data-sf-popover]').exists()).toBe(true);
     (wrapper.get('[aria-label="网页输入框"]').element as HTMLElement).focus();
     await flushPromises();
+    expect(wrapper.find('[data-sf-popover]').exists()).toBe(false);
+  });
+
+  it("keeps shadow popovers usable when their containing scroller moves", async () => {
+    await wrapper.get('[aria-label="筛选"]').trigger("click"); await flushPromises();
+    wrapper.element.dispatchEvent(new Event("scroll")); await flushPromises();
+    expect(wrapper.find('[data-sf-popover]').exists()).toBe(Boolean(shadow));
+    document.body.dispatchEvent(new Event("scroll")); await flushPromises();
     expect(wrapper.find('[data-sf-popover]').exists()).toBe(false);
   });
 
