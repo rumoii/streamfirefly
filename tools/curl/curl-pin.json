@@ -1,0 +1,14 @@
+{
+  "version": "8.23.0_8",
+  "source": "curl-for-win (https://github.com/curl/curl-for-win), win64-mingw, statically linked, TLS via LibreSSL with --ca-native reading the Windows certificate store",
+  "archive": "https://curl.se/windows/dl-8.23.0_8/curl-8.23.0_8-win64-mingw.zip",
+  "paths": {
+    "curl.exe": "curl-8.23.0_8-win64-mingw/bin/curl.exe",
+    "CURL-LICENSE.txt": "curl-8.23.0_8-win64-mingw/COPYING.txt"
+  },
+  "sha256": {
+    "curl.exe": "35121e9cb7c2ae16187f8c5311a840ce4191d6753525138f7fbfbe46511bc271",
+    "CURL-LICENSE.txt": "82f2f4427d6545ee5aaac4f0b80428da6cc8ba41c2cf5da3a03680ec327b9681"
+  },
+  "licenseCheck": "COPYRIGHT AND PERMISSION NOTICE"
+}

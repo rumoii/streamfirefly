@@ -1,6 +1,6 @@
 # Native helper third-party notices
 
-Includes locked transitive Rust dependencies, including platform-specific dependencies. StreamFirefly itself is MIT licensed. FFmpeg runs as a separate executable under the LGPL 2.1 or later; see FFMPEG-LICENSE.txt and FFMPEG-SOURCE.txt.
+Includes locked transitive Rust dependencies, including platform-specific dependencies. StreamFirefly itself is MIT licensed. FFmpeg runs as a separate executable under the LGPL 2.1 or later; see FFMPEG-LICENSE.txt and FFMPEG-SOURCE.txt. The bundled curl.exe is the pinned curl-for-win build (see tools/curl/curl-pin.json), statically linked with TLS via LibreSSL and invoked only by absolute path; see CURL-LICENSE.txt for the curl copyright notice.
 
 ## aes 0.8.4
 

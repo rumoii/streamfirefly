@@ -39,6 +39,7 @@ $archives = @()
 foreach ($architecture in @('x64', 'arm64')) {
   $target = $architectures[$architecture].Target
   & $PSScriptRoot\download-ffmpeg.ps1 -Architecture $architecture -Destination (Join-Path $PSScriptRoot 'ffmpeg-cache')
+  & $PSScriptRoot\download-curl.ps1 -Destination (Join-Path $PSScriptRoot 'curl-cache')
   & $cargo build --locked --release --target $target --manifest-path (Join-Path $root 'native-host\Cargo.toml')
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   $bundleName = "StreamFirefly-$BundleVersion-windows-$architecture"
@@ -52,8 +53,10 @@ foreach ($architecture in @('x64', 'arm64')) {
     foreach ($directory in @('native-host', 'tools', 'store-assets')) { New-Item -ItemType Directory -Path (Join-Path $bundleRoot $directory) | Out-Null }
     Copy-Item -LiteralPath (Join-Path $root "native-host\target\$target\release\streamfirefly-native.exe") -Destination (Join-Path $bundleRoot 'native-host\streamfirefly-native.exe')
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "ffmpeg-cache\ffmpeg-$architecture.exe") -Destination (Join-Path $bundleRoot 'native-host\ffmpeg.exe')
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'curl-cache\curl.exe') -Destination (Join-Path $bundleRoot 'native-host\curl.exe')
     Copy-Item -LiteralPath (Join-Path $root 'native-host\THIRD_PARTY_NOTICES.md'), (Join-Path $root 'installer\FFMPEG-SOURCE.txt') -Destination (Join-Path $bundleRoot 'native-host')
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "ffmpeg-cache\ffmpeg-license-$architecture.txt") -Destination (Join-Path $bundleRoot 'native-host\FFMPEG-LICENSE.txt')
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'curl-cache\CURL-LICENSE.txt') -Destination (Join-Path $bundleRoot 'native-host\CURL-LICENSE.txt')
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'register-native-host.ps1'), (Join-Path $PSScriptRoot 'install.ps1'), (Join-Path $PSScriptRoot 'uninstall.ps1') -Destination (Join-Path $bundleRoot 'tools')
     Copy-Item -LiteralPath (Join-Path $root 'store-assets\promo-small.png'), (Join-Path $root 'store-assets\screenshot-popup.png') -Destination (Join-Path $bundleRoot 'store-assets')
     Copy-Item -LiteralPath (Join-Path $root 'INSTALL.md'), (Join-Path $root 'LICENSE') -Destination $bundleRoot

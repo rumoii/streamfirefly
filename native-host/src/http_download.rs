@@ -15,7 +15,6 @@ use std::io;
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::Child;
-use std::process::Command;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -28,6 +27,23 @@ pub(crate) struct ProbeInfo {
     total: Option<u64>,
     accept_ranges: bool,
     cancelled: bool,
+}
+
+pub(crate) fn curl_base_args() -> Vec<String> {
+    [
+        "--proto",
+        "=http,https",
+        "--proto-redir",
+        "=http,https",
+        "--max-redirs",
+        "10",
+        // The bundled curl-for-win build uses LibreSSL; this makes it verify
+        // against the Windows certificate store so no cacert file ships with it.
+        "--ca-native",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
 }
 
 pub(crate) fn add_header_args(args: &mut Vec<String>, task: &Task, url: &str) {
@@ -48,26 +64,31 @@ pub(crate) fn add_request_args(args: &mut Vec<String>, task: &Task, url: &str) {
     add_header_args(args, task, url);
 }
 
-pub(crate) fn probe_size(store: &TaskRuntime, task: &Task) -> ProbeInfo {
-    let mut command = Command::new("curl");
-    let mut args: Vec<String> = [
-        "--silent",
-        "--show-error",
-        "--fail",
-        "--location",
-        "--connect-timeout",
-        "10",
-        "--max-time",
-        "20",
-        "--head",
-    ]
-    .into_iter()
-    .map(str::to_string)
-    .collect();
+pub(crate) fn probe_size_args(task: &Task) -> Vec<String> {
+    let mut args = curl_base_args();
+    args.extend([
+        "--silent".to_string(),
+        "--show-error".to_string(),
+        "--fail".to_string(),
+        "--location".to_string(),
+        "--connect-timeout".to_string(),
+        "10".to_string(),
+        "--max-time".to_string(),
+        "20".to_string(),
+        "--head".to_string(),
+    ]);
     add_request_args(&mut args, task, &task.url);
     args.push(task.url.clone());
+    args
+}
+
+pub(crate) fn probe_size(store: &TaskRuntime, task: &Task) -> ProbeInfo {
+    let mut command = match crate::media_process::curl_command() {
+        Ok(command) => command,
+        Err(_) => return ProbeInfo::default(),
+    };
     command
-        .args(args)
+        .args(probe_size_args(task))
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     let child = match spawn_process(store, &task.id, &mut command) {
@@ -129,6 +150,30 @@ pub(crate) fn probe_size(store: &TaskRuntime, task: &Task) -> ProbeInfo {
     }
 }
 
+pub(crate) fn single_download_args(task: &Task, output: &str) -> Vec<String> {
+    let mut args = curl_base_args();
+    args.extend([
+        "--silent".to_string(),
+        "--show-error".to_string(),
+        "--fail".to_string(),
+        "--location".to_string(),
+        "--retry".to_string(),
+        "3".to_string(),
+        "--retry-all-errors".to_string(),
+        "--speed-limit".to_string(),
+        "1".to_string(),
+        "--speed-time".to_string(),
+        "60".to_string(),
+        "--continue-at".to_string(),
+        "-".to_string(),
+        "--output".to_string(),
+        output.to_string(),
+    ]);
+    add_request_args(&mut args, task, &task.url);
+    args.push(task.url.clone());
+    args
+}
+
 pub(crate) fn start_single_http_download(
     store: TaskRuntime,
     writer: Writer,
@@ -145,36 +190,32 @@ pub(crate) fn start_single_http_download(
         t.segments_total = 0;
         t.message = Some("正在连接资源".into());
     });
-    let mut args = vec![
-        "--silent".into(),
-        "--show-error".into(),
-        "--fail".into(),
-        "--location".into(),
-        "--retry".into(),
-        "3".into(),
-        "--retry-all-errors".into(),
-        "--continue-at".into(),
-        "-".into(),
-        "--output".into(),
-        output.clone(),
-    ];
-    add_request_args(&mut args, &task, &task.url);
-    args.push(task.url.clone());
-    let child = match spawn_process(&store, &task.id, Command::new("curl")
-        .args(args)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-    )
-    {
-        Ok(child) => child,
+    let child = match crate::media_process::curl_command() {
         Err(error) => {
             update(&store, &writer, &task.id, |t| {
                 t.state = "failed".into();
                 t.phase = "failed".into();
                 t.error = Some(error.to_string());
-                t.message = Some("无法启动下载程序".into());
+                t.message = Some("下载程序缺失，请重新安装 StreamFirefly".into());
             });
             return;
+        }
+        Ok(mut command) => match spawn_process(&store, &task.id, command
+            .args(single_download_args(&task, &output))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+        )
+        {
+            Ok(child) => child,
+            Err(error) => {
+                update(&store, &writer, &task.id, |t| {
+                    t.state = "failed".into();
+                    t.phase = "failed".into();
+                    t.error = Some(error.to_string());
+                    t.message = Some("无法启动下载程序".into());
+                });
+                return;
+            }
         }
     };
     let mut sampled_at = Instant::now();
@@ -314,6 +355,36 @@ fn absorb_continuation(transfer: &PartTransfer) -> io::Result<()> {
     fs::remove_file(&transfer.continuation)
 }
 
+fn parallel_part_args(
+    task: &Task,
+    start: u64,
+    end: u64,
+    existing: u64,
+    continuation: &std::path::Path,
+) -> Vec<String> {
+    let mut args = curl_base_args();
+    args.extend([
+        "--silent".to_string(),
+        "--show-error".to_string(),
+        "--fail".to_string(),
+        "--location".to_string(),
+        "--retry".to_string(),
+        "3".to_string(),
+        "--retry-all-errors".to_string(),
+        "--speed-limit".to_string(),
+        "1".to_string(),
+        "--speed-time".to_string(),
+        "60".to_string(),
+        "--range".to_string(),
+        format!("{}-{end}", start + existing),
+        "--output".to_string(),
+        continuation.to_string_lossy().into_owned(),
+    ]);
+    add_request_args(&mut args, task, &task.url);
+    args.push(task.url.clone());
+    args
+}
+
 pub(crate) fn start_parallel_http_download(
     store: TaskRuntime,
     writer: Writer,
@@ -358,28 +429,26 @@ pub(crate) fn start_parallel_http_download(
             existing = 0;
         }
         if existing < transfer.length {
-            let mut args = vec![
-                "--silent".into(),
-                "--show-error".into(),
-                "--fail".into(),
-                "--location".into(),
-                "--retry".into(),
-                "3".into(),
-                "--retry-all-errors".into(),
-                "--range".into(),
-                format!("{}-{end}", start + existing),
-                "--output".into(),
-                transfer.continuation.to_string_lossy().into(),
-            ];
-            add_request_args(&mut args, &task, &task.url);
-            args.push(task.url.clone());
-            match spawn_process(&store, &task.id, Command::new("curl")
-                .args(args)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-            )
-            {
-                Ok(child) => transfer.child = Some(child),
+            match crate::media_process::curl_command() {
+                Ok(mut command) => match spawn_process(&store, &task.id, command
+                    .args(parallel_part_args(
+                        &task,
+                        *start,
+                        *end,
+                        existing,
+                        &transfer.continuation,
+                    ))
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                )
+                {
+                    Ok(child) => transfer.child = Some(child),
+                    Err(_) => {
+                        stop_process(&store, &task.id);
+                        let _ = fs::remove_dir_all(&part_dir);
+                        return false;
+                    }
+                },
                 Err(_) => {
                     stop_process(&store, &task.id);
                     let _ = fs::remove_dir_all(&part_dir);
@@ -438,17 +507,37 @@ pub(crate) fn start_parallel_http_download(
         }
         sampled_at = Instant::now();
         last_bytes = bytes;
+        // A lock failure or try_wait error means the process can no longer be tracked; fail
+        // instead of looping forever with a task slot held.
+        let mut monitor_error = false;
         let statuses: Vec<Option<bool>> = transfers
             .iter()
             .map(|transfer| match &transfer.child {
                 None => Some(true),
-                Some(child) => child
-                    .lock()
-                    .ok()
-                    .and_then(|mut child| child.try_wait().ok().flatten())
-                    .map(|status| status.success()),
+                Some(child) => {
+                    let mut process = match child.lock() {
+                        Ok(process) => process,
+                        Err(_) => {
+                            monitor_error = true;
+                            return None;
+                        }
+                    };
+                    match process.try_wait() {
+                        Ok(Some(status)) => Some(status.success()),
+                        Ok(None) => None,
+                        Err(_) => {
+                            monitor_error = true;
+                            None
+                        }
+                    }
+                }
             })
             .collect();
+        if monitor_error {
+            stop_process(&store, &task.id);
+            let _ = fs::remove_dir_all(&part_dir);
+            return false;
+        }
         let completed = statuses.iter().filter(|status| **status == Some(true)).count() as u32;
         update(&store, &writer, &task.id, |t| {
             t.progress = ((bytes.saturating_mul(100) / total).min(99)) as u8;
@@ -539,4 +628,80 @@ pub(crate) fn start_http_download(store: TaskRuntime, writer: Writer, task: Task
     // Parts left by an earlier paused run cannot be continued by a single connection.
     let _ = fs::remove_dir_all(parallel_part_dir(&output, &task.id));
     start_single_http_download(store, writer, task, output, probe.total);
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    fn test_task() -> Task {
+        serde_json::from_value(serde_json::json!({
+            "id": "task-1",
+            "url": "http://127.0.0.1/media.mp4",
+            "title": "media",
+            "state": "queued",
+            "progress": 0,
+            "output": null,
+            "error": null,
+            "mime": "video/mp4"
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn curl_base_args_pinned() {
+        assert_eq!(
+            curl_base_args(),
+            vec![
+                "--proto",
+                "=http,https",
+                "--proto-redir",
+                "=http,https",
+                "--max-redirs",
+                "10",
+                "--ca-native"
+            ]
+        );
+    }
+
+    #[test]
+    fn probe_size_args_start_with_proto_whitelist() {
+        let args = probe_size_args(&test_task());
+        assert!(args.starts_with(&curl_base_args()));
+        assert!(args.windows(2).any(|pair| pair == ["--max-time", "20"]));
+        assert!(args.iter().any(|arg| arg == "--head"));
+        assert_eq!(
+            args.last().map(String::as_str),
+            Some("http://127.0.0.1/media.mp4")
+        );
+    }
+
+    #[test]
+    fn single_download_args_start_with_proto_whitelist_and_stall_timeout() {
+        let args = single_download_args(&test_task(), "out.mp4");
+        assert!(args.starts_with(&curl_base_args()));
+        assert!(args.windows(2).any(|pair| pair == ["--speed-limit", "1"]));
+        assert!(args.windows(2).any(|pair| pair == ["--speed-time", "60"]));
+        assert!(args.windows(2).any(|pair| pair == ["--output", "out.mp4"]));
+        assert_eq!(
+            args.last().map(String::as_str),
+            Some("http://127.0.0.1/media.mp4")
+        );
+    }
+
+    #[test]
+    fn parallel_part_args_start_with_proto_whitelist_and_stall_timeout() {
+        let args = parallel_part_args(&test_task(), 100, 199, 40, Path::new("part.next"));
+        assert!(args.starts_with(&curl_base_args()));
+        assert!(args.windows(2).any(|pair| pair == ["--speed-limit", "1"]));
+        assert!(args.windows(2).any(|pair| pair == ["--speed-time", "60"]));
+        assert!(args.windows(2).any(|pair| pair == ["--range", "140-199"]));
+        assert!(args.windows(2).any(|pair| pair == ["--output", "part.next"]));
+        assert_eq!(
+            args.last().map(String::as_str),
+            Some("http://127.0.0.1/media.mp4")
+        );
+    }
 }

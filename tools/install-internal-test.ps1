@@ -16,7 +16,7 @@ if (-not $architectureMatches) {
   throw "This bundle is $($packageInfo.architecture), but Windows reports $osArchitecture. Use the matching StreamFirefly test bundle."
 }
 $sourceDir = Join-Path $bundleRoot 'native-host'
-$required = @('streamfirefly-native.exe', 'ffmpeg.exe', 'THIRD_PARTY_NOTICES.md', 'FFMPEG-SOURCE.txt', 'FFMPEG-LICENSE.txt')
+$required = @('streamfirefly-native.exe', 'ffmpeg.exe', 'curl.exe', 'THIRD_PARTY_NOTICES.md', 'FFMPEG-SOURCE.txt', 'FFMPEG-LICENSE.txt', 'CURL-LICENSE.txt')
 foreach ($name in $required) {
   if (-not (Test-Path -LiteralPath (Join-Path $sourceDir $name) -PathType Leaf)) { throw "Test bundle file is missing: native-host\$name" }
 }

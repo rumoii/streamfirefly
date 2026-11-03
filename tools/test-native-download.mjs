@@ -4,9 +4,18 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ensureBundledTools } from './native-test-tools.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const exe = process.env.STREAMFIREFLY_NATIVE_EXE || path.join(root, 'native-host', 'target', 'debug', 'streamfirefly-native.exe');
+ensureBundledTools(exe);
+// The host must launch the curl.exe bundled next to the exe by absolute path. A decoy
+// curl.exe placed first on PATH must never be picked up; if it were, the downloads
+// below would fail or hang instead of reaching the bundled curl.
+const bundledCurl = path.join(path.dirname(exe), 'curl.exe');
+if (!fs.existsSync(bundledCurl)) throw new Error(`Bundled curl.exe missing: ${bundledCurl}`);
+const decoyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'streamfirefly-decoy-curl-'));
+fs.copyFileSync(exe, path.join(decoyDir, 'curl.exe'));
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'streamfirefly-e2e-'));
 const payload = Buffer.alloc(5 * 1024 * 1024, 83);
 const unknownPayload = Buffer.alloc(2 * 1024 * 1024, 85);
@@ -74,7 +83,7 @@ const proxy = http.createServer((request, response) => {
 });
 await new Promise(resolve => proxy.listen(0, '127.0.0.1', resolve));
 const proxyPort = proxy.address().port;
-const child = spawn(exe, [], { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true, env: { ...process.env, LOCALAPPDATA: temp } });
+const child = spawn(exe, [], { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true, env: { ...process.env, LOCALAPPDATA: temp, PATH: `${decoyDir}${path.delimiter}${process.env.PATH}` } });
 let sequence = 0;
 let buffer = Buffer.alloc(0);
 const pending = new Map();

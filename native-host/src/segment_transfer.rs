@@ -1,4 +1,5 @@
 use crate::http_download::add_request_args;
+use crate::http_download::curl_base_args;
 use crate::model::Task;
 use crate::processes::{cancel_requested, spawn_process, unregister_process};
 use crate::runtime::TaskRuntime;
@@ -7,11 +8,50 @@ use std::{
     fs,
     io::Read,
     path::Path,
-    process::{Command, Stdio},
+    process::Stdio,
     sync::atomic::{AtomicBool, Ordering},
     thread,
     time::{Duration, Instant},
 };
+
+pub(crate) fn curl_once_args(
+    task: &Task,
+    url: &str,
+    range: Option<&ByteRange>,
+    temporary: &Path,
+    response_headers: &Path,
+) -> Vec<String> {
+    let mut args = curl_base_args();
+    args.extend([
+        "--silent".to_string(),
+        "--show-error".to_string(),
+        "--location".to_string(),
+        "--connect-timeout".to_string(),
+        "10".to_string(),
+        "--max-time".to_string(),
+        "120".to_string(),
+        "--speed-limit".to_string(),
+        "1".to_string(),
+        "--speed-time".to_string(),
+        "60".to_string(),
+        "--output".to_string(),
+        temporary.to_string_lossy().into_owned(),
+    ]);
+    args.extend([
+        "--dump-header".to_string(),
+        response_headers.to_string_lossy().into_owned(),
+    ]);
+    args.extend(["--write-out".to_string(), "%{http_code}".to_string()]);
+    if let Some(range) = range {
+        args.extend([
+            "--range".to_string(),
+            format!("{}-{}", range.start, range.start + range.length - 1),
+        ]);
+    }
+    add_request_args(&mut args, task, url);
+    args.push(url.into());
+    args
+}
 
 pub(crate) fn curl_once(
     store: &TaskRuntime,
@@ -40,39 +80,8 @@ pub(crate) fn curl_once(
     ));
     let _ = fs::remove_file(&temporary);
     let _ = fs::remove_file(&response_headers);
-    let mut args: Vec<String> = [
-        "--silent",
-        "--show-error",
-        "--location",
-        "--proto",
-        "=http,https",
-        "--proto-redir",
-        "=http,https",
-        "--connect-timeout",
-        "10",
-        "--max-time",
-        "120",
-        "--output",
-    ]
-    .into_iter()
-    .map(str::to_string)
-    .collect();
-    args.push(temporary.to_string_lossy().into_owned());
-    args.extend([
-        "--dump-header".into(),
-        response_headers.to_string_lossy().into_owned(),
-    ]);
-    args.extend(["--write-out".into(), "%{http_code}".into()]);
-    if let Some(range) = range {
-        args.extend([
-            "--range".into(),
-            format!("{}-{}", range.start, range.start + range.length - 1),
-        ]);
-    }
-    add_request_args(&mut args, task, url);
-    args.push(url.into());
-    let child = spawn_process(store, &task.id, Command::new("curl")
-        .args(args)
+    let child = spawn_process(store, &task.id, crate::media_process::curl_command()?
+        .args(curl_once_args(task, url, range, &temporary, &response_headers))
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
     )
@@ -199,4 +208,53 @@ pub(crate) fn wait_retry(
         thread::sleep(Duration::from_millis(100));
     }
     true
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::http_download::curl_base_args;
+
+    fn test_task() -> Task {
+        serde_json::from_value(serde_json::json!({
+            "id": "task-1",
+            "url": "http://127.0.0.1/segment/0",
+            "title": "segment",
+            "state": "queued",
+            "progress": 0,
+            "output": null,
+            "error": null,
+            "mime": null
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn curl_once_args_start_with_proto_whitelist_and_stall_timeout() {
+        let args = curl_once_args(
+            &test_task(),
+            "http://127.0.0.1/segment/0",
+            Some(&ByteRange { start: 100, length: 100 }),
+            Path::new("seg.download"),
+            Path::new("seg.headers"),
+        );
+        assert!(args.starts_with(&curl_base_args()));
+        assert!(args.windows(2).any(|pair| pair == ["--max-time", "120"]));
+        assert!(args.windows(2).any(|pair| pair == ["--speed-limit", "1"]));
+        assert!(args.windows(2).any(|pair| pair == ["--speed-time", "60"]));
+        assert!(args.windows(2).any(|pair| pair == ["--range", "100-199"]));
+        assert_eq!(
+            args.last().map(String::as_str),
+            Some("http://127.0.0.1/segment/0")
+        );
+        let headless = curl_once_args(
+            &test_task(),
+            "http://127.0.0.1/segment/0",
+            None,
+            Path::new("seg.download"),
+            Path::new("seg.headers"),
+        );
+        assert!(!headless.windows(2).any(|pair| pair[0] == "--range"));
+    }
 }

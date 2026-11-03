@@ -8,10 +8,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fixtureFfmpeg, fixtureFfprobe } from './fixture-ffmpeg.mjs';
+import { ensureBundledTools } from './native-test-tools.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const exe = process.env.STREAMFIREFLY_NATIVE_EXE || path.join(root, 'native-host/target/debug/streamfirefly-native.exe');
 const ffmpeg = process.env.STREAMFIREFLY_FFMPEG_EXE || path.join(root, 'installer/build/x64/ffmpeg.exe');
+ensureBundledTools(exe, ffmpeg);
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'streamfirefly-hls-output-'));
 const downloads = path.join(temporary, 'downloads');
 fs.mkdirSync(downloads);
