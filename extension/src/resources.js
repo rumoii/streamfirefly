@@ -2,9 +2,9 @@ import { INLINE_MANIFEST_MAX_BYTES, newId, supportedPage, blockedSite, cleanPage
 import { BADGE_COLORS } from './download-badge.js';
 export function createResources(api, settings, sniffing, notifyWorkspaceMessage, detect, extract, downloadBadge = null) {
 const candidateListeners = new Set();
-const STATE_VERSION = 2;
+const STATE_VERSION = 3;
 
-const STATE_PREFIX = "media-candidates-v2:";
+const STATE_PREFIX = "media-candidates-v3:";
 
 const BUCKET_LIMITS = { core: 300, image: 200, segment: 1000 };
 
@@ -175,11 +175,11 @@ function rememberRequestContext(tabId, url, context) {
   while (recentRequestContexts.size > 500) recentRequestContexts.delete(recentRequestContexts.keys().next().value);
 }
 
-function requestContextFor(tabId, item) {
+function requestContextFor(tabId, item, sourceContextId) {
   const urls = [item.inlineManifest?.sourceUrl, item.url, item.pageUrl].filter(Boolean);
   for (const url of urls) {
     const context = recentRequestContexts.get(requestContextKey(tabId, url));
-    if (context && Date.now() - context.capturedAt <= 120000) return context;
+    if (context?.sourceContextId === sourceContextId && Date.now() - context.capturedAt <= 120000) return context;
   }
   return null;
 }
@@ -224,9 +224,6 @@ async function hashInlineManifest(inlineManifest) {
 
 async function addCandidate(tabId, item, expectedContextId = "") {
   if (!Number.isInteger(tabId) || tabId < 0 || !item?.url) return false;
-  // Only http(s) addresses are downloadable; a blob: url is kept when the manifest text is inlined
-  // (page-probe.js blob-manifest), because the host never has to fetch the blob itself.
-  if (!/^https?:/i.test(item.url) && !(item.inlineManifest && /^blob:/i.test(item.url))) return "media_url_unsupported";
   if (isHeuristicNamespaceCandidate(item)) return false;
   if (blockedSite(item.url) || blockedSite(item.pageUrl)) return false;
   await settings.ready;
@@ -245,7 +242,7 @@ async function addCandidate(tabId, item, expectedContextId = "") {
     const canonicalUrl = canonicalize(item.url);
     const id = item.inlineManifest ? await hashInlineManifest(item.inlineManifest) : canonicalUrl;
     const existing = draft.candidates.get(id);
-    const context = item.inlineManifest ? requestContextFor(tabId, item) : null;
+    const context = item.inlineManifest ? requestContextFor(tabId, item, state.sourceContextId) : null;
     const inlineHeaders = context ? Object.fromEntries(Object.entries(context.requestHeaders || {}).filter(([name]) => !["cookie", "authorization"].includes(name.toLowerCase()))) : null;
     const sourceUrl = state.pageUrl || (await api.tabs.get(tabId)).url || "";
     if (blockedSite(sourceUrl)) return false;
@@ -532,10 +529,12 @@ async function readBoundedText(response, maxBytes) {
   }
 }
 
-/** Resolves a candidate-owned http(s) request with the page's Referer, Origin and, only for same-origin targets, Authorization. */
+/** Automatic probes use the target's own request evidence; explicit reads use candidate context. */
 async function prepareOwnedFetch(tabId, id, requestedUrl, options = {}) {
-  const candidate = await candidateFor(tabId, id);
-  const owner = Array.isArray(candidate) ? null : candidate;
+  const state = await loadTabState(tabId);
+  if (options.automatic && options.sourceContextId && options.sourceContextId !== state.sourceContextId) return { ok: false, error: "media_context_stale" };
+  if (options.automatic && (state.paused || !sniffing.allowed(tabId))) return { ok: false, error: "sniffing_inactive" };
+  const owner = state.candidates.get(id);
   if (!owner) return { ok: false, error: "media_candidate_not_found" };
   let url;
   try { url = new URL(requestedUrl || owner.url); }
@@ -545,13 +544,17 @@ async function prepareOwnedFetch(tabId, id, requestedUrl, options = {}) {
   let ownerOrigin;
   try { ownerOrigin = new URL(owner.url).origin; } catch (_) {}
   const sameOrigin = url.origin === ownerOrigin;
-  // Cross-origin requests never carry credentials: a page-chosen address must not receive the
-  // user's cookies, and an observed Authorization header belongs to its own origin only.
-  const allowCredentials = sameOrigin;
+  // Only background webRequest handlers can supply requestId. Each initial automatic URL
+  // needs its own evidence; redirects retain the browser's existing behavior.
+  const observed = state.candidates.get(canonicalize(url.href));
+  const recent = requestContextFor(tabId, { url: url.href }, state.sourceContextId);
+  const evidence = observed?.requestId ? observed : recent?.requestId ? recent : null;
+  const allowCredentials = options.automatic ? Boolean(evidence) && (options.restrictOrigin !== true || sameOrigin) : sameOrigin;
+  const requestOwner = options.automatic && evidence ? evidence : owner;
   const allowPageHeaders = options.restrictOrigin !== true || sameOrigin;
   const headers = new Headers();
   const pageHeaders = {};
-  for (const [name, value] of Object.entries(owner.requestHeaders || {})) {
+  for (const [name, value] of Object.entries(requestOwner.requestHeaders || {})) {
     const key = name.toLowerCase();
     if (typeof value !== "string" || !value) continue;
     if (key === "authorization" && allowCredentials) headers.set(name, value);
@@ -586,7 +589,7 @@ async function probeMediaSize(tabId, sourceContextId, id) {
   const inactive = state => !sourceContextId || sourceContextId !== state.sourceContextId ? { ok: false, error: "media_context_stale" } : state.paused || !sniffing.allowed(tabId) ? { ok: false, error: "sniffing_inactive" } : null;
   const refused = inactive(await loadTabState(tabId));
   if (refused) return refused;
-  const prepared = await prepareOwnedFetch(tabId, id);
+  const prepared = await prepareOwnedFetch(tabId, id, null, { automatic: true, sourceContextId });
   if (!prepared.ok) return prepared;
   const { owner, url, headers, pageHeaders, credentials } = prepared;
   if (!["video", "audio"].includes(owner.type)) return { ok: false, error: "media_size_unsupported" };

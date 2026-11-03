@@ -98,13 +98,13 @@ await assert.rejects(failingStore.save({ version: 1, rules: [extractionRule] }, 
 const retryLocal = { extractionConfig: { version: 1, rules: [extractionRule] }, tasks: [{ id: 'existing-task', state: 'running' }] };
 const retrySessions = {};
 for (const tabId of [4, 5, 6]) {
-  const observed = structuredClone(sessionStored['media-candidates-v2:2'].candidates.find(candidate => candidate.extraction?.observed));
+  const observed = structuredClone(sessionStored['media-candidates-v3:2'].candidates.find(candidate => candidate.extraction?.observed));
   const url = `https://cdn.test/pending-${tabId}.m3u8`;
-  retrySessions[`media-candidates-v2:${tabId}`] = { ...structuredClone(sessionStored['media-candidates-v2:2']), tabId, candidates: [observed, { id: url, url, canonicalUrl: url, type: 'hls', extraction: { ruleId: extractionRule.id, originalUrl: 'https://api.test/', observed: false, kind: 'hls' } }] };
+  retrySessions[`media-candidates-v3:${tabId}`] = { ...structuredClone(sessionStored['media-candidates-v3:2']), tabId, candidates: [observed, { id: url, url, canonicalUrl: url, type: 'hls', extraction: { ruleId: extractionRule.id, originalUrl: 'https://api.test/', observed: false, kind: 'hls' } }] };
 }
 let failCleanup = true, failSave = true;
 const cleanupWrites = [];
-const retryApi = { ...resourceApi, storage: { local: { ...area(retryLocal), set: async data => { if (failSave) throw new Error('local storage failure'); Object.assign(retryLocal, structuredClone(data)); } }, session: { ...area(retrySessions), set: async data => { const key = Object.keys(data)[0]; cleanupWrites.push(key); if (failCleanup && key === 'media-candidates-v2:5') throw new Error('session storage failure'); Object.assign(retrySessions, structuredClone(data)); } } } };
+const retryApi = { ...resourceApi, storage: { local: { ...area(retryLocal), set: async data => { if (failSave) throw new Error('local storage failure'); Object.assign(retryLocal, structuredClone(data)); } }, session: { ...area(retrySessions), set: async data => { const key = Object.keys(data)[0]; cleanupWrites.push(key); if (failCleanup && key === 'media-candidates-v3:5') throw new Error('session storage failure'); Object.assign(retrySessions, structuredClone(data)); } } } };
 const retryExtraction = createExtraction(retryApi, { run: async () => { throw new Error('worker_timeout'); } });
 const retryCollection = createResources(retryApi, settingsStub, sniffingStub, () => {}, matching, retryExtraction.extract);
 const retryConfig = { version: 1, rules: [{ ...extractionRule, name: '更新规则' }] };
@@ -117,15 +117,15 @@ const partialSave = await retryExtraction.save(retryConfig, retryCollection.clea
 assert.equal(partialSave.cleanup.status, 'failed'); assert.equal(partialSave.cleanup.error, 'session storage failure');
 assert.equal(partialSave.config.rules[0].name, '更新规则'); assert.equal(Object.keys(partialSave.disabled).length, 0);
 assert.equal(retryLocal.extractionConfig.rules[0].name, '更新规则');
-assert.equal(retrySessions['media-candidates-v2:4'].candidates.length, 1);
-assert.equal(retrySessions['media-candidates-v2:5'].candidates.length, 2);
-assert.equal(retrySessions['media-candidates-v2:6'].candidates.length, 2);
-assert.deepEqual(cleanupWrites, ['media-candidates-v2:4', 'media-candidates-v2:5']);
+assert.equal(retrySessions['media-candidates-v3:4'].candidates.length, 1);
+assert.equal(retrySessions['media-candidates-v3:5'].candidates.length, 2);
+assert.equal(retrySessions['media-candidates-v3:6'].candidates.length, 2);
+assert.deepEqual(cleanupWrites, ['media-candidates-v3:4', 'media-candidates-v3:5']);
 failCleanup = false;
 assert.equal((await retryExtraction.save(retryConfig, retryCollection.clearExtracted)).cleanup.status, 'complete');
 const recoveredCollection = createResources(retryApi, settingsStub, sniffingStub, () => {}, matching, retryExtraction.extract);
 for (const tabId of [4, 5, 6]) {
-  assert.equal(retrySessions[`media-candidates-v2:${tabId}`].candidates.length, 1);
+  assert.equal(retrySessions[`media-candidates-v3:${tabId}`].candidates.length, 1);
   assert.equal(await recoveredCollection.candidateFor(tabId, `https://cdn.test/pending-${tabId}.m3u8`), null);
   assert.ok((await recoveredCollection.candidateFor(tabId, 'https://cdn.test/movie.m3u8')).extraction.observed);
 }

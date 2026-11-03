@@ -12,6 +12,7 @@ import { createNative } from './native.js';
 import { createResources } from './resources.js';
 import { createPreview } from './preview.js';
 import { createWorkspace } from './workspace.js';
+import { sanitizePageCandidate } from './page-input.js';
 import { createSniffing } from './sniffing.js';
 import { createUpdateCheck } from './update-check.js';
 import { createDownloadBadge } from './download-badge.js';
@@ -47,6 +48,7 @@ const diagnostics = createDiagnostics(api, nativeRequestPromise, { captures: () 
 const outputTemplates = createOutputTemplates(api, evaluation.run);
 const updateCheck = createUpdateCheck(api);
 const requestHeadersById = new Map();
+const requestEpochs = new Map();
 const navigationCleanups = new Map();
 function beginNavigationCleanup(tabId, pageUrl, sameDocument = false) {
   const previous = navigationCleanups.get(tabId);
@@ -58,6 +60,7 @@ function beginNavigationCleanup(tabId, pageUrl, sameDocument = false) {
       if (entry.cancelled || state.pageUrl && pageKey(state.pageUrl) === pageKey(pageUrl)) return;
       void capture.interrupted(tabId);
     }
+    requestEpochs.set(tabId, (requestEpochs.get(tabId) || 0) + 1);
     await unmountWorkspace(tabId);
     if (entry.cancelled) return;
     await clearTab(tabId, pageUrl);
@@ -124,22 +127,29 @@ const requestHeaderOptions = ["requestHeaders", api.webRequest.OnBeforeSendHeade
 api.webRequest.onBeforeSendHeaders.addListener(details => {
   if (!sniffing.allowed(details.tabId)) return;
   const allowed = new Set(["referer", "user-agent", "cookie", "authorization", "origin"]);
-  requestHeadersById.set(details.requestId, { tabId: details.tabId, headers: Object.fromEntries((details.requestHeaders ?? []).filter(header => allowed.has(header.name.toLowerCase())).map(header => [header.name.toLowerCase(), header.value ?? ""])) });
+  // A closed tab can cancel navigation before this request receives any response.
+  const sourceContext = waitForNavigationCleanup(details.tabId).then(() => loadTabState(details.tabId)).then(state => state.sourceContextId).catch(() => null);
+  requestHeadersById.set(details.requestId, { tabId: details.tabId, epoch: requestEpochs.get(details.tabId) || 0, revision: sniffing.revision(details.tabId), sourceContext, headers: Object.fromEntries((details.requestHeaders ?? []).filter(header => allowed.has(header.name.toLowerCase())).map(header => [header.name.toLowerCase(), header.value ?? ""])) });
 }, { urls: ["http://*/*", "https://*/*"] }, requestHeaderOptions);
 
 api.webRequest.onHeadersReceived.addListener(details => {
   if (!sniffing.hasActive() || details.tabId >= 0 && !sniffing.allowed(details.tabId)) { requestHeadersById.delete(details.requestId); return; }
-  void resolveRequestTabId(details).then(tabId => {
+  const pending = requestHeadersById.get(details.requestId);
+  void resolveRequestTabId(details).then(async tabId => {
     if (!sniffing.allowed(tabId)) return false;
+    const sourceContextId = pending ? await pending.sourceContext : (await loadTabState(tabId)).sourceContextId;
+    if (pending && (pending.epoch !== (requestEpochs.get(tabId) || 0) || pending.revision !== sniffing.revision(tabId))) return false;
+    if ((await loadTabState(tabId)).sourceContextId !== sourceContextId) return false;
+    const observed = details.tabId >= 0 && pending?.tabId === details.tabId;
     const headers = Object.fromEntries((details.responseHeaders ?? []).map(header => [header.name.toLowerCase(), header.value ?? ""]));
     const mime = headers["content-type"]?.split(";", 1)[0] ?? "";
-    const requestHeaders = requestHeadersById.get(details.requestId)?.headers || {};
+    const requestHeaders = pending?.headers || {};
     const rangeSize = parseContentRange(headers["content-range"]);
     const contentLength = details.statusCode === 206 ? null : Number(headers["content-length"] ?? 0) || null;
-    const context = { requestHeaders, referer: requestHeaders.referer || null, contentDisposition: headers["content-disposition"] || null };
-    if (String(details.method || "GET").toUpperCase() !== "GET" || !mime || /json|text|javascript|xml|mpegurl|octet-stream/i.test(mime)) rememberRequestContext(tabId, details.url, context);
-    return addCandidate(tabId, { url: details.url, mime, size: rangeSize || contentLength, sizeSource: rangeSize ? "content-range" : contentLength ? "content-length" : null, ...context, source: "network", requestId: details.requestId, resourceType: details.type });
-  }).finally(() => requestHeadersById.delete(details.requestId));
+    const context = { requestHeaders, referer: requestHeaders.referer || null, contentDisposition: headers["content-disposition"] || null, sourceContextId, ...(observed ? { requestId: details.requestId } : {}) };
+    if (observed || String(details.method || "GET").toUpperCase() !== "GET" || !mime || /json|text|javascript|xml|mpegurl|octet-stream/i.test(mime)) rememberRequestContext(tabId, details.url, context);
+    return addCandidate(tabId, { url: details.url, mime, size: rangeSize || contentLength, sizeSource: rangeSize ? "content-range" : contentLength ? "content-length" : null, ...context, source: "network", resourceType: details.type }, sourceContextId);
+  }).catch(error => console.warn("StreamFirefly request observation failed", error.message)).finally(() => { if (requestHeadersById.get(details.requestId) === pending) requestHeadersById.delete(details.requestId); });
 }, { urls: ["http://*/*", "https://*/*"] }, ["responseHeaders"]);
 api.webRequest.onErrorOccurred.addListener(details => requestHeadersById.delete(details.requestId), { urls: ["http://*/*", "https://*/*"] });
 
@@ -156,6 +166,7 @@ api.webNavigation?.onHistoryStateUpdated?.addListener(details => {
 });
 
 api.tabs.onRemoved.addListener(tabId => {
+  requestEpochs.delete(tabId);
   void capture.restart.clear(tabId);
   const pending = navigationCleanups.get(tabId);
   for (let entry = pending; entry; entry = entry.previous) entry.cancelled = true;
@@ -385,7 +396,7 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   if (message?.type === "media.fetchText") {
-    fetchMediaText(sender.tab?.id ?? message.tabId, message.id, message.url, { restrictOrigin: message.restrictOrigin === true }).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
+    fetchMediaText(sender.tab?.id ?? message.tabId, message.id, message.url, { restrictOrigin: message.restrictOrigin === true, automatic: message.automatic === true, sourceContextId: message.sourceContextId }).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
     return true;
   }
   if (message?.type === "media.size.probe") {
@@ -401,12 +412,10 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message?.type === "media.pick.result") { finishPick(sender.tab?.id, message.pickId, message.pick).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message })); return true; }
   if (message?.type === "media.focus") { setPageFocus(sender.tab?.id, message.focus || {}).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message })); return true; }
-  // parents and userPicked are generated by the background itself; drop whatever the page claims.
-  // A media.add relayed from a content script must not carry its own request headers either —
-  // content.js already strips them, and resources.js reattaches the headers webRequest observed.
+  // Page and DOM reports cannot supply background request evidence or execution metadata.
   if (message?.type === "media.add") {
-    const { parents, userPicked, ...rest } = message.candidate || {};
-    const candidate = sender.tab ? Object.fromEntries(Object.entries(rest).filter(([key]) => key !== "requestHeaders")) : rest;
+    const candidate = sanitizePageCandidate(message.candidate);
+    if (!candidate) { sendResponse({ ok: false, error: "media_url_unsupported" }); return false; }
     addCandidate(sender.tab?.id, { ...candidate, source: candidate.source || "dom" })
       .then(result => typeof result === "string" ? sendResponse({ ok: false, error: result }) : sendResponse({ ok: result }))
       .catch(error => sendResponse({ ok: false, error: error.message }));

@@ -8,41 +8,6 @@
   let revision = 0;
   let pending = [];
   const pagePoster = () => { const value = document.querySelector('meta[property="og:image"], meta[name="twitter:image"]')?.content; if (!value) return null; try { return new URL(value, location.href).href; } catch (_) { return value; } };
-  // The page can forge window.postMessage({source:"streamfirefly",type:"media"}), so a probe candidate is
-  // untrusted input. Keep only the fields page-probe.js actually produces and check every value; the
-  // background reattaches request headers it observed itself via webRequest.
-  const INLINE_MANIFEST_LIMIT = 512 * 1024; // same value as page-probe.js INLINE_MANIFEST_LIMIT and platform.js INLINE_MANIFEST_MAX_BYTES
-  const PAGE_SOURCE_RE = /^(?:page-probe|fetch|xhr|blob|inline-script|json-parse|atob|text-decoder|response-buffer|from-char-code|array-join|worker)(?:-[a-z]+)*$/;
-  const PAGE_CONTROL_CHARS_RE = /[\x00-\x1f\x7f]/;
-  const PAGE_FIELDS = ["url", "mime", "title", "pageTitle", "source", "segmentKind", "parentUrl", "duration", "inlineManifest"];
-  const pageUrlOk = (value, allowBlob) => typeof value === "string" && value.length <= 8192 && !PAGE_CONTROL_CHARS_RE.test(value) && (allowBlob ? /^(?:https?|blob):/.test(value) : /^https?:/.test(value));
-  function sanitizePageCandidate(candidate) {
-    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return null;
-    const inlineManifest = candidate.inlineManifest;
-    const hasInline = inlineManifest != null;
-    if (hasInline && (typeof inlineManifest !== "object" || Array.isArray(inlineManifest))) return null;
-    // With an inline manifest the text is already in the message and the host never fetches the
-    // address, so a blob: url (page-probe.js blob-manifest) is acceptable there.
-    const allowBlob = hasInline;
-    if (!pageUrlOk(candidate.url, allowBlob)) return null;
-    if (candidate.parentUrl != null && !pageUrlOk(candidate.parentUrl, false)) return null;
-    if (typeof candidate.source !== "string" || !PAGE_SOURCE_RE.test(candidate.source)) return null;
-    if (candidate.mime != null && (typeof candidate.mime !== "string" || candidate.mime.length > 200)) return null;
-    for (const key of ["title", "pageTitle"]) if (candidate[key] != null && (typeof candidate[key] !== "string" || candidate[key].length > 1000)) return null;
-    if (candidate.duration != null && !Number.isFinite(candidate.duration)) return null;
-    const clean = {};
-    for (const key of PAGE_FIELDS) if (candidate[key] !== undefined && (key !== "segmentKind" || typeof candidate[key] === "string" || candidate[key] === null)) clean[key] = candidate[key];
-    if (hasInline) {
-      const text = inlineManifest.text;
-      if (!["hls", "dash"].includes(inlineManifest.format) || typeof text !== "string" || !new TextEncoder().encode(text).byteLength || new TextEncoder().encode(text).byteLength > INLINE_MANIFEST_LIMIT) return null;
-      if (typeof inlineManifest.baseUrl !== "string" || !pageUrlOk(inlineManifest.baseUrl, false)) return null;
-      if (inlineManifest.sourceUrl != null && !pageUrlOk(inlineManifest.sourceUrl, true)) return null;
-      clean.inlineManifest = { format: inlineManifest.format, text, baseUrl: inlineManifest.baseUrl, sourceUrl: inlineManifest.sourceUrl ?? null };
-    }
-    return clean;
-  }
-  // Test hook: tools/test-content-message.mjs loads this file in a vm and calls this to exercise the sanitizer.
-  globalThis.__streamFireflySanitizePageCandidate = sanitizePageCandidate;
   const report = (element, force = false) => {
     if (!active) return;
     const url = element.currentSrc || element.src;
@@ -269,9 +234,7 @@
   }
   window.addEventListener("message", event => {
     if (event.source !== window || event.data?.source !== "streamfirefly") return;
-    let message = null;
-    if (event.data.type === "key") message = { type: "deep.key.add", payload: { hex: event.data.hex, source: event.data.foundBy, documentToken } };
-    else if (event.data.type === "media") { const candidate = sanitizePageCandidate(event.data.candidate); if (candidate) message = { type: "media.add", candidate }; }
+    const message = event.data.type === "key" ? { type: "deep.key.add", payload: { hex: event.data.hex, source: event.data.foundBy, documentToken } } : event.data.type === "media" ? { type: "media.add", candidate: event.data.candidate } : null;
     if (!message) return;
     if (active) api.runtime.sendMessage(message).catch?.(() => {});
     else if (installing && pending.length < 1000) pending.push(message);
