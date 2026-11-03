@@ -540,6 +540,10 @@ pub(crate) fn with_site_subdirectory(dir: PathBuf, payload: &Value) -> Result<Pa
     Ok(dir)
 }
 
+pub(crate) fn header_value_ok(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 8192 && !value.chars().any(char::is_control)
+}
+
 pub(crate) fn allowed_request_headers(payload: &Value) -> HashMap<String, String> {
     let allowed = ["referer", "origin", "authorization", "cookie", "user-agent"];
     let mut headers = HashMap::new();
@@ -547,7 +551,7 @@ pub(crate) fn allowed_request_headers(payload: &Value) -> HashMap<String, String
         for (name, value) in values {
             let key = name.to_ascii_lowercase();
             if allowed.contains(&key.as_str()) {
-                if let Some(value) = value.as_str().filter(|value| !value.is_empty()) {
+                if let Some(value) = value.as_str().filter(|value| header_value_ok(value)) {
                     headers.insert(key, value.to_string());
                 }
             }
@@ -556,10 +560,54 @@ pub(crate) fn allowed_request_headers(payload: &Value) -> HashMap<String, String
     if !headers.contains_key("referer") {
         if let Some(referer) = payload["referer"]
             .as_str()
-            .filter(|value| !value.is_empty())
+            .filter(|value| header_value_ok(value))
         {
             headers.insert("referer".into(), referer.into());
         }
     }
     headers
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn header_value_rejects_crlf() {
+        assert!(!header_value_ok("https://a.example/\r\nX-Evil: 1"));
+        let payload = json!({"requestHeaders": {"user-agent": "a\r\nb"}});
+        assert!(allowed_request_headers(&payload).is_empty());
+    }
+
+    #[test]
+    fn header_value_rejects_nul_byte() {
+        assert!(!header_value_ok("a\0b"));
+        let payload = json!({"requestHeaders": {"user-agent": "a\0b"}});
+        assert!(allowed_request_headers(&payload).is_empty());
+    }
+
+    #[test]
+    fn header_value_rejects_more_than_8192_bytes() {
+        assert!(!header_value_ok(&"x".repeat(8193)));
+        assert!(header_value_ok(&"x".repeat(8192)));
+        let payload = json!({"requestHeaders": {"user-agent": "x".repeat(8193)}});
+        assert!(allowed_request_headers(&payload).is_empty());
+    }
+
+    #[test]
+    fn header_value_keeps_mozilla_user_agent() {
+        let payload = json!({"requestHeaders": {"user-agent": "Mozilla/5.0"}});
+        let headers = allowed_request_headers(&payload);
+        assert_eq!(
+            headers.get("user-agent").map(String::as_str),
+            Some("Mozilla/5.0")
+        );
+    }
+
+    #[test]
+    fn referer_fallback_with_newline_is_dropped() {
+        let payload = json!({"referer": "https://a.example/\nX-Evil: 1"});
+        assert!(!allowed_request_headers(&payload).contains_key("referer"));
+    }
 }

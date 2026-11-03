@@ -263,7 +263,7 @@ for (const [url, restrictOrigin, auth, credentials] of [
   ['https://media.example/audio.m3u8', true, 'Bearer preview', 'include'],
   ['https://cdn.example/audio.m3u8', true, null, 'omit'],
   ['https://media.example:9443/audio.m3u8', true, null, 'omit'],
-  ['https://cdn.example/audio.m3u8', false, 'Bearer preview', 'include']
+  ['https://cdn.example/audio.m3u8', false, null, 'omit']
 ]) {
   fetchResponse = new Response('#EXTM3U\n#EXTINF:2,\nsegment.ts\n');
   const beforeRules = previewRuleUpdates.length;
@@ -577,9 +577,13 @@ const captureTab = createdTabs.at(-1);
 if (!openedCapture.ok || !captureTab?.url.includes('captureTab=7') || !captureTab.url.includes('captureBlob=blob%3Ahttps%3A%2F%2Fmedia.example%2Fsource')) throw new Error(`Blob capture intent was not encoded into its control page: ${JSON.stringify({ openedCapture, captureTab })}`);
 const staleCapture = await send({ type: 'capture.control.open', payload: { tabId: 7, sourceContextId: 'stale', objectUrl: 'blob:https://media.example/source' } });
 if (staleCapture.ok || staleCapture.error !== 'capture_document_changed') throw new Error(`Stale Blob capture intent was accepted: ${JSON.stringify(staleCapture)}`);
-await send({ type: 'media.add', candidate: { url: 'blob:https://media.example/source', mime: 'video/unknown', source: 'dom' } }, { tab: { id: 7 } });
-const blobCandidate = (await send({ type: 'media.candidates', tabId: 7 })).find(candidate => candidate.url === 'blob:https://media.example/source');
+const rejectedBlobAdd = await send({ type: 'media.add', candidate: { url: 'blob:https://media.example/source', mime: 'video/unknown', source: 'dom' } }, { tab: { id: 7 } });
+if (rejectedBlobAdd.ok || rejectedBlobAdd.error !== 'media_url_unsupported') throw new Error(`Blob address without an inline manifest was not rejected: ${JSON.stringify(rejectedBlobAdd)}`);
+if ((await send({ type: 'media.candidates', tabId: 7 })).some(candidate => candidate.url === 'blob:https://media.example/source')) throw new Error('A blob: address without an inline manifest was retained');
 const tabsBeforeBlobDispatch = createdTabs.length;
+await send({ type: 'media.add', candidate: { url: 'blob:https://media.example/inline-source', mime: 'application/vnd.apple.mpegurl', source: 'blob-manifest', inlineManifest: { format: 'hls', text: '#EXTM3U\n#EXTINF:2,\nhttps://media.example/chunk-1.ts\n', baseUrl: 'https://media.example/', sourceUrl: null } } }, { tab: { id: 7 } });
+const blobCandidate = (await send({ type: 'media.candidates', tabId: 7 })).find(candidate => candidate.url === 'blob:https://media.example/inline-source');
+if (!blobCandidate) throw new Error('A blob: candidate with an inline manifest was not retained');
 const rejectedBlobDispatch = await send({ type: 'integration.open', payload: { tabId: 7, sourceContextId: oldSourceContextId, candidateIds: [blobCandidate.id] } });
 if (rejectedBlobDispatch.ok || rejectedBlobDispatch.error !== 'blob_resource_requires_capture' || createdTabs.length !== tabsBeforeBlobDispatch) throw new Error(`Blob media reached external dispatch: ${JSON.stringify(rejectedBlobDispatch)}`);
 

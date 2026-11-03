@@ -4,7 +4,11 @@ import { hasOpenPopover } from "./ui/popover";
 const cleanup = new WeakMap<HTMLElement, () => void>();
 function activeElement(root: Document | ShadowRoot = document): Element | null {
   const active = root.activeElement;
-  return active?.shadowRoot ? activeElement(active.shadowRoot) : active;
+  // The workspace shadow is closed, so a focused element inside it surfaces as the host element and
+  // host.shadowRoot is null; follow the reference the workspace published to reach the real target.
+  const host = (globalThis as any).__streamFireflyWorkspaceHost as HTMLElement | undefined;
+  const shadow = (active && active === host ? (globalThis as any).__streamFireflyWorkspaceShadow : active?.shadowRoot) as ShadowRoot | null | undefined;
+  return shadow ? activeElement(shadow) : active;
 }
 
 export const vModalFocus: ObjectDirective<HTMLElement, () => void> = {

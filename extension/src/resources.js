@@ -224,6 +224,9 @@ async function hashInlineManifest(inlineManifest) {
 
 async function addCandidate(tabId, item, expectedContextId = "") {
   if (!Number.isInteger(tabId) || tabId < 0 || !item?.url) return false;
+  // Only http(s) addresses are downloadable; a blob: url is kept when the manifest text is inlined
+  // (page-probe.js blob-manifest), because the host never has to fetch the blob itself.
+  if (!/^https?:/i.test(item.url) && !(item.inlineManifest && /^blob:/i.test(item.url))) return "media_url_unsupported";
   if (isHeuristicNamespaceCandidate(item)) return false;
   if (blockedSite(item.url) || blockedSite(item.pageUrl)) return false;
   await settings.ready;
@@ -529,7 +532,7 @@ async function readBoundedText(response, maxBytes) {
   }
 }
 
-/** Resolves a candidate-owned http(s) request with the page's Referer, Origin and Authorization. */
+/** Resolves a candidate-owned http(s) request with the page's Referer, Origin and, only for same-origin targets, Authorization. */
 async function prepareOwnedFetch(tabId, id, requestedUrl, options = {}) {
   const candidate = await candidateFor(tabId, id);
   const owner = Array.isArray(candidate) ? null : candidate;
@@ -542,7 +545,9 @@ async function prepareOwnedFetch(tabId, id, requestedUrl, options = {}) {
   let ownerOrigin;
   try { ownerOrigin = new URL(owner.url).origin; } catch (_) {}
   const sameOrigin = url.origin === ownerOrigin;
-  const allowCredentials = sameOrigin || (owner.type !== "hls" && options.restrictOrigin !== true);
+  // Cross-origin requests never carry credentials: a page-chosen address must not receive the
+  // user's cookies, and an observed Authorization header belongs to its own origin only.
+  const allowCredentials = sameOrigin;
   const allowPageHeaders = options.restrictOrigin !== true || sameOrigin;
   const headers = new Headers();
   const pageHeaders = {};
@@ -583,14 +588,14 @@ async function probeMediaSize(tabId, sourceContextId, id) {
   if (refused) return refused;
   const prepared = await prepareOwnedFetch(tabId, id);
   if (!prepared.ok) return prepared;
-  const { owner, url, headers, pageHeaders } = prepared;
+  const { owner, url, headers, pageHeaders, credentials } = prepared;
   if (!["video", "audio"].includes(owner.type)) return { ok: false, error: "media_size_unsupported" };
   if (owner.size > 0) return { ok: true, candidate: owner };
   headers.set("Range", "bytes=0-0");
   const removeRule = await applyFetchHeaders(url, pageHeaders);
   let size = null;
   try {
-    const response = await fetch(url.href, { headers, credentials: "include", redirect: "follow", signal: AbortSignal.timeout(10000) });
+    const response = await fetch(url.href, { headers, credentials, redirect: "follow", signal: AbortSignal.timeout(10000) });
     const length = Number(response.headers.get("content-length"));
     // An expired address often redirects to a login or error page; its length is not the media size.
     const page = /^(?:text\/html|application\/(?:json|xhtml\+xml))/i.test(response.headers.get("content-type") || "") || blockedSite(response.url || url.href);

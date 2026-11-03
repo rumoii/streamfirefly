@@ -14,6 +14,8 @@ use std::sync::Mutex;
 
 pub(crate) const STORE_VERSION: u8 = 1;
 const SENSITIVE_REQUEST_HEADERS: [&str; 2] = ["cookie", "authorization"];
+// Referer stays: HLS/DASH CDNs commonly enforce hotlink protection on it (spec_tests relies on this).
+const CROSS_ORIGIN_STRIPPED_HEADERS: [&str; 3] = ["cookie", "authorization", "origin"];
 pub(crate) struct TaskRepository {
     pub(crate) path: PathBuf,
     pub(crate) tasks: Mutex<Vec<Task>>,
@@ -169,6 +171,12 @@ pub(crate) fn is_sensitive_request_header(name: &str) -> bool {
         .any(|sensitive| name.eq_ignore_ascii_case(sensitive))
 }
 
+pub(crate) fn is_cross_origin_stripped_header(name: &str) -> bool {
+    CROSS_ORIGIN_STRIPPED_HEADERS
+        .iter()
+        .any(|stripped| name.eq_ignore_ascii_case(stripped))
+}
+
 pub(crate) fn strip_sensitive_headers(task: &mut Task) {
     task.request_headers
         .retain(|name, _| !is_sensitive_request_header(name));
@@ -205,4 +213,23 @@ pub(crate) fn sanitized_task(task: &Task) -> Task {
 
 pub(crate) fn sanitized_tasks(tasks: &[Task]) -> Vec<Task> {
     tasks.iter().map(sanitized_task).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cross_origin_stripped_header_matches_each_listed_name() {
+        for name in ["Origin", "Cookie", "AUTHORIZATION"] {
+            assert!(is_cross_origin_stripped_header(name), "{name}");
+        }
+        assert!(!is_cross_origin_stripped_header("user-agent"));
+        assert!(!is_cross_origin_stripped_header("referer"));
+    }
+
+    #[test]
+    fn referer_stays_out_of_sensitive_request_headers() {
+        assert!(!is_sensitive_request_header("referer"));
+    }
 }

@@ -202,7 +202,9 @@ export const useAppStore = defineStore("app", () => {
 
   const hlsMetadata = createHlsMetadataQueue({
     load: async (candidate, url) => {
-      const result: any = await sendMessage({ type: "media.fetchText", tabId: context.value?.sourceTabId, id: candidate.id, url });
+      // Background metadata probing is automatic, so it never widens the request: cross-origin
+      // fetches go out without credentials and without the page's Referer/Origin.
+      const result: any = await sendMessage({ type: "media.fetchText", tabId: context.value?.sourceTabId, id: candidate.id, url, restrictOrigin: true });
       if (!result?.ok) throw new Error(result?.error || "media_fetch_failed");
       return { text: String(result.text), url: String(result.url || url) };
     },
