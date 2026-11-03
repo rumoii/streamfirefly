@@ -214,6 +214,49 @@ describe("configuration serialization", () => {
     vi.unstubAllGlobals();
     wrapper.unmount();
   });
+  it("requires approval again when an approved program path changes", async () => {
+    const profile = { ...preset("program"), enabled: true, endpoint: "C:\\Tools\\Downloader.exe" };
+    const approved = new Set<string>();
+    send.mockImplementation(async (message: any) => {
+      if (message.type === "integration.get") return { ok: true, value: { config: { version: 1, profiles: [profile] }, receipts: [], error: "" } };
+      if (message.type === "integration.approved") return { ok: true, value: approved.has(message.payload.executable) };
+      if (message.type === "integration.approve") { approved.add(message.payload.executable); return { ok: true, value: { state: "approved" } }; }
+      if (message.type === "integration.save") return { ok: true, value: structuredClone(message.payload) };
+      throw new Error(message.type);
+    });
+    const confirm = vi.fn(() => true);
+    vi.stubGlobal("confirm", confirm);
+    const wrapper = mount(ToolsPanel); await flushPromises();
+    const button = (name: string) => wrapper.findAll("button").find(item => item.text() === name)!;
+    await button("保存工具").trigger("click"); await flushPromises();
+    expect(confirm).toHaveBeenCalledTimes(1);
+    await wrapper.get('.feature-grid.wide input.control').setValue("C:\\Tools\\Other.exe");
+    expect(wrapper.text()).toContain("未批准");
+    await button("保存工具").trigger("click"); await flushPromises();
+    expect(confirm).toHaveBeenCalledTimes(2);
+    const approvals = send.mock.calls.filter(([message]) => message.type === "integration.approve");
+    expect(approvals).toHaveLength(2);
+    expect(approvals[1][0].payload.executable).toBe("C:\\Tools\\Other.exe");
+    vi.unstubAllGlobals();
+    wrapper.unmount();
+  });
+  it("refreshes every profile sharing a path after revocation", async () => {
+    const first = { ...preset("program"), id: "first", name: "第一个", enabled: true };
+    const second = { ...preset("program"), id: "second", name: "第二个", enabled: true };
+    let approved = true;
+    send.mockImplementation(async (message: any) => {
+      if (message.type === "integration.get") return { ok: true, value: { config: { version: 1, profiles: [first, second] }, receipts: [], error: "" } };
+      if (message.type === "integration.approved") return { ok: true, value: approved };
+      if (message.type === "integration.revoke") { approved = false; return { ok: true, value: { state: "revoked" } }; }
+      throw new Error(message.type);
+    });
+    const wrapper = mount(ToolsPanel); await flushPromises();
+    expect(wrapper.findAll('[data-approved="true"]')).toHaveLength(2);
+    await wrapper.findAll("button").find(item => item.text() === "撤销批准")!.trigger("click"); await flushPromises();
+    expect(wrapper.findAll('[data-approved="true"]')).toHaveLength(0);
+    expect(wrapper.findAll('[data-approved="false"]')).toHaveLength(2);
+    wrapper.unmount();
+  });
   it("abandons the save when the program approval dialog is declined", async () => {
     const profile = { ...preset("program"), enabled: true };
     send.mockImplementation(async (message: any) => {

@@ -52,8 +52,18 @@ fn validate_executable(executable: &str) -> Result<(), &'static str> {
         .and_then(|value| value.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
+    let extended_local = executable
+        .strip_prefix("\\\\?\\")
+        .map(|path| {
+            let bytes = path.as_bytes();
+            bytes.len() >= 3
+                && bytes[0].is_ascii_alphabetic()
+                && bytes[1] == b':'
+                && matches!(bytes[2], b'\\' | b'/')
+        })
+        .unwrap_or(false);
     if !path.is_absolute()
-        || executable.starts_with("\\\\")
+        || (executable.starts_with("\\\\") && !extended_local)
         || !name.ends_with(".exe")
         || executable.len() > 4096
         || executable.contains(['\0', '\r', '\n'])
@@ -276,6 +286,75 @@ mod tests {
             Err("executable_not_found")
         );
         assert!(launcher.approve(&json!({})).is_err());
+    }
+
+    #[test]
+    fn failed_approval_write_keeps_public_invoke_denied() {
+        let (_guard, launcher) = test_launcher("failed-approval-invoke");
+        let program = _guard.0.join("Downloader.exe");
+        std::fs::write(&program, b"test").unwrap();
+        std::fs::create_dir(_guard.0.join("approved_programs.json")).unwrap();
+        let program = program.to_str().unwrap();
+        assert!(matches!(
+            launcher.approve(&json!({"executable": program})),
+            Err("approval_store_failed")
+        ));
+        assert_eq!(
+            launcher.invoke(&json!({"requestId":"failed-approval-invoke","executable":program,"arguments":[]})),
+            Err("program_not_approved")
+        );
+    }
+
+    #[test]
+    fn revoke_deleted_alias_prevents_invoke_after_recreation() {
+        let (_guard, launcher) = test_launcher("deleted-alias-invoke");
+        let program = _guard.0.join("Downloader.exe");
+        std::fs::write(&program, b"test").unwrap();
+        let nested = _guard.0.join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        let alias = nested.join("..").join("Downloader.exe");
+        let alias = alias.to_str().unwrap();
+        launcher.approve(&json!({"executable": alias})).unwrap();
+        std::fs::remove_file(&program).unwrap();
+        launcher.revoke(&json!({"executable": alias})).unwrap();
+        std::fs::write(&program, b"recreated").unwrap();
+        assert_eq!(
+            launcher.invoke(&json!({"requestId":"deleted-alias-invoke","executable":alias,"arguments":[]})),
+            Err("program_not_approved")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn extended_local_path_matches_regular_approval_through_public_entry_points() {
+        let (_guard, launcher) = test_launcher("extended-path");
+        let canonical = std::fs::canonicalize(std::env::current_exe().unwrap())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let regular = canonical.strip_prefix("\\\\?\\").unwrap_or(&canonical);
+        let extended = format!("\\\\?\\{regular}");
+        launcher
+            .approve(&json!({"executable": regular}))
+            .unwrap();
+        assert_eq!(
+            launcher.approval(&json!({"executable": extended})).unwrap()["approved"],
+            json!(true)
+        );
+        assert_eq!(
+            launcher
+                .test(&json!({"executable": extended, "arguments": []}))
+                .unwrap()["state"],
+            json!("available")
+        );
+        assert_eq!(
+            launcher.approve(&json!({"executable": "\\\\?\\UNC\\server\\share\\Downloader.exe"})),
+            Err("executable_path_invalid")
+        );
+        assert_eq!(
+            launcher.approve(&json!({"executable": "\\\\server\\share\\Downloader.exe"})),
+            Err("executable_path_invalid")
+        );
     }
 
     #[test]

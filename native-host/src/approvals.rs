@@ -10,6 +10,8 @@ pub(crate) struct ApprovedProgram {
     pub(crate) path: String,
     #[serde(rename = "approvedAt")]
     pub(crate) approved_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -75,30 +77,40 @@ impl Approvals {
                 .duration_since(UNIX_EPOCH)
                 .map(|duration| duration.as_secs())
                 .unwrap_or(0),
+            source: Some(normalize_key(executable)),
         };
-        self.programs.insert(key, program.clone());
-        self.save()?;
+        let mut programs = self.programs.clone();
+        programs.insert(key, program.clone());
+        self.save(&programs)?;
+        self.programs = programs;
         Ok(program)
     }
 
     pub(crate) fn revoke(&mut self, executable: &str) -> Result<(), &'static str> {
-        // The file may have been deleted since approval; fall back to the
-        // loose key form so the stale entry can still be removed.
-        let key = match normalize_program_path(executable) {
-            Some(key) => key,
-            None => normalize_key(executable),
+        let key = normalize_program_path(executable)
+            .unwrap_or_else(|| normalize_key(executable));
+        let matches = |program: &ApprovedProgram| {
+            program.path == key || program.source.as_deref() == Some(key.as_str())
         };
-        self.programs.remove(&key);
-        self.save()
+        if !self.programs.values().any(matches) {
+            return Err("program_not_approved");
+        }
+        let mut programs = self.programs.clone();
+        programs.retain(|_, program| {
+            program.path != key && program.source.as_deref() != Some(key.as_str())
+        });
+        self.save(&programs)?;
+        self.programs = programs;
+        Ok(())
     }
 
-    fn save(&self) -> Result<(), &'static str> {
+    fn save(&self, programs: &HashMap<String, ApprovedProgram>) -> Result<(), &'static str> {
         if let Some(parent) = self.file.parent() {
             std::fs::create_dir_all(parent).map_err(|_| "approval_store_failed")?;
         }
         let file = ApprovedProgramsFile {
             version: 1,
-            programs: self.programs.values().cloned().collect(),
+            programs: programs.values().cloned().collect(),
         };
         let text = serde_json::to_string_pretty(&file).map_err(|_| "approval_store_failed")?;
         std::fs::write(&self.file, text).map_err(|_| "approval_store_failed")
@@ -152,6 +164,97 @@ mod tests {
         drop(reloaded);
         let cleared = Approvals::load(file);
         assert!(!cleared.is_approved(program.to_str().unwrap()));
+    }
+
+    #[test]
+    fn legacy_approval_without_source_remains_readable() {
+        let (dir, program) = temp_store("legacy");
+        let file = dir.join("approved_programs.json");
+        let canonical = std::fs::canonicalize(&program).unwrap();
+        let path = normalize_key(&canonical.to_string_lossy());
+        let text = serde_json::json!({
+            "version": 1,
+            "programs": [{"path": path, "approvedAt": 1}]
+        })
+        .to_string();
+        std::fs::write(&file, text).unwrap();
+        let mut approvals = Approvals::load(file);
+        assert!(approvals.is_approved(program.to_str().unwrap()));
+        approvals.revoke(program.to_str().unwrap()).unwrap();
+        assert!(!approvals.is_approved(program.to_str().unwrap()));
+    }
+
+    #[test]
+    fn revoke_removes_noncanonical_alias_after_program_is_deleted() {
+        let (dir, program) = temp_store("deleted-alias");
+        let file = dir.join("approved_programs.json");
+        let nested = dir.join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        let alias = nested.join("..").join("Downloader.exe");
+        let alias = alias.to_str().unwrap();
+        let mut approvals = Approvals::load(file);
+        approvals.approve(alias).unwrap();
+        std::fs::remove_file(&program).unwrap();
+        approvals.revoke(alias).unwrap();
+        std::fs::write(&program, b"recreated").unwrap();
+        assert!(!approvals.is_approved(alias));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn revoke_removes_symlink_alias_after_target_is_deleted() {
+        let (dir, program) = temp_store("deleted-symlink");
+        let alias = dir.join("Alias.exe");
+        std::os::unix::fs::symlink(&program, &alias).unwrap();
+        let mut approvals = Approvals::load(dir.join("approved_programs.json"));
+        approvals.approve(alias.to_str().unwrap()).unwrap();
+        std::fs::remove_file(&program).unwrap();
+        approvals.revoke(alias.to_str().unwrap()).unwrap();
+        std::fs::write(&program, b"recreated").unwrap();
+        assert!(!approvals.is_approved(alias.to_str().unwrap()));
+    }
+
+    #[test]
+    fn failed_approval_write_does_not_change_memory() {
+        let (dir, program) = temp_store("failed-approval");
+        let file = dir.join("approved_programs.json");
+        let other = dir.join("Other.exe");
+        std::fs::write(&other, b"test").unwrap();
+        let mut approvals = Approvals::load(file.clone());
+        approvals.approve(program.to_str().unwrap()).unwrap();
+        std::fs::remove_file(&file).unwrap();
+        std::fs::create_dir(&file).unwrap();
+        assert!(matches!(
+            approvals.approve(other.to_str().unwrap()),
+            Err("approval_store_failed")
+        ));
+        assert!(!approvals.is_approved(other.to_str().unwrap()));
+        assert!(approvals.is_approved(program.to_str().unwrap()));
+    }
+
+    #[test]
+    fn failed_revoke_write_does_not_change_memory() {
+        let (dir, program) = temp_store("failed-revoke");
+        let file = dir.join("approved_programs.json");
+        let mut approvals = Approvals::load(file.clone());
+        approvals.approve(program.to_str().unwrap()).unwrap();
+        std::fs::remove_file(&file).unwrap();
+        std::fs::create_dir(&file).unwrap();
+        assert_eq!(
+            approvals.revoke(program.to_str().unwrap()),
+            Err("approval_store_failed")
+        );
+        assert!(approvals.is_approved(program.to_str().unwrap()));
+    }
+
+    #[test]
+    fn revoke_reports_when_no_approval_matches() {
+        let (dir, program) = temp_store("missing-revoke");
+        let mut approvals = Approvals::load(dir.join("approved_programs.json"));
+        assert_eq!(
+            approvals.revoke(program.to_str().unwrap()),
+            Err("program_not_approved")
+        );
     }
 
     #[test]

@@ -36,8 +36,10 @@ const validBundleVersion = new RegExp(bundlePattern);
 for (const value of [version, '0.9.0-beta.4']) if (!validBundleVersion.test(value)) throw new Error(`Valid bundle version rejected: ${value}`);
 for (const value of ['../0.9.1', '0.9', '0.9.1/extra', '0.9.1-beta.', '0.9.1 ']) if (validBundleVersion.test(value)) throw new Error(`Unsafe bundle version accepted: ${value}`);
 requireText(nativeTest, 'LOCALAPPDATA: temporary', 'Isolated native protocol test');
-requireText(nativeTest, "child.once('close'", 'Native process completion check');
-requireText(nativeTest, 'output.length !== 4 + output.readUInt32LE(0)', 'Complete native message frame check');
+requireText(nativeTest, "once(child, 'exit')", 'Native process completion check');
+requireText(nativeTest, 'bytes.length >= 4 + bytes.readUInt32LE(0)', 'Complete native message frame check');
+requireText(nativeTest, "assert.equal(invalid.error, 'invalid_message')", 'Malformed native message check');
+requireText(nativeTest, 'download completion after malformed message', 'Malformed message download continuation check');
 requireText(nativeTest, '15000', 'Bounded native protocol test');
 
 requireText(packageScript, `[string]$BundleVersion = '${bundleVersion}'`, 'Internal package script');

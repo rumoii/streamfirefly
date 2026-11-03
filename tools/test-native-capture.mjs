@@ -73,6 +73,8 @@ try {
   await exercise([initialization.subarray(0, 5), initialization.subarray(5), media], null, true);
   assert.equal((await send('integration.test', { executable: 'C:\\Windows\\System32\\cmd.exe', arguments: [] })).ok, false);
   const program = { requestId: 'native-program-test', executable: path.join(process.env.SystemRoot, 'System32/where.exe'), arguments: ['streamfirefly-nonexistent-test-command'] };
+  const denied = await send('integration.invoke', program); assert.equal(denied.ok, false); assert.equal(denied.error, 'program_not_approved');
+  const approved = await send('integration.approve', { executable: program.executable }); assert.equal(approved.ok, true, JSON.stringify(approved)); assert.equal(approved.value.state, 'approved');
   const launched = await send('integration.invoke', program); assert.equal(launched.ok, true, JSON.stringify(launched)); assert.equal(launched.receipt.state, 'started');
   const replayed = await send('integration.invoke', program); assert.equal(replayed.receipt.pid, launched.receipt.pid);
   console.log('Native capture: origin rejection, authenticated WebSocket, durable ACK, duplicate suppression, split initialization, three error categories, FFmpeg merge and FFprobe duration passed');

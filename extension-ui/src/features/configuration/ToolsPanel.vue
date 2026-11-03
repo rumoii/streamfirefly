@@ -32,7 +32,10 @@ async function save() {
   await perform(async () => {
     const valid = validateIntegrations(toRaw(config.value));
     for (const profile of valid.profiles) {
-      if (profile.kind !== "program" || !profile.enabled || !profile.endpoint.trim() || approvals.value[profile.id]) continue;
+      if (profile.kind !== "program" || !profile.enabled || !profile.endpoint.trim()) continue;
+      const approved = await configurationRequest<boolean>("integration.approved", { executable: profile.endpoint });
+      approvals.value = { ...approvals.value, [profile.id]: approved };
+      if (approved) continue;
       const confirmed = window.confirm(`批准外部程序\n\n${profile.endpoint}\n\n该程序将随下载任务被本地助手直接启动。只批准你信任的可执行文件。\n\n点击“确定”批准并保存，点击“取消”放弃保存。`);
       if (!confirmed) throw new Error(`已取消保存：程序 ${profile.endpoint} 尚未获得批准。`);
       await configurationRequest("integration.approve", { executable: profile.endpoint });
@@ -44,10 +47,16 @@ async function save() {
 }
 async function revoke(profile: IntegrationProfile) {
   await perform(async () => {
-    await configurationRequest("integration.revoke", { executable: profile.endpoint });
-    approvals.value = { ...approvals.value, [profile.id]: false };
-    message.value = `已撤销对 ${profile.endpoint} 的批准，下次调用前需重新批准。`;
+    try {
+      await configurationRequest("integration.revoke", { executable: profile.endpoint });
+      message.value = `已撤销对 ${profile.endpoint} 的批准，下次调用前需重新批准。`;
+    } finally {
+      await refreshApprovals();
+    }
   });
+}
+function invalidateApproval(profile: IntegrationProfile) {
+  if (profile.kind === "program") approvals.value = { ...approvals.value, [profile.id]: false };
 }
 function addTool() { const profile = preset(selectedKind.value); if (profile.kind === "program") { profile.arguments = []; profile.programOptions = { directory: "", fileName: "", autoSelect: true }; } config.value.profiles.push(profile); }
 async function test(profile: IntegrationProfile) { await perform(async () => { await configurationRequest("integration.test", { profile: validateIntegrations({ version: 1, profiles: [toRaw(profile)] }).profiles[0], secret: secrets.value[profile.id] || "" }); message.value = "草稿检查通过；未保存配置，未创建下载任务。"; }); }
@@ -62,7 +71,7 @@ function updateHeaders(profile: IntegrationProfile, event: Event) { try { const 
     <article v-for="profile in config.profiles" :key="profile.id" class="feature-rule" :class="{ disabled: !profile.enabled }">
       <div class="feature-rule-head"><label class="switch" title="启用"><input v-model="profile.enabled" type="checkbox" aria-label="启用工具"><i></i></label><input v-model="profile.name" class="control" aria-label="工具名称"><span class="tag">{{ kindLabel(profile.kind) }}</span><span v-if="profile.kind === 'program' && profile.endpoint.trim()" class="tag" :data-approved="approvals[profile.id] === true">{{ approvals[profile.id] ? '已批准' : '未批准' }}</span><div class="feature-rule-tools"><button v-if="profile.kind === 'program' && approvals[profile.id]" class="button sm" type="button" :disabled="busy" @click="revoke(profile)">撤销批准</button><button class="icon-button danger" type="button" aria-label="删除" title="删除" @click="config.profiles = config.profiles.filter(item => item.id !== profile.id)"><SfIcon name="trash" /></button></div></div>
       <div class="feature-grid wide">
-        <label class="field"><span>目标地址 / 可执行文件绝对路径</span><input v-model="profile.endpoint" class="control"></label>
+        <label class="field"><span>目标地址 / 可执行文件绝对路径</span><input v-model="profile.endpoint" class="control" @input="invalidateApproval(profile)"></label>
         <label v-if="profile.kind === 'aria2'" class="field"><span>目标服务保存目录（留空使用服务默认）</span><input v-model="profile.directory" class="control"></label>
         <label v-if="profile.kind === 'aria2'" class="field"><span>输出文件名模板（留空由服务决定）</span><input v-model="profile.fileName" class="control" placeholder="${fileName}"></label>
         <div v-if="profile.kind === 'http'" class="field"><span>请求方式</span><SfSelect v-model="profile.method" :options="methodOptions" label="请求方式" /></div>
