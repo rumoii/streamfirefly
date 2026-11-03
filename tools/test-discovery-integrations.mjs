@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { buildSync } from 'esbuild';
+import { buildSync } from 'esbuild';
+
 import { editionDefine } from './edition.mjs';
 import vm from 'node:vm';
 import { webcrypto } from 'node:crypto';
@@ -140,3 +141,28 @@ const draftResult = await draftDiscovery.test({ config: draftConfig, sample: { u
 assert.ok(draftResult.steps[0].reason.includes('worker_timeout')); assert.equal(Object.keys((await draftDiscovery.read()).disabled).length, 0); assert.equal(extractionStored.discoveryConfig, undefined);
 await collection.clearTab(2, '', true); await collection.clearTab(3, '', true);
 console.log('Tool draft, parameter preparation, extraction collection, credential isolation, cleanup and draft timeout isolation passed');
+
+// Batch 3: approval flow and program_not_approved handling.
+{
+  const approvalState = new Set();
+  const approvalMessages = [];
+  const approvalNative = async (type, payload) => {
+    approvalMessages.push({ type, payload });
+    if (type === 'integration.approved') return { ok: true, value: { approved: approvalState.has(payload.executable) } };
+    if (type === 'integration.approve') { approvalState.add(payload.executable); return { ok: true, value: { state: 'approved' } }; }
+    if (type === 'integration.revoke') { approvalState.delete(payload.executable); return { ok: true, value: { state: 'revoked' } }; }
+    if (type === 'integration.invoke') return { ok: false, error: 'program_not_approved' };
+    return { ok: false, error: 'unexpected ' + type };
+  };
+  const approvalTools = createIntegrations(api, resources, approvalNative, evaluate);
+  assert.equal(await approvalTools.approved({ executable: 'C:\\Tools\\Downloader.exe' }), false);
+  await approvalTools.approve({ executable: 'C:\\Tools\\Downloader.exe' });
+  assert.equal(await approvalTools.approved({ executable: 'C:\\Tools\\Downloader.exe' }), true);
+  await approvalTools.revoke({ executable: 'C:\\Tools\\Downloader.exe' });
+  assert.equal(await approvalTools.approved({ executable: 'C:\\Tools\\Downloader.exe' }), false);
+  assert.deepEqual(approvalMessages.map(message => message.type), ['integration.approved', 'integration.approve', 'integration.approved', 'integration.revoke', 'integration.approved']);
+  await assert.rejects(approvalTools.approve({ executable: ' ' }), /程序路径无效/);
+  const deniedAdapters = createIntegrationAdapters({}, approvalNative, evaluate);
+  await assert.rejects(deniedAdapters.invoke({ ...profile, kind: 'program' }, { url: 'https://cdn.test/v' }, 'denied-request', ''), error => error.message === 'program_not_approved' && error.definitive === true);
+}
+console.log('Approval flow, revocation and program_not_approved propagation tests passed');

@@ -21,6 +21,7 @@ export function toolError(code: string): string {
     argument_invalid: "参数包含非法字符或超过长度限制，请检查参数模板。",
     arguments_too_large: "参数超过数量或长度限制，请减少参数。",
     executable_start_failed: "程序未能启动，请检查路径、权限及程序依赖。",
+    program_not_approved: "程序尚未批准启动，请到设置页“外部工具”中批准该程序路径。",
     native_host_disconnected: "本地助手未连接，请检查安装与连接。",
     native_host_timeout: "本地助手响应超时；实际调用结果可能未知，请勿重复发送。",
     integration_auth_failed: "服务拒绝认证，请检查本次会话令牌。",

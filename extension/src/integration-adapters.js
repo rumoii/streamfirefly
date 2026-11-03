@@ -45,7 +45,7 @@ export function createIntegrationAdapters(api, nativeRequest, evaluate) {
     program: async (profile, values, id, _secret, test) => {
       const args = (await prepare(profile, values)).arguments;
       const result = await nativeRequest(test ? "integration.test" : "integration.invoke", { requestId: id, executable: profile.endpoint, arguments: args });
-      if (!result.ok) throw Object.assign(new Error(result.error), { definitive: ["executable_not_found", "executable_path_invalid", "script_interpreter_not_allowed", "argument_invalid", "arguments_too_large", "executable_start_failed"].includes(result.error) });
+      if (!result.ok) throw Object.assign(new Error(result.error), { definitive: ["executable_not_found", "executable_path_invalid", "script_interpreter_not_allowed", "argument_invalid", "arguments_too_large", "executable_start_failed", "program_not_approved"].includes(result.error) });
       return { state: test ? "accepted" : "started" };
     },
     protocol: async (profile, values, _id, _secret, test, protocolTabId) => {

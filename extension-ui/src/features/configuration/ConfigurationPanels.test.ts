@@ -186,4 +186,51 @@ describe("configuration serialization", () => {
     expect(wrapper.text()).toContain("工具配置已保存");
     expect(send.mock.calls.find(([message]) => message.type === "integration.save")?.[0].payload.profiles).toHaveLength(1);
   });
+  it("asks for approval before saving an enabled external program and allows revoking it", async () => {
+    const profile = { ...preset("program"), enabled: true };
+    let approved = false;
+    send.mockImplementation(async (message: any) => {
+      if (message.type === "integration.get") return { ok: true, value: { config: { version: 1, profiles: [profile] }, receipts: [], error: "" } };
+      if (message.type === "integration.approved") return { ok: true, value: approved };
+      if (message.type === "integration.approve") { approved = true; return { ok: true, value: { state: "approved" } }; }
+      if (message.type === "integration.revoke") { approved = false; return { ok: true, value: { state: "revoked" } }; }
+      if (message.type === "integration.save") return { ok: true, value: structuredClone(message.payload) };
+      throw new Error(message.type);
+    });
+    const confirm = vi.fn(() => true);
+    vi.stubGlobal("confirm", confirm);
+    const wrapper = mount(ToolsPanel); await flushPromises();
+    const button = (name: string) => wrapper.findAll("button").find(item => item.text() === name)!;
+    expect(wrapper.text()).toContain("未批准");
+    await button("保存工具").trigger("click"); await flushPromises();
+    expect(confirm).toHaveBeenCalledTimes(1);
+    const approveCall = send.mock.calls.find(([message]) => message.type === "integration.approve")?.[0];
+    expect(approveCall.payload.executable).toBe(profile.endpoint);
+    expect(send.mock.calls.some(([message]) => message.type === "integration.save")).toBe(true);
+    expect(wrapper.text()).toContain("已批准");
+    await button("撤销批准").trigger("click"); await flushPromises();
+    expect(wrapper.text()).toContain("未批准");
+    expect(wrapper.text()).toContain("已撤销");
+    vi.unstubAllGlobals();
+    wrapper.unmount();
+  });
+  it("abandons the save when the program approval dialog is declined", async () => {
+    const profile = { ...preset("program"), enabled: true };
+    send.mockImplementation(async (message: any) => {
+      if (message.type === "integration.get") return { ok: true, value: { config: { version: 1, profiles: [profile] }, receipts: [], error: "" } };
+      if (message.type === "integration.approved") return { ok: true, value: false };
+      if (message.type === "integration.save") return { ok: true, value: structuredClone(message.payload) };
+      throw new Error(message.type);
+    });
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal("confirm", confirm);
+    const wrapper = mount(ToolsPanel); await flushPromises();
+    const button = (name: string) => wrapper.findAll("button").find(item => item.text() === name)!;
+    await button("保存工具").trigger("click"); await flushPromises();
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls.some(([message]) => message.type === "integration.save")).toBe(false);
+    expect(wrapper.text()).toContain("尚未获得批准");
+    vi.unstubAllGlobals();
+    wrapper.unmount();
+  });
 });

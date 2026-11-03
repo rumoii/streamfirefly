@@ -16,9 +16,39 @@ const kindOptions: { value: IntegrationKind; label: string }[] = [{ value: "aria
 const kindLabel = (kind: IntegrationKind) => kindOptions.find(option => option.value === kind)?.label || kind;
 const methodOptions: { value: "POST" | "GET"; label: string }[] = [{ value: "POST", label: "POST" }, { value: "GET", label: "GET" }];
 async function perform(action: () => Promise<void>) { busy.value = true; message.value = ""; try { await action(); } catch (error) { message.value = error instanceof Error ? error.message : "操作失败"; } finally { busy.value = false; } }
-async function refresh() { const response = await configurationRequest<{ config: IntegrationConfig; receipts: DispatchReceipt[]; error: string }>("integration.get"); config.value = response.config; receipts.value = response.receipts; message.value = response.error; }
+async function refresh() { const response = await configurationRequest<{ config: IntegrationConfig; receipts: DispatchReceipt[]; error: string }>("integration.get"); config.value = response.config; receipts.value = response.receipts; message.value = response.error; await refreshApprovals(); }
 onMounted(() => perform(refresh));
-async function save() { await perform(async () => { await configurationRequest("integration.save", validateIntegrations(toRaw(config.value))); message.value = "工具配置已保存；发送前仍需确认目标与参数。"; }); }
+const approvals = ref<Record<string, boolean>>({});
+async function refreshApprovals() {
+  const next: Record<string, boolean> = {};
+  for (const profile of config.value.profiles) {
+    if (profile.kind !== "program" || !profile.endpoint.trim()) continue;
+    try { next[profile.id] = await configurationRequest<boolean>("integration.approved", { executable: profile.endpoint }); }
+    catch { next[profile.id] = false; }
+  }
+  approvals.value = next;
+}
+async function save() {
+  await perform(async () => {
+    const valid = validateIntegrations(toRaw(config.value));
+    for (const profile of valid.profiles) {
+      if (profile.kind !== "program" || !profile.enabled || !profile.endpoint.trim() || approvals.value[profile.id]) continue;
+      const confirmed = window.confirm(`批准外部程序\n\n${profile.endpoint}\n\n该程序将随下载任务被本地助手直接启动。只批准你信任的可执行文件。\n\n点击“确定”批准并保存，点击“取消”放弃保存。`);
+      if (!confirmed) throw new Error(`已取消保存：程序 ${profile.endpoint} 尚未获得批准。`);
+      await configurationRequest("integration.approve", { executable: profile.endpoint });
+      approvals.value = { ...approvals.value, [profile.id]: true };
+    }
+    await configurationRequest("integration.save", valid);
+    message.value = "工具配置已保存；发送前仍需确认目标与参数。";
+  });
+}
+async function revoke(profile: IntegrationProfile) {
+  await perform(async () => {
+    await configurationRequest("integration.revoke", { executable: profile.endpoint });
+    approvals.value = { ...approvals.value, [profile.id]: false };
+    message.value = `已撤销对 ${profile.endpoint} 的批准，下次调用前需重新批准。`;
+  });
+}
 function addTool() { const profile = preset(selectedKind.value); if (profile.kind === "program") { profile.arguments = []; profile.programOptions = { directory: "", fileName: "", autoSelect: true }; } config.value.profiles.push(profile); }
 async function test(profile: IntegrationProfile) { await perform(async () => { await configurationRequest("integration.test", { profile: validateIntegrations({ version: 1, profiles: [toRaw(profile)] }).profiles[0], secret: secrets.value[profile.id] || "" }); message.value = "草稿检查通过；未保存配置，未创建下载任务。"; }); }
 async function secret(profileId: string) { await perform(async () => { await configurationRequest("integration.secret", { profileId, secret: secrets.value[profileId] || "" }); secrets.value[profileId] = ""; message.value = "凭据已存入本次后台会话内存，后台重启后需重新输入。"; }); }
@@ -30,7 +60,7 @@ function updateHeaders(profile: IntegrationProfile, event: Event) { try { const 
     <header class="feature-head"><div><h3>外部工具</h3><p>调用结果仅表示服务接收或程序启动，不代表文件下载完成。密钥和令牌不随配置保存。</p></div><div class="feature-head-actions"><SfSelect v-model="selectedKind" :options="kindOptions" label="工具类型" /><button class="button" :disabled="busy || config.profiles.length >= 30" @click="addTool">添加工具</button><button class="button primary" :disabled="busy" @click="save">保存工具</button></div></header>
     <p v-if="message" class="feature-message" role="status">{{ message }}</p>
     <article v-for="profile in config.profiles" :key="profile.id" class="feature-rule" :class="{ disabled: !profile.enabled }">
-      <div class="feature-rule-head"><label class="switch" title="启用"><input v-model="profile.enabled" type="checkbox" aria-label="启用工具"><i></i></label><input v-model="profile.name" class="control" aria-label="工具名称"><span class="tag">{{ kindLabel(profile.kind) }}</span><div class="feature-rule-tools"><button class="icon-button danger" type="button" aria-label="删除" title="删除" @click="config.profiles = config.profiles.filter(item => item.id !== profile.id)"><SfIcon name="trash" /></button></div></div>
+      <div class="feature-rule-head"><label class="switch" title="启用"><input v-model="profile.enabled" type="checkbox" aria-label="启用工具"><i></i></label><input v-model="profile.name" class="control" aria-label="工具名称"><span class="tag">{{ kindLabel(profile.kind) }}</span><span v-if="profile.kind === 'program' && profile.endpoint.trim()" class="tag" :data-approved="approvals[profile.id] === true">{{ approvals[profile.id] ? '已批准' : '未批准' }}</span><div class="feature-rule-tools"><button v-if="profile.kind === 'program' && approvals[profile.id]" class="button sm" type="button" :disabled="busy" @click="revoke(profile)">撤销批准</button><button class="icon-button danger" type="button" aria-label="删除" title="删除" @click="config.profiles = config.profiles.filter(item => item.id !== profile.id)"><SfIcon name="trash" /></button></div></div>
       <div class="feature-grid wide">
         <label class="field"><span>目标地址 / 可执行文件绝对路径</span><input v-model="profile.endpoint" class="control"></label>
         <label v-if="profile.kind === 'aria2'" class="field"><span>目标服务保存目录（留空使用服务默认）</span><input v-model="profile.directory" class="control"></label>

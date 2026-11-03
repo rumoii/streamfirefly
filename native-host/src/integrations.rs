@@ -1,18 +1,51 @@
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
+const RECEIPT_LIMIT: usize = 1000;
+
 #[derive(Default)]
-pub(crate) struct ProgramLauncher {
-    requests: Mutex<HashMap<String, Value>>,
+struct Receipts {
+    map: HashMap<String, Value>,
+    order: VecDeque<String>,
 }
 
-fn validate(payload: &Value) -> Result<(&str, Vec<&str>), &'static str> {
-    let executable = payload["executable"]
-        .as_str()
-        .ok_or("executable_required")?;
+impl Receipts {
+    fn get(&self, id: &str) -> Option<&Value> {
+        self.map.get(id)
+    }
+
+    fn insert(&mut self, id: String, receipt: Value) {
+        if !self.map.contains_key(&id) {
+            self.order.push_back(id.clone());
+        }
+        self.map.insert(id, receipt);
+        while self.order.len() > RECEIPT_LIMIT {
+            if let Some(old) = self.order.pop_front() {
+                self.map.remove(&old);
+            }
+        }
+    }
+}
+
+pub(crate) struct ProgramLauncher {
+    requests: Mutex<Receipts>,
+    approvals: Mutex<crate::approvals::Approvals>,
+}
+
+impl ProgramLauncher {
+    pub(crate) fn new(approvals_file: std::path::PathBuf) -> Self {
+        ProgramLauncher {
+            requests: Mutex::new(Receipts::default()),
+            approvals: Mutex::new(crate::approvals::Approvals::load(approvals_file)),
+        }
+    }
+}
+
+fn validate_executable(executable: &str) -> Result<(), &'static str> {
     let path = Path::new(executable);
     let name = path
         .file_name()
@@ -52,6 +85,14 @@ fn validate(payload: &Value) -> Result<(&str, Vec<&str>), &'static str> {
     if !path.is_file() {
         return Err("executable_not_found");
     }
+    Ok(())
+}
+
+fn validate(payload: &Value) -> Result<(&str, Vec<&str>), &'static str> {
+    let executable = payload["executable"]
+        .as_str()
+        .ok_or("executable_required")?;
+    validate_executable(executable)?;
     let arguments = payload["arguments"]
         .as_array()
         .ok_or("arguments_required")?;
@@ -72,8 +113,50 @@ fn validate(payload: &Value) -> Result<(&str, Vec<&str>), &'static str> {
 }
 
 impl ProgramLauncher {
+    fn is_approved(&self, executable: &str) -> Result<bool, &'static str> {
+        Ok(self
+            .approvals
+            .lock()
+            .map_err(|_| "launcher_unavailable")?
+            .is_approved(executable))
+    }
+
+    pub(crate) fn approve(&self, payload: &Value) -> Result<Value, &'static str> {
+        let executable = payload["executable"]
+            .as_str()
+            .ok_or("executable_required")?;
+        validate_executable(executable)?;
+        let program = self
+            .approvals
+            .lock()
+            .map_err(|_| "launcher_unavailable")?
+            .approve(executable)?;
+        Ok(json!({"state":"approved","path":program.path,"approvedAt":program.approved_at}))
+    }
+
+    pub(crate) fn revoke(&self, payload: &Value) -> Result<Value, &'static str> {
+        let executable = payload["executable"]
+            .as_str()
+            .ok_or("executable_required")?;
+        self.approvals
+            .lock()
+            .map_err(|_| "launcher_unavailable")?
+            .revoke(executable)?;
+        Ok(json!({"state":"revoked"}))
+    }
+
+    pub(crate) fn approval(&self, payload: &Value) -> Result<Value, &'static str> {
+        let executable = payload["executable"]
+            .as_str()
+            .ok_or("executable_required")?;
+        Ok(json!({"approved": self.is_approved(executable)?}))
+    }
+
     pub(crate) fn test(&self, payload: &Value) -> Result<Value, &'static str> {
-        validate(payload)?;
+        let (executable, _) = validate(payload)?;
+        if !self.is_approved(executable)? {
+            return Err("program_not_approved");
+        }
         Ok(json!({"state":"available"}))
     }
 
@@ -92,10 +175,10 @@ impl ProgramLauncher {
         if let Some(receipt) = requests.get(request_id) {
             return Ok(receipt.clone());
         }
-        if requests.len() >= 200 {
-            return Err("launcher_capacity");
-        }
         let (executable, arguments) = validate(payload)?;
+        if !self.is_approved(executable)? {
+            return Err("program_not_approved");
+        }
         let mut command = Command::new(executable);
         command
             .args(arguments)
@@ -134,11 +217,90 @@ impl ProgramLauncher {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate, ProgramLauncher};
+    use super::{validate, ProgramLauncher, Receipts};
     use serde_json::json;
+
+    fn test_launcher(name: &str) -> (PathGuard, ProgramLauncher) {
+        let dir = std::env::temp_dir().join(format!(
+            "streamfirefly-launcher-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("approved_programs.json");
+        (
+            PathGuard(dir),
+            ProgramLauncher::new(file),
+        )
+    }
+
+    struct PathGuard(std::path::PathBuf);
+    impl Drop for PathGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn program_requires_approval_until_revoked() {
+        let (_guard, launcher) = test_launcher("approval");
+        // Use a real .exe-named file for the flow checks.
+        let program_path = _guard.0.join("Downloader.exe");
+        std::fs::write(&program_path, b"test").unwrap();
+        let program = program_path.to_str().unwrap().to_owned();
+        let payload = json!({"executable": program, "arguments": []});
+        assert_eq!(launcher.test(&payload), Err("program_not_approved"));
+        assert_eq!(
+            launcher.invoke(&json!({"requestId":"request-approval-1","executable":program,"arguments":[]})),
+            Err("program_not_approved")
+        );
+        assert_eq!(launcher.approval(&payload).unwrap()["approved"], json!(false));
+        assert_eq!(launcher.approve(&json!({"executable": program})).unwrap()["state"], json!("approved"));
+        assert_eq!(launcher.approval(&payload).unwrap()["approved"], json!(true));
+        assert_eq!(launcher.test(&payload).unwrap()["state"], json!("available"));
+        assert_eq!(launcher.revoke(&json!({"executable": program})).unwrap()["state"], json!("revoked"));
+        assert_eq!(launcher.test(&payload), Err("program_not_approved"));
+    }
+
+    #[test]
+    fn approve_rejects_invalid_or_missing_programs() {
+        let (_guard, launcher) = test_launcher("approve-invalid");
+        assert_eq!(
+            launcher.approve(&json!({"executable": "tool.exe"})),
+            Err("executable_path_invalid")
+        );
+        let missing = _guard.0.join("Missing.exe");
+        let missing = missing.to_str().unwrap().to_owned();
+        assert_eq!(
+            launcher.approve(&json!({"executable": missing})),
+            Err("executable_not_found")
+        );
+        assert!(launcher.approve(&json!({})).is_err());
+    }
+
+    #[test]
+    fn receipts_evict_oldest_beyond_limit_and_stay_idempotent() {
+        let mut receipts = Receipts::default();
+        for index in 0..1001 {
+            receipts.insert(format!("request-{index:04}"), json!({"seq": index}));
+        }
+        assert!(receipts.get("request-0000").is_none());
+        assert_eq!(
+            receipts.get("request-1000").map(|value| value["seq"].clone()),
+            Some(json!(1000))
+        );
+        receipts.insert("request-1001".into(), json!({"seq": 1001}));
+        assert!(receipts.get("request-0001").is_none());
+        // Re-inserting a live requestId must not duplicate its queue slot.
+        let first = receipts.get("request-1001").cloned().unwrap();
+        receipts.insert("request-1001".into(), json!({"seq": 1001}));
+        assert_eq!(receipts.order.iter().filter(|id| *id == "request-1001").count(), 1);
+        assert_eq!(receipts.get("request-1001"), Some(&first));
+    }
+
     #[test]
     fn rejects_relative_paths_interpreters_and_invalid_arguments() {
-        let launcher = ProgramLauncher::default();
+        let (_guard, launcher) = test_launcher("validate");
         assert!(launcher
             .test(&json!({"executable":"tool.exe","arguments":[]}))
             .is_err());
