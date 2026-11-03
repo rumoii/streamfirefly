@@ -47,6 +47,23 @@ fn manifest_value(suffix: &str) -> Value {
     })
 }
 
+#[test]
+fn request_headers_keep_tabs_and_long_cookies_but_drop_invalid_controls() {
+    use crate::task_input::allowed_request_headers;
+    let cookie = format!("session={}", "x".repeat(10000));
+    let headers = allowed_request_headers(&json!({
+        "requestHeaders": {"cookie": cookie, "user-agent": "Agent\tVersion", "origin": "https://site.test\r\nX-Injected: yes"},
+        "referer": "https://site.test/\0bad"
+    }));
+    assert_eq!(headers.get("cookie"), Some(&cookie));
+    assert_eq!(headers.get("user-agent").map(String::as_str), Some("Agent\tVersion"));
+    assert!(!headers.contains_key("origin"));
+    assert!(!headers.contains_key("referer"));
+    for invalid in ["a\nb", "a\rb", "a\0b", "a\u{000b}b", "a\u{007f}b"] {
+        assert!(allowed_request_headers(&json!({"requestHeaders":{"cookie":invalid}})).is_empty());
+    }
+}
+
 fn hls_payload(save_dir: Option<&Path>) -> Value {
     let mut payload = json!({
         "url":"https://example.test/master.m3u8",

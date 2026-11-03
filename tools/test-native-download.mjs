@@ -14,6 +14,8 @@ const slowPayload = Buffer.alloc(12 * 1024 * 1024, 87);
 let rangeRequests = 0;
 let authorizationSeen = false;
 let forbiddenHeaderSeen = false;
+const longCookie = 'session=' + 'x'.repeat(10000);
+let validHeadersSeen = false;
 let slowHeadGets = 0;
 let slowBytesServed = 0;
 let notifySlowHeadStarted;
@@ -22,7 +24,8 @@ const server = http.createServer((request, response) => {
   const body = request.url === '/unknown.mp4' ? unknownPayload : request.url === '/slow.mp4' ? slowPayload : payload;
   const headers = { 'Content-Type': 'video/mp4', 'Accept-Ranges': 'bytes' };
   if (request.headers.authorization === 'Bearer integration-test') authorizationSeen = true;
-  if (request.headers['x-secret']) forbiddenHeaderSeen = true;
+  if (request.headers['x-secret'] || request.headers['x-injected']) forbiddenHeaderSeen = true;
+  if (request.headers.cookie === longCookie && request.headers['user-agent'] === 'Fixture\tAgent' && !request.headers.origin) validHeadersSeen = true;
   if (request.url !== '/unknown.mp4') headers['Content-Length'] = body.length;
   if (request.method === 'HEAD') {
     if (request.url === '/slow-head.mp4') {
@@ -139,7 +142,7 @@ await new Promise(resolve => setTimeout(resolve, 1200));
 if (slowHeadGets !== 0 || fs.existsSync(cancelledDuringProbe.task.output)) throw new Error('Cancelled HEAD probe started a download or left an output file');
 const prepared = await send('task.prepare', { url: `http://127.0.0.1:${port}/sample.mp4`, title: '页面标题', mime: 'video/mp4' });
 if (!prepared.ok || prepared.payload.extension !== 'mp4') throw new Error(`Task preparation failed: ${JSON.stringify(prepared)}`);
-const created = await send('task.create', { url: `http://127.0.0.1:${port}/sample.mp4`, title: 'native-e2e', fileName: '自定义视频', mime: 'video/mp4', saveDir: customDir, downloadThreads: 6, requestHeaders: { authorization: 'Bearer integration-test', 'x-secret': 'drop-me' } });
+const created = await send('task.create', { url: `http://127.0.0.1:${port}/sample.mp4`, title: 'native-e2e', fileName: '自定义视频', mime: 'video/mp4', saveDir: customDir, downloadThreads: 6, requestHeaders: { authorization: 'Bearer integration-test', cookie: longCookie, 'user-agent': 'Fixture\tAgent', origin: 'https://fixture.test\r\nX-Injected: yes', 'x-secret': 'drop-me' } });
 if (!created.ok) throw new Error(JSON.stringify(created));
 const task = await waitTask(created.task.id);
 const duplicate = await send('task.create', { url: `http://127.0.0.1:${port}/sample.mp4`, title: 'native-e2e', fileName: '自定义视频', mime: 'video/mp4', saveDir: customDir });
@@ -209,6 +212,7 @@ if (!progressEvents.some(item => item.id === task.id && item.state === 'running'
 if (!progressEvents.some(item => item.id === task.id && item.state === 'succeeded' && item.progress === 100)) throw new Error('No completed progress event received');
 if (rangeRequests < 6 || task.segments_total !== 6 || task.segments_completed !== 6) throw new Error(`Parallel Range download was not used: ranges=${rangeRequests}, task=${JSON.stringify(task)}`);
 if (!authorizationSeen) throw new Error('Allowed Authorization header was not forwarded');
+if (!validHeadersSeen) throw new Error('Long Cookie / HTAB did not reach curl correctly, or an invalid Origin was sent');
 if (forbiddenHeaderSeen) throw new Error('Disallowed request header was forwarded');
 if (fs.readdirSync(customDir).some(name => name.includes('.streamfirefly-parts-'))) throw new Error('Parallel temporary directory was not cleaned');
 if (duplicate.task.id === created.task.id || duplicateTask?.state !== 'succeeded' || duplicateTask.output === task.output) throw new Error('Explicit duplicate download was not created independently');

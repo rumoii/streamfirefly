@@ -35,10 +35,10 @@ pub(crate) fn add_header_args(args: &mut Vec<String>, task: &Task, url: &str) {
         || url::Url::parse(&task.url).ok().zip(url::Url::parse(url).ok())
             .is_some_and(|(source, target)| source.origin() == target.origin());
     for (name, value) in &task.request_headers {
-        if !same_origin && crate::repository::is_cross_origin_stripped_header(name) {
+        if !same_origin && crate::repository::is_sensitive_request_header(name) {
             continue;
         }
-        if !crate::task_input::header_value_ok(value) {
+        if !crate::request_headers::header_name_ok(name) || !crate::request_headers::header_value_ok(value) {
             continue;
         }
         args.push("--header".into());
@@ -571,5 +571,17 @@ mod tests {
         add_header_args(&mut same, &task, "https://a.example/seg.ts");
         assert!(same.contains(&"referer: https://a.example/page".to_string()));
         assert!(!same.iter().any(|arg| arg.starts_with("origin:")));
+    }
+
+    #[test]
+    fn cross_origin_download_keeps_media_context_and_filters_restored_headers() {
+        let mut task = sample_task();
+        task.request_headers.insert("origin".into(), "https://a.example".into());
+        task.request_headers.insert("cookie".into(), "session=test".into());
+        task.request_headers.insert("X-Injected\r\nOther".into(), "value".into());
+        let mut args = Vec::new();
+        add_header_args(&mut args, &task, "https://b.example/seg.ts");
+        assert!(args.contains(&"origin: https://a.example".to_string()));
+        assert!(!args.iter().any(|arg| arg.starts_with("cookie:") || arg.contains('\r')));
     }
 }

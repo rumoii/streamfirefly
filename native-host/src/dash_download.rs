@@ -139,7 +139,7 @@ fn execute(
     let mut anonymous_task = transfer_task.clone();
     anonymous_task
         .request_headers
-        .retain(|name, _| !crate::repository::is_cross_origin_stripped_header(name));
+        .retain(|name, _| !crate::repository::is_sensitive_request_header(name));
     let origin = url::Url::parse(&plan.base_url)
         .map_err(|_| "dash_url_invalid")?
         .origin();

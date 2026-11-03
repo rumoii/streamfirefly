@@ -3,6 +3,7 @@ use crate::model::HlsPlan;
 use crate::model::HlsSubtitlePlan;
 use crate::model::InlineManifest;
 use crate::model::Task;
+use crate::request_headers::{header_name_ok, header_value_ok};
 use crate::settings::INLINE_MANIFEST_MAX_BYTES;
 use serde_json::json;
 use serde_json::Value;
@@ -540,17 +541,12 @@ pub(crate) fn with_site_subdirectory(dir: PathBuf, payload: &Value) -> Result<Pa
     Ok(dir)
 }
 
-pub(crate) fn header_value_ok(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 8192 && !value.chars().any(char::is_control)
-}
-
 pub(crate) fn allowed_request_headers(payload: &Value) -> HashMap<String, String> {
-    let allowed = ["referer", "origin", "authorization", "cookie", "user-agent"];
     let mut headers = HashMap::new();
     if let Some(values) = payload["requestHeaders"].as_object() {
         for (name, value) in values {
             let key = name.to_ascii_lowercase();
-            if allowed.contains(&key.as_str()) {
+            if header_name_ok(&key) {
                 if let Some(value) = value.as_str().filter(|value| header_value_ok(value)) {
                     headers.insert(key, value.to_string());
                 }
@@ -588,11 +584,11 @@ mod tests {
     }
 
     #[test]
-    fn header_value_rejects_more_than_8192_bytes() {
-        assert!(!header_value_ok(&"x".repeat(8193)));
+    fn header_value_keeps_long_valid_values() {
+        assert!(header_value_ok(&"x".repeat(10000)));
         assert!(header_value_ok(&"x".repeat(8192)));
         let payload = json!({"requestHeaders": {"user-agent": "x".repeat(8193)}});
-        assert!(allowed_request_headers(&payload).is_empty());
+        assert_eq!(allowed_request_headers(&payload)["user-agent"].len(), 8193);
     }
 
     #[test]
