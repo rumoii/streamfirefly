@@ -8,10 +8,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fixtureFfmpeg, fixtureFfprobe } from './fixture-ffmpeg.mjs';
+import { ensureBundledTools } from './native-test-tools.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const exe = process.env.STREAMFIREFLY_NATIVE_EXE || path.join(root, 'native-host/target/debug/streamfirefly-native.exe');
 const ffmpeg = process.env.STREAMFIREFLY_FFMPEG_EXE || path.join(root, 'installer/build/x64/ffmpeg.exe');
+ensureBundledTools(exe, ffmpeg);
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'streamfirefly-hls-output-'));
 const downloads = path.join(temporary, 'downloads');
 fs.mkdirSync(downloads);
@@ -123,18 +125,18 @@ async function closeHost(host) {
   }
   finally { clearTimeout(timer); }
 }
-async function until(check, label) {
-  const deadline = Date.now() + 20000;
+async function until(check, label, timeoutMs = 20000) {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) { const value = await check(); if (value) return value; await new Promise(resolve => setTimeout(resolve, 30)); }
   throw Error(`Timed out: ${label}`);
 }
-async function settled(host, id) {
+async function settled(host, id, timeoutMs = 20000) {
   let latest;
   try {
     return await until(async () => {
       latest = (await host.send('task.list')).tasks.find(task => task.id === id);
       return ['succeeded', 'partial', 'failed'].includes(latest?.state) && latest;
-    }, `task ${id}`);
+    }, `task ${id}`, timeoutMs);
   } catch (error) {
     throw Error(`${error.message}: ${JSON.stringify(latest)}`);
   }
@@ -430,6 +432,38 @@ async function subtitleEofRecovery(host) {
   console.log('Real subtitle FFmpeg EOF cleanup and automatic subtitle recovery passed');
   return host;
 }
+async function stalledFfmpegRecovery(host) {
+  const bundled = path.join(path.dirname(exe), 'ffmpeg.exe');
+  const backup = `${bundled}.restore`;
+  const source = path.join(temporary, 'stalled-ffmpeg.rs');
+  const marker = path.join(path.dirname(exe), 'ffmpeg.stall.json');
+  fs.renameSync(bundled, backup);
+  fs.rmSync(marker, { force: true });
+  let stalledPid;
+  try {
+    fs.writeFileSync(source, 'fn main() { let path = std::env::current_exe().unwrap().with_extension("stall.json"); std::fs::write(path, std::process::id().to_string()).unwrap(); std::thread::sleep(std::time::Duration::from_secs(120)); }');
+    const compiled = spawnSync(process.env.RUSTC || 'rustc', [source, '-o', bundled], { windowsHide: true, encoding: 'utf8', timeout: 30000 });
+    assert.equal(compiled.status, 0, compiled.stderr);
+    const created = await host.send('task.create', payload('ffmpeg-stall', { subtitles: false }));
+    assert.equal(created.ok, true, JSON.stringify(created));
+    const failed = await settled(host, created.task.id, 90000);
+    assert.equal(failed.state, 'failed', JSON.stringify(failed));
+    assert.equal(failed.error, 'ffmpeg_stalled');
+    stalledPid = Number(fs.readFileSync(marker, 'utf8'));
+    assert.ok(stalledPid > 0);
+    assert.equal(alive(stalledPid), false, 'stalled FFmpeg was not killed and reaped');
+  } finally {
+    if (stalledPid && alive(stalledPid)) spawnSync('taskkill.exe', ['/PID', String(stalledPid), '/T', '/F'], { windowsHide: true });
+    if (fs.existsSync(bundled)) fs.rmSync(bundled, { force: true });
+    fs.rmSync(marker, { force: true });
+    fs.renameSync(backup, bundled);
+  }
+  const created = await host.send('task.create', payload('ffmpeg-after-stall', { subtitles: false }));
+  assert.equal(created.ok, true, JSON.stringify(created));
+  const recovered = await settled(host, created.task.id);
+  assert.equal(recovered.state, 'succeeded', JSON.stringify(recovered));
+  console.log('Stalled FFmpeg failure, process reaping and immediate scheduler recovery passed');
+}
 let failure;
 try {
   let host = startHost();
@@ -499,6 +533,10 @@ try {
   assert.ok(recoveredTraffic.some(entry => entry.url.endsWith('.key')), 'recovery did not refetch the key');
   assert.ok(recoveredTraffic.some(entry => entry.url.endsWith('last.ts')));
   assert.ok(requests.filter(entry => entry.url.startsWith('/proxy-recovery/')).every(entry => entry.proxied), 'HLS request bypassed custom proxy');
+  await closeHost(host);
+  host = startHost();
+  assert.equal((await host.send('network.configure', { mode: 'direct' })).ok, true);
+  await stalledFfmpegRecovery(host);
   await closeHost(host);
 } catch (error) {
   failure = error;

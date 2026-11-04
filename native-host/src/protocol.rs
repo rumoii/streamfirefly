@@ -169,9 +169,17 @@ pub(crate) fn run() -> io::Result<()> {
     shutdown_host(&store, &captures)
 }
 
-/// Ends every download child so no orphaned writer outlives the host.
+/// Ends every download child and lets workers publish partial output before exit.
 pub(crate) fn shutdown_downloads(store: &TaskRuntime) -> Result<(), String> {
-    crate::processes::shutdown_processes(store)
+    let mut result = crate::processes::shutdown_processes(store);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !store.scheduler.lock().unwrap().running.is_empty() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    if result.is_ok() && !store.scheduler.lock().unwrap().running.is_empty() {
+        result = Err("download_workers_stopping".into());
+    }
+    result
 }
 
 /// Normal EOF shutdown: freeze task scheduling and retries first, end the download

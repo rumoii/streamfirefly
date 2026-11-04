@@ -163,6 +163,8 @@
 
 Release 的 Windows x64 验证使用隔离环境和该 Release 的实际附件。ARM64 包构建并核验 PE 架构及文件完整性；真实 ARM64 设备、真实网站覆盖及 7200 秒持续捕捉不属于该验证，不能由构建成功推断。
 
-项目代码采用 MIT；捆绑依赖各自的许可证见 `LICENSE`、`extension/THIRD_PARTY_NOTICES.md`、`native-host/THIRD_PARTY_NOTICES.md` 和 `native-host/FFMPEG-LICENSE.txt`。
+项目代码采用 MIT；捆绑依赖各自的许可证见 `LICENSE`、`extension/THIRD_PARTY_NOTICES.md`、`native-host/THIRD_PARTY_NOTICES.md`、`native-host/FFMPEG-LICENSE.txt` 和 `native-host/CURL-LICENSE.txt`。
 
 本地助手捆绑的 FFmpeg 是按 LGPL 2.1 自行编译的精简版，只用于合并媒体和转换字幕。对应源码和构建脚本在同一 Release 的 `StreamFirefly-ffmpeg-source-<版本>.tar` 中，说明见包内 `native-host/FFMPEG-SOURCE.txt`。
+
+本地助手捆绑的 curl 是 curl-for-win 的 x64 构建（版本和 SHA-256 固定在 `tools/curl/curl-pin.json`），静态链接、按安装目录绝对路径调用，只用于 http/https 下载；TLS 经由 LibreSSL，`--ca-native` 使用 Windows 系统证书库，不附带 cacert 文件。
