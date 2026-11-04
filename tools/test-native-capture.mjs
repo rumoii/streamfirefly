@@ -81,7 +81,7 @@ try {
   try { missingFfmpeg = await exercise([initialization, media], 'capture_merge_failed', false, false); }
   finally { fs.renameSync(restoredFfmpeg, bundledFfmpeg); }
   assert.equal(missingFfmpeg.state, 'partial');
-  assert.equal((await send('capture.stop', { id: missingFfmpeg.id })).ok, true);
+  assert.equal((await send('capture.close', { id: missingFfmpeg.id })).ok, true);
   const regenerated = await until(async () => {
     const current = (await send('capture.list')).value.find(item => item.id === missingFfmpeg.id);
     return current?.state === 'complete' && current;
