@@ -3,6 +3,7 @@ use crate::model::HlsPlan;
 use crate::model::HlsSubtitlePlan;
 use crate::model::InlineManifest;
 use crate::model::Task;
+use crate::request_headers::{header_name_ok, header_value_ok};
 use crate::settings::INLINE_MANIFEST_MAX_BYTES;
 use serde_json::json;
 use serde_json::Value;
@@ -541,13 +542,12 @@ pub(crate) fn with_site_subdirectory(dir: PathBuf, payload: &Value) -> Result<Pa
 }
 
 pub(crate) fn allowed_request_headers(payload: &Value) -> HashMap<String, String> {
-    let allowed = ["referer", "origin", "authorization", "cookie", "user-agent"];
     let mut headers = HashMap::new();
     if let Some(values) = payload["requestHeaders"].as_object() {
         for (name, value) in values {
             let key = name.to_ascii_lowercase();
-            if allowed.contains(&key.as_str()) {
-                if let Some(value) = value.as_str().filter(|value| !value.is_empty()) {
+            if header_name_ok(&key) {
+                if let Some(value) = value.as_str().filter(|value| header_value_ok(value)) {
                     headers.insert(key, value.to_string());
                 }
             }
@@ -556,10 +556,54 @@ pub(crate) fn allowed_request_headers(payload: &Value) -> HashMap<String, String
     if !headers.contains_key("referer") {
         if let Some(referer) = payload["referer"]
             .as_str()
-            .filter(|value| !value.is_empty())
+            .filter(|value| header_value_ok(value))
         {
             headers.insert("referer".into(), referer.into());
         }
     }
     headers
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn header_value_rejects_crlf() {
+        assert!(!header_value_ok("https://a.example/\r\nX-Evil: 1"));
+        let payload = json!({"requestHeaders": {"user-agent": "a\r\nb"}});
+        assert!(allowed_request_headers(&payload).is_empty());
+    }
+
+    #[test]
+    fn header_value_rejects_nul_byte() {
+        assert!(!header_value_ok("a\0b"));
+        let payload = json!({"requestHeaders": {"user-agent": "a\0b"}});
+        assert!(allowed_request_headers(&payload).is_empty());
+    }
+
+    #[test]
+    fn header_value_keeps_long_valid_values() {
+        assert!(header_value_ok(&"x".repeat(10000)));
+        assert!(header_value_ok(&"x".repeat(8192)));
+        let payload = json!({"requestHeaders": {"user-agent": "x".repeat(8193)}});
+        assert_eq!(allowed_request_headers(&payload)["user-agent"].len(), 8193);
+    }
+
+    #[test]
+    fn header_value_keeps_mozilla_user_agent() {
+        let payload = json!({"requestHeaders": {"user-agent": "Mozilla/5.0"}});
+        let headers = allowed_request_headers(&payload);
+        assert_eq!(
+            headers.get("user-agent").map(String::as_str),
+            Some("Mozilla/5.0")
+        );
+    }
+
+    #[test]
+    fn referer_fallback_with_newline_is_dropped() {
+        let payload = json!({"referer": "https://a.example/\nX-Evil: 1"});
+        assert!(!allowed_request_headers(&payload).contains_key("referer"));
+    }
 }

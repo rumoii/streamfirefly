@@ -15,7 +15,8 @@ const existing = document.getElementById(hostId);
 if (!existing) {
   const host = document.createElement("div");
   host.id = hostId;
-  const shadow = host.attachShadow({ mode: "open" });
+  // Closed so page scripts cannot read or drive the workspace UI; the root stays within this module.
+  const shadow = host.attachShadow({ mode: "closed" });
   const style = document.createElement("style");
   style.textContent = `:host{all:initial;position:fixed;inset:0;z-index:2147483646;display:block;pointer-events:none} ${tokens} ${base} ${components} ${styles} ${floatingStyles} #app{width:100%;height:100%;min-width:0;min-height:0;pointer-events:none}`;
   const root = document.createElement("div");

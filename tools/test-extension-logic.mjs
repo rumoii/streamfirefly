@@ -13,13 +13,14 @@ const listeners = {};
 const nativeListeners = {};
 const nativePosted = [];
 const localValues = { sniffMode: 'always' };
-const sessionValues = {};
+const sessionValues = { 'media-candidates-v2:91': { schemaVersion: 2, sourceContextId: 'legacy', pageUrl: 'https://old.example/', candidates: [{ id: 'forged', url: 'https://old.example/x.m3u8', requestId: 'forged', requestHeaders: { authorization: 'old-forgery' } }] } };
 const createdTabs = [];
 const tabUpdates = [];
 const windowUpdates = [];
 const localGetQueries = [];
 const executedScripts = [];
 const tabMessages = [];
+let releaseUnmount = null;
 const previewRuleUpdates = [];
 const badgeTexts = [], badgeColors = [];
 let sidePanelBehavior = null;
@@ -52,7 +53,7 @@ const storageArea = (values, queries = null) => ({
 const api = {
   action: { setBadgeText: async details => { badgeTexts.push(details); }, setBadgeBackgroundColor: async details => { badgeColors.push(details); }, onClicked: { addListener: listener => { listeners.actionClicked = listener; } } },
   sidePanel: { setPanelBehavior: async value => { sidePanelBehavior = value; }, close: async value => { sidePanelCalls.push({ type: 'close', value: structuredClone(value) }); if (rejectSidePanelClose) throw new Error('close rejected'); }, open: async value => { sidePanelCalls.push({ type: 'open', value: structuredClone(value) }); if (rejectSidePanelOpen) throw new Error('open rejected'); } },
-  scripting: { executeScript: async value => { executedScripts.push(structuredClone(value)); return []; } },
+  scripting: { executeScript: async value => { executedScripts.push(structuredClone({ ...value, ...(value.func ? { func: value.func.toString() } : {}) })); return []; } },
   storage: { local: storageArea(localValues, localGetQueries), session: storageArea(sessionValues), onChanged: { addListener: listener => { const previous = listeners.storageChanged; listeners.storageChanged = (...args) => { previous?.(...args); listener(...args); }; } } },
   webRequest: {
     OnBeforeSendHeadersOptions: { EXTRA_HEADERS: 'extraHeaders' },
@@ -103,7 +104,7 @@ const api = {
       Object.assign(tab, properties); tabUpdates.push({ id, properties: { ...properties } }); return { ...tab };
     },
     remove: async id => { tabsById.delete(id); },
-    sendMessage: async (id, message) => { tabMessages.push({ id, message: structuredClone(message) }); if (message.type === 'workspace.navigate') queueMicrotask(() => listeners.message({ type: 'workspace.ready', attemptId: message.attemptId }, { tab: { ...tabsById.get(id) }, frameId: 0 }, () => {})); return { ok: true }; },
+    sendMessage: async (id, message) => { tabMessages.push({ id, message: structuredClone(message) }); if (message.type === 'workspace.unmount' && releaseUnmount) await new Promise(resolve => { releaseUnmount = resolve; }); if (message.type === 'workspace.navigate') queueMicrotask(() => listeners.message({ type: 'workspace.ready', attemptId: message.attemptId }, { tab: { ...tabsById.get(id) }, frameId: 0 }, () => {})); return { ok: true }; },
     onRemoved: { addListener: listener => { listeners.removed = listener; } },
     onUpdated: { addListener: listener => { listeners.updated = listener; } },
     onActivated: { addListener: listener => { listeners.activated = listener; } }
@@ -192,6 +193,252 @@ if (rejectedV1.ok || rejectedV1.error !== 'hls_plan_version_unsupported') throw 
 const acceptedV2 = await send({ type: 'task.create', payload: { hlsPlan: { version: 2 } } });
 if (!acceptedV2.ok) throw new Error('Current HLS plan was rejected');
 if (nativePosted.findLast(message => message.type === 'task.create')?.payload?.namingMode !== 'page_title') throw new Error('Download requests did not carry the default page-title naming mode');
+assert.equal((await send({ type: 'media.candidates', tabId: 91 })).length, 0, 'legacy page-writable request evidence is discarded');
+// Two first loads read the same absent storage value; the slower one must use memory.
+tabsById.set(86, { id: 86, active: false, url: 'https://load.example/watch', title: 'Load fixture', windowId: 86 });
+const loadSender = { tab: { ...tabsById.get(86) } };
+const getBeforeOverlap = api.storage.session.get;
+const pendingLoads = [];
+api.storage.session.get = async query => {
+  const result = await getBeforeOverlap(query);
+  if (query === 'media-candidates-v3:86') await new Promise(resolve => pendingLoads.push(resolve));
+  return result;
+};
+const fastLoad = send({ type: 'media.sniffing.get', tabId: 86 });
+const slowLoad = send({ type: 'media.sniffing.get', tabId: 86 });
+await flush();
+assert.equal(pendingLoads.length, 2, 'both initial loads overlap at session storage');
+pendingLoads[0]();
+await fastLoad;
+const loadedContext = (await send({ type: 'ui.context.get', scope: 'sender' }, loadSender)).context;
+assert.equal((await send({ type: 'media.add', candidate: { url: 'https://load.example/collected.mp4', mime: 'video/mp4', source: 'dom' } }, loadSender)).ok, true);
+pendingLoads[1]();
+await slowLoad;
+api.storage.session.get = getBeforeOverlap;
+const retainedContext = (await send({ type: 'ui.context.get', scope: 'sender' }, loadSender)).context;
+assert.ok(retainedContext.candidates.some(item => item.url === 'https://load.example/collected.mp4'), 'slow storage loads must not overwrite collected candidates');
+assert.equal(retainedContext.sourceContextId, loadedContext.sourceContextId, 'overlapping loads keep the source context');
+console.log('Concurrent initial state loads preserve collected candidates and context');
+// Hold the actual unmount boundary so requests overlap navigation cleanup deterministically.
+tabsById.set(87, { id: 87, active: false, url: 'https://spa.example/watch', title: 'Navigation fixture', windowId: 87 });
+const navigationSender = () => ({ tab: { ...tabsById.get(87) } });
+await send({ type: 'ui.context.get', scope: 'sender' }, navigationSender());
+const beginRequest = name => listeners.beforeHeaders({ tabId: 87, url: `https://spa.example/${name}.m3u8`, requestId: name, requestHeaders: [{ name: 'Authorization', value: 'Bearer spa' }, { name: 'Cookie', value: 'session=spa' }, { name: 'Referer', value: 'https://spa.example/watch' }] });
+const finishRequest = name => listeners.headers({ tabId: 87, url: `https://spa.example/${name}.m3u8`, requestId: name, statusCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'application/vnd.apple.mpegurl' }] });
+const navigationItems = async () => await send({ type: 'media.candidates', tabId: 87 });
+const assertDiscoveryOnly = async (items, name) => {
+  const item = items.find(item => item.requestId === name || item.url.endsWith(`/${name}.m3u8`));
+  assert.ok(item, `${name}: in-flight discovery must survive`);
+  assert.equal(item.source, 'network');
+  assert.equal(item.requestId, undefined, `${name}: stale requests cannot supply evidence`);
+  assert.equal(item.requestHeaders?.authorization, 'Bearer spa');
+  assert.equal(item.requestHeaders?.cookie, 'session=spa');
+  assert.equal(item.requestHeaders?.referer, 'https://spa.example/watch');
+  fetchResponse = new Response('#EXTM3U');
+  assert.equal((await send({ type: 'media.fetchText', tabId: 87, id: item.id, automatic: true })).ok, true);
+  assert.equal(fetchCalls.at(-1).init.credentials, 'omit');
+  assert.equal(new Headers(fetchCalls.at(-1).init.headers).get('authorization'), null);
+};
+beginRequest('before-spa');
+await flush();
+releaseUnmount = () => {};
+tabsById.get(87).url = 'https://spa.example/next';
+listeners.history({ tabId: 87, frameId: 0, url: tabsById.get(87).url });
+await flush();
+beginRequest('during-spa');
+beginRequest('early-spa');
+finishRequest('early-spa');
+await flush();
+releaseUnmount(); releaseUnmount = null;
+await flush();
+finishRequest('before-spa');
+finishRequest('during-spa');
+await flush();
+const afterNavigation = await navigationItems();
+assert.ok(afterNavigation.some(item => item.url.endsWith('/during-spa.m3u8')), 'requests sent during cleanup must remain discoverable');
+await assertDiscoveryOnly(afterNavigation, 'before-spa');
+for (const name of ['during-spa', 'early-spa']) {
+  const item = afterNavigation.find(item => item.requestId === name);
+  assert.equal(item?.requestHeaders?.authorization, 'Bearer spa', `${name}: cleanup revision is captured after unmount`);
+}
+const navigationUi = (await send({ type: 'ui.context.get', scope: 'sender' }, navigationSender())).context;
+assert.ok(navigationUi.candidates.some(item => item.requestId === 'during-spa'), 'UI receives background request evidence');
+beginRequest('revision-change');
+await flush();
+await send({ type: 'media.sniffing.set', tabId: 87, payload: { paused: false } });
+await flush();
+finishRequest('revision-change');
+await flush();
+await assertDiscoveryOnly(await navigationItems(), 'revision-change');
+beginRequest('merge-stale');
+await flush();
+await send({ type: 'media.sniffing.set', tabId: 87, payload: { paused: false } });
+listeners.beforeHeaders({ tabId: 87, url: 'https://spa.example/merge-stale.m3u8', requestId: 'merge-fresh', requestHeaders: [{ name: 'Authorization', value: 'Bearer fresh' }] });
+listeners.headers({ tabId: 87, url: 'https://spa.example/merge-stale.m3u8', requestId: 'merge-fresh', statusCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'application/vnd.apple.mpegurl' }] });
+await flush();
+assert.equal((await navigationItems()).find(item => item.url.endsWith('/merge-stale.m3u8')).requestId, 'merge-fresh');
+finishRequest('merge-stale');
+await flush();
+await assertDiscoveryOnly(await navigationItems(), 'merge-stale');
+// A real preview-rule removal failure blocks probes and evidence until navigation succeeds.
+const previewForFailure = await send({ type: 'preview.headers.apply', payload: { previewSessionId: 'failed-cleanup', candidateId: (await navigationItems())[0].id, url: 'https://spa.example/failed-cleanup.m3u8', headers: { referer: 'https://spa.example/watch' } } }, navigationSender());
+assert.equal(previewForFailure.ok, true);
+beginRequest('before-failed-cleanup');
+await flush();
+const updateSessionRules = api.declarativeNetRequest.updateSessionRules;
+api.declarativeNetRequest.updateSessionRules = async rules => {
+  if (rules.removeRuleIds?.length) throw new Error('fixture_rule_removal_failed');
+  return updateSessionRules(rules);
+};
+releaseUnmount = () => {};
+tabsById.get(87).url = 'https://spa.example/cleanup-fails';
+listeners.history({ tabId: 87, frameId: 0, url: tabsById.get(87).url });
+await flush();
+beginRequest('failed-cleanup');
+finishRequest('failed-cleanup');
+finishRequest('before-failed-cleanup');
+const probeDuringFailure = send({ type: 'probe.install', documentToken: 'cleanup-document' }, navigationSender());
+const captureDuringFailure = send({ type: 'capture.stage.confirm', payload: { documentToken: 'cleanup-document', stageToken: 'unmarked' } }, navigationSender());
+await flush();
+releaseUnmount(); releaseUnmount = null;
+await flush();
+assert.equal((await probeDuringFailure).error, 'fixture_rule_removal_failed', 'probe waiting on failed cleanup reports that failure');
+assert.equal((await captureDuringFailure).enabled, false, 'capture waiting on failed cleanup stays disabled');
+await assertDiscoveryOnly(await navigationItems(), 'failed-cleanup');
+await assertDiscoveryOnly(await navigationItems(), 'before-failed-cleanup');
+beginRequest('after-failed-cleanup');
+finishRequest('after-failed-cleanup');
+await flush();
+await assertDiscoveryOnly(await navigationItems(), 'after-failed-cleanup');
+const sendBeforeProbe = api.tabs.sendMessage;
+api.tabs.sendMessage = async (tabId, message) => message.type === 'probe.identity' ? { documentToken: 'cleanup-document' } : sendBeforeProbe(tabId, message);
+const probeAfterFailure = await send({ type: 'probe.install', documentToken: 'cleanup-document' }, navigationSender());
+assert.equal(probeAfterFailure.ok, false, 'a settled failed cleanup keeps later probes blocked');
+assert.equal(probeAfterFailure.error, 'fixture_rule_removal_failed');
+assert.equal((await send({ type: 'capture.stage.confirm', payload: { documentToken: 'cleanup-document', stageToken: 'unmarked' } }, navigationSender())).enabled, false, 'capture remains disabled after failed cleanup settles');
+api.declarativeNetRequest.updateSessionRules = updateSessionRules;
+tabsById.get(87).url = 'https://spa.example/cleanup-recovers';
+listeners.history({ tabId: 87, frameId: 0, url: tabsById.get(87).url });
+await flush();
+assert.equal((await send({ type: 'probe.install', documentToken: 'cleanup-document' }, navigationSender())).active, true, 'the next successful navigation cleanup allows probe installation');
+api.tabs.sendMessage = sendBeforeProbe;
+beginRequest('after-successful-cleanup');
+finishRequest('after-successful-cleanup');
+await flush();
+const afterRecovery = (await navigationItems()).find(item => item.requestId === 'after-successful-cleanup');
+assert.ok(afterRecovery, 'a request after the next successful navigation cleanup gets normal evidence');
+assert.equal(afterRecovery.requestHeaders.authorization, 'Bearer spa');
+assert.equal(afterRecovery.requestHeaders.cookie, 'session=spa');
+assert.equal((await send({ type: 'media.fetchText', tabId: 87, id: afterRecovery.id, automatic: true })).ok, true);
+assert.equal(fetchCalls.at(-1).init.credentials, 'include');
+assert.equal(new Headers(fetchCalls.at(-1).init.headers).get('authorization'), 'Bearer spa');
+beginRequest('closed-after-failure');
+await flush();
+tabsById.delete(87);
+listeners.removed(87);
+await flush();
+const sessionGet = api.storage.session.get;
+const closedTabReads = [];
+api.storage.session.get = async query => { if (query === 'media-candidates-v3:87') closedTabReads.push(query); return sessionGet(query); };
+finishRequest('closed-after-failure');
+beginRequest('already-closed');
+finishRequest('already-closed');
+await flush();
+api.storage.session.get = sessionGet;
+assert.equal(closedTabReads.length, 0, 'late closed-tab callbacks must not recreate tab state');
+assert.equal(sessionValues['media-candidates-v3:87'], undefined);
+console.log('Navigation cleanup retains download headers without automatic request evidence');
+// Page hints cannot manufacture a network request or its credentials.
+tabsById.set(88, { id: 88, active: false, url: 'https://page.example/watch', title: 'Trust fixture', windowId: 88 });
+const trustUrl = 'https://cdn.example/trust.m3u8?token=one';
+const trustSender = { tab: { ...tabsById.get(88) } };
+await send({ type: 'ui.context.get', scope: 'sender' }, trustSender);
+await send({ type: 'media.add', candidate: { url: trustUrl, mime: 'application/vnd.apple.mpegurl', source: 'network', requestId: 'forged', resourceType: 'media', referer: 'https://forged.example/', requestHeaders: { authorization: 'forged' }, size: 777, sizeSource: 'content-length', poster: 'https://page.example/poster.jpg', width: 640, height: 360 } }, trustSender);
+const hinted = (await send({ type: 'media.candidates', tabId: 88 })).find(item => item.url === trustUrl);
+for (const field of ['requestId', 'resourceType', 'referer', 'requestHeaders', 'size', 'sizeSource']) assert.equal(hinted[field], undefined, `page cannot supply ${field}`);
+assert.equal(hinted.poster, 'https://page.example/poster.jpg');
+assert.equal(hinted.width, 640);
+const autoManifest = async (url, extra = {}) => {
+  fetchResponse = new Response('#EXTM3U\n#EXTINF:2,\nsegment.ts\n');
+  const result = await send({ type: 'media.fetchText', tabId: 88, id: hinted.id, url, automatic: true, ...extra });
+  assert.equal(result.ok, true);
+  return fetchCalls.at(-1);
+};
+assert.equal((await autoManifest(trustUrl)).init.credentials, 'omit');
+await send({ type: 'media.fetchText', tabId: 88, id: hinted.id, url: trustUrl });
+assert.equal(fetchCalls.at(-1).init.credentials, 'include', 'explicit parsing remains available before playback');
+const observeTrust = async (url, requestId, requestHeaders = []) => {
+  listeners.beforeHeaders({ tabId: 88, url, requestId, requestHeaders, type: 'xmlhttprequest' });
+  listeners.headers({ tabId: 88, url, requestId, type: 'xmlhttprequest', statusCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'application/vnd.apple.mpegurl' }] });
+  await flush();
+};
+await observeTrust(trustUrl, 'real-no-cookie');
+assert.equal((await autoManifest(trustUrl + '#play')).init.credentials, 'omit', 'an observed request without Cookie must not gain cookies');
+await observeTrust(trustUrl, 'real-cookie', [{ name: 'Cookie', value: 'session=observed' }]);
+assert.equal((await autoManifest(trustUrl + '#play')).init.credentials, 'include', 'only observed Cookie authorizes automatic cookies');
+await observeTrust(trustUrl, 'later-no-cookie');
+assert.equal((await autoManifest(trustUrl)).init.credentials, 'omit', 'a later anonymous request must not inherit an earlier Cookie');
+assert.equal((await autoManifest(trustUrl.replace('one', 'two'))).init.credentials, 'omit', 'query is part of the evidence key');
+assert.equal((await autoManifest('https://cdn.example/other.m3u8')).init.credentials, 'omit', 'same origin alone is insufficient');
+const childUrl = 'https://child.example/audio.m3u8';
+await observeTrust(childUrl, 'real-child', [{ name: 'Authorization', value: 'Bearer child' }]);
+const childFetch = await autoManifest(childUrl);
+assert.equal(childFetch.init.credentials, 'omit', 'observed Authorization does not authorize cookies');
+assert.equal(new Headers(childFetch.init.headers).get('authorization'), 'Bearer child', 'a child uses its own observed headers');
+assert.equal((await autoManifest(childUrl, { restrictOrigin: true })).init.credentials, 'omit', 'strict preview cannot be widened by automatic mode');
+assert.equal((await autoManifest(trustUrl)).init.redirect, 'follow', 'automatic redirects retain browser behavior');
+const backgroundOnly = 'https://background.example/manifest.m3u8';
+listeners.headers({ tabId: -1, initiator: 'https://page.example', url: backgroundOnly, requestId: 'background-only', statusCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'application/vnd.apple.mpegurl' }] });
+await flush();
+assert.equal((await autoManifest(backgroundOnly)).init.credentials, 'omit', 'background requests are not page evidence');
+listeners.beforeHeaders({ tabId: 88, url: trustUrl, requestId: 'hash-only-navigation', requestHeaders: [{ name: 'Authorization', value: 'Bearer hash-navigation' }] });
+tabsById.get(88).url += '#player';
+listeners.history({ tabId: 88, frameId: 0, url: tabsById.get(88).url });
+await flush();
+listeners.headers({ tabId: 88, url: trustUrl, requestId: 'hash-only-navigation', statusCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'application/vnd.apple.mpegurl' }] });
+await flush();
+assert.equal(new Headers((await autoManifest(trustUrl)).init.headers).get('authorization'), 'Bearer hash-navigation', 'hash-only navigation keeps the current page request');
+await send({ type: 'media.sniffing.set', tabId: 88, payload: { paused: true } });
+const pausedFetchCount = fetchCalls.length;
+const pausedAutomatic = await send({ type: 'media.fetchText', tabId: 88, id: hinted.id, url: trustUrl, automatic: true });
+assert.equal(pausedAutomatic.error, 'sniffing_inactive');
+assert.equal(fetchCalls.length, pausedFetchCount, 'paused sniffing does not start automatic requests');
+fetchResponse = new Response('#EXTM3U');
+assert.equal((await send({ type: 'media.fetchText', tabId: 88, id: hinted.id, url: trustUrl })).ok, true, 'explicit reads remain available while sniffing is paused');
+await send({ type: 'media.sniffing.set', tabId: 88, payload: { paused: false } });
+listeners.beforeHeaders({ tabId: 88, url: trustUrl, requestId: 'late-old-page', requestHeaders: [{ name: 'Cookie', value: 'session=old-page' }, { name: 'Authorization', value: 'Bearer old-page' }] });
+await flush();
+tabsById.get(88).url = 'https://page.example/next';
+listeners.beforeNavigate({ tabId: 88, frameId: 0, url: tabsById.get(88).url });
+await flush();
+listeners.headers({ tabId: 88, url: trustUrl, requestId: 'late-old-page', statusCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'application/vnd.apple.mpegurl' }] });
+await flush();
+const lateOldPage = (await send({ type: 'media.candidates', tabId: 88 })).find(item => item.url === trustUrl);
+assert.ok(lateOldPage, 'cross-document late responses remain listed');
+assert.equal(lateOldPage.requestId, undefined);
+assert.equal(lateOldPage.requestHeaders.cookie, 'session=old-page');
+assert.equal(lateOldPage.requestHeaders.authorization, 'Bearer old-page');
+assert.equal((await autoManifest(trustUrl)).init.credentials, 'omit');
+assert.equal(new Headers(fetchCalls.at(-1).init.headers).get('authorization'), null);
+await send({ type: 'media.add', candidate: { url: trustUrl, mime: 'application/vnd.apple.mpegurl', source: 'fetch' } }, trustSender);
+assert.equal((await autoManifest(trustUrl)).init.credentials, 'omit', 'old-page completion cannot authorize the new page');
+assert.equal(new Headers(fetchCalls.at(-1).init.headers).get('authorization'), null);
+console.log('Page input and exact-URL automatic request evidence passed');
+const dataContext = (await send({ type: 'ui.context.get', scope: 'sender' }, { tab: { ...tabsById.get(88) } })).context;
+for (const [url, mime, type] of [['data:video/mp4;base64,AA==', 'video/mp4', 'video'], ['data:audio/mpeg;base64,AA==', 'audio/mpeg', 'audio']]) {
+  assert.equal((await send({ type: 'media.add', candidate: { url, mime, source: 'dom' } }, trustSender)).ok, true, `${type} data URL reaches media.add`);
+  const item = (await send({ type: 'media.candidates', tabId: 88 })).find(item => item.url === url);
+  assert.equal(item?.type, type, `${type} data URL remains listed`);
+  const callsBefore = fetchCalls.length;
+  assert.equal((await send({ type: 'media.fetchText', tabId: 88, id: item.id })).error, 'media_url_unsupported');
+  assert.equal((await send({ type: 'media.size.probe', tabId: 88, sourceContextId: dataContext.sourceContextId, id: item.id })).error, 'media_url_unsupported');
+  assert.equal(fetchCalls.length, callsBefore, 'data URLs do not start background reads or size probes');
+}
+await send({ type: 'media.add', candidate: { url: 'data:text/html,x', source: 'dom' } }, trustSender);
+assert.equal((await send({ type: 'media.candidates', tabId: 88 })).some(item => item.url === 'data:text/html,x'), false, 'detection rejects non-media data URLs');
+console.log('Data media discovery and background fetch refusal passed');
+fetchResponse = new Response('#EXTM3U\n#EXTINF:2,\nsegment.ts\n');
+previewRuleUpdates.length = 0;
 const nativeBeforeBlob = nativePosted.length;
 const rejectedBlobTask = await send({ type: 'task.create', payload: { url: 'blob:https://media.example/source' } });
 if (rejectedBlobTask.ok || rejectedBlobTask.error !== 'blob_resource_requires_capture' || nativePosted.length !== nativeBeforeBlob) throw new Error(`Blob media reached Native download: ${JSON.stringify(rejectedBlobTask)}`);
@@ -263,7 +510,7 @@ for (const [url, restrictOrigin, auth, credentials] of [
   ['https://media.example/audio.m3u8', true, 'Bearer preview', 'include'],
   ['https://cdn.example/audio.m3u8', true, null, 'omit'],
   ['https://media.example:9443/audio.m3u8', true, null, 'omit'],
-  ['https://cdn.example/audio.m3u8', false, 'Bearer preview', 'include']
+  ['https://cdn.example/audio.m3u8', false, null, 'omit']
 ]) {
   fetchResponse = new Response('#EXTM3U\n#EXTINF:2,\nsegment.ts\n');
   const beforeRules = previewRuleUpdates.length;
@@ -284,6 +531,29 @@ listeners.headers({ tabId: 7, url: 'https://media.example/credential-master.m3u8
 await flush();
 const hlsOwner = (await send({ type: 'ui.context.get', scope: 'active' })).context.candidates.find(item => item.url === 'https://media.example/credential-master.m3u8');
 assert.equal(hlsOwner.type, 'hls');
+const automaticChild = async (owner, url, credentials, authorization) => {
+  fetchResponse = new Response('#EXTM3U');
+  assert.equal((await send({ type: 'media.fetchText', tabId: 7, id: owner.id, url, automatic: true })).ok, true);
+  assert.equal(fetchCalls.at(-1).init.credentials, credentials, url);
+  assert.equal(new Headers(fetchCalls.at(-1).init.headers).get('authorization'), authorization, url);
+};
+await automaticChild(hlsOwner, 'https://media.example/unobserved-child.m3u8', 'include', 'Bearer hls-synthetic');
+await automaticChild(hlsOwner, 'https://cdn.example/unobserved-child.m3u8', 'omit', null);
+await send({ type: 'media.add', candidate: { url: hlsOwner.url, mime: hlsOwner.mime, inlineManifest: { format: 'hls', text: '#EXTM3U\n#EXTINF:2,\nsegment.ts\n', baseUrl: hlsOwner.url } } }, { tab: { id: 7 } });
+const inlineOwner = (await send({ type: 'media.candidates', tabId: 7 })).find(item => item.inlineManifest && item.url === hlsOwner.url);
+await automaticChild(inlineOwner, 'https://media.example/unobserved-inline-child.m3u8', 'omit', null);
+await automaticChild(video, 'https://media.example/unobserved-video-child.m3u8', 'omit', null);
+// Exact child evidence takes priority over the master's Cookie and Authorization.
+listeners.beforeHeaders({ tabId: 7, url: 'https://media.example/observed-child.m3u8', requestId: 'child-no-cookie', requestHeaders: [{ name: 'Authorization', value: 'Bearer exact-child' }] });
+listeners.headers({ tabId: 7, url: 'https://media.example/observed-child.m3u8', requestId: 'child-no-cookie', statusCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'application/vnd.apple.mpegurl' }] });
+await flush();
+await automaticChild(hlsOwner, 'https://media.example/observed-child.m3u8', 'omit', 'Bearer exact-child');
+const noCookieOwner = (await send({ type: 'media.candidates', tabId: 7 })).find(item => item.requestId === 'child-no-cookie');
+await automaticChild(noCookieOwner, 'https://media.example/no-cookie-child.m3u8', 'omit', 'Bearer exact-child');
+await send({ type: 'media.add', candidate: { url: 'https://media.example/unobserved-master.m3u8', mime: hlsOwner.mime } }, { tab: { id: 7 } });
+const unobservedOwner = (await send({ type: 'media.candidates', tabId: 7 })).find(item => item.url.endsWith('/unobserved-master.m3u8'));
+assert.equal(unobservedOwner.requestId, undefined);
+await automaticChild(unobservedOwner, 'https://media.example/unobserved-owner-child.m3u8', 'omit', null);
 for (const [url, restricted, same] of [
   ['https://media.example/audio.m3u8', false, true], ['https://media.example:443/audio.m3u8', false, true],
   ['https://cdn.example/audio.m3u8', false, false], ['https://media.example:9443/audio.m3u8', false, false],
@@ -342,7 +612,9 @@ if (loginPage.ok || (await send({ type: 'media.candidates', tabId: 7 })).find(it
 const fetchesBeforeKnown = fetchCalls.length;
 const knownSize = await send({ type: 'media.size.probe', tabId: 7, sourceContextId: probeContextId, id: video.id });
 if (!knownSize.ok || knownSize.candidate.size !== 8192 || knownSize.candidate.sizeSource !== 'content-range' || fetchCalls.length !== fetchesBeforeKnown) throw new Error(`Size probe replaced a network size: ${JSON.stringify(knownSize)}`);
-await send({ type: 'media.add', candidate: { url: 'https://media.example/watch/clip.ogv', mime: 'video/ogg', size: 4096, sizeSource: 'content-length', source: 'network' } }, { tab: { id: 7 } });
+listeners.beforeHeaders({ tabId: 7, url: 'https://media.example/watch/clip.ogv', requestId: 'network-size', requestHeaders: [] });
+listeners.headers({ tabId: 7, url: 'https://media.example/watch/clip.ogv', requestId: 'network-size', statusCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'video/ogg' }, { name: 'Content-Length', value: '4096' }] });
+await flush();
 if ((await send({ type: 'media.candidates', tabId: 7 })).find(item => item.url.endsWith('/clip.ogv')).size !== 4096) throw new Error('A network size did not replace a probed size');
 const previewPoster = await send({ type: 'media.metadata.update', tabId: 7, sourceContextId: probeContextId, payload: { id: video.id, url: video.url, poster: 'data:image/jpeg;base64,AA==' } });
 if (!previewPoster.ok || previewPoster.candidate.posterSource !== 'preview') throw new Error(`Preview cover was not marked: ${JSON.stringify(previewPoster.candidate)}`);
@@ -577,9 +849,13 @@ const captureTab = createdTabs.at(-1);
 if (!openedCapture.ok || !captureTab?.url.includes('captureTab=7') || !captureTab.url.includes('captureBlob=blob%3Ahttps%3A%2F%2Fmedia.example%2Fsource')) throw new Error(`Blob capture intent was not encoded into its control page: ${JSON.stringify({ openedCapture, captureTab })}`);
 const staleCapture = await send({ type: 'capture.control.open', payload: { tabId: 7, sourceContextId: 'stale', objectUrl: 'blob:https://media.example/source' } });
 if (staleCapture.ok || staleCapture.error !== 'capture_document_changed') throw new Error(`Stale Blob capture intent was accepted: ${JSON.stringify(staleCapture)}`);
-await send({ type: 'media.add', candidate: { url: 'blob:https://media.example/source', mime: 'video/unknown', source: 'dom' } }, { tab: { id: 7 } });
-const blobCandidate = (await send({ type: 'media.candidates', tabId: 7 })).find(candidate => candidate.url === 'blob:https://media.example/source');
+const addedBlob = await send({ type: 'media.add', candidate: { url: 'blob:https://media.example/source', mime: 'video/unknown', source: 'dom' } }, { tab: { id: 7 } });
+assert.equal(addedBlob.ok, true, 'DOM Blob media stays available for capture');
+assert.ok((await send({ type: 'media.candidates', tabId: 7 })).some(candidate => candidate.url === 'blob:https://media.example/source'));
 const tabsBeforeBlobDispatch = createdTabs.length;
+await send({ type: 'media.add', candidate: { url: 'blob:https://media.example/inline-source', mime: 'application/vnd.apple.mpegurl', source: 'blob-manifest', inlineManifest: { format: 'hls', text: '#EXTM3U\n#EXTINF:2,\nhttps://media.example/chunk-1.ts\n', baseUrl: 'https://media.example/', sourceUrl: null } } }, { tab: { id: 7 } });
+const blobCandidate = (await send({ type: 'media.candidates', tabId: 7 })).find(candidate => candidate.url === 'blob:https://media.example/inline-source');
+if (!blobCandidate) throw new Error('A blob: candidate with an inline manifest was not retained');
 const rejectedBlobDispatch = await send({ type: 'integration.open', payload: { tabId: 7, sourceContextId: oldSourceContextId, candidateIds: [blobCandidate.id] } });
 if (rejectedBlobDispatch.ok || rejectedBlobDispatch.error !== 'blob_resource_requires_capture' || createdTabs.length !== tabsBeforeBlobDispatch) throw new Error(`Blob media reached external dispatch: ${JSON.stringify(rejectedBlobDispatch)}`);
 
@@ -601,7 +877,7 @@ await send({ type: 'media.add', candidate: { url: 'https://media.example/final.m
 tabsById.delete(7);
 listeners.removed(7);
 await flush();
-if (sessionValues['media-candidates-v2:7']) throw new Error('Closing a source tab did not remove its ephemeral media state');
+if (sessionValues['media-candidates-v3:7']) throw new Error('Closing a source tab did not remove its ephemeral media state');
 nativeListeners.disconnect();
 nativeInfoError = 'native_host_timeout';
 const timedOutConnection = await send({ type: 'native.connect' });

@@ -27,6 +27,7 @@ mod protocol;
 mod queue;
 mod recovery;
 mod repository;
+mod request_headers;
 mod runtime;
 mod scheduler;
 mod segment_transfer;

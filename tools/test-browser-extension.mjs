@@ -78,10 +78,14 @@ function reporterSource(origin) {
     const opened = await handleToolbarClick(await testApi.tabs.get(onDemandTab.id));
     if (!opened.ok) throw new Error('on-demand workspace did not open: ' + opened.error);
     await waitFor(async () => (await candidatesFor(onDemandTab.id)).some(item => String(item.url).endsWith('/media/direct.mp4')), 'opening StreamFirefly did not scan the current page', 8000);
-    const panelMode = (await testApi.scripting.executeScript({ target: { tabId: onDemandTab.id }, func: () => document.getElementById('streamfirefly-workspace-host').shadowRoot.querySelector('.floating-window').dataset.displayMode }))[0].result;
-    if (panelMode !== 'panel') throw new Error('toolbar handler did not open a quick floating panel');
-    await testApi.scripting.executeScript({ target: { tabId: onDemandTab.id }, func: () => document.getElementById('streamfirefly-workspace-host').shadowRoot.querySelector('[aria-label="收起流萤"]').click() });
-    await waitFor(async () => (await testApi.scripting.executeScript({ target: { tabId: onDemandTab.id }, func: () => Boolean(document.getElementById('streamfirefly-workspace-host').shadowRoot.querySelector('.floating-launcher')) }))[0].result, 'collapse did not retain a launcher');
+    const panelInjection = await testApi.scripting.executeScript({ target: { tabId: onDemandTab.id }, func: () => globalThis.__sfTestGetWorkspaceRoot().querySelector('.floating-window').getAttribute('data-display-mode') });
+    if (panelInjection[0]?.error) throw new Error('panel inspection failed: ' + String(panelInjection[0].error.message || panelInjection[0].error));
+    const panelMode = panelInjection[0]?.result;
+    if (panelMode !== 'panel') throw new Error('toolbar handler did not open a quick floating panel: ' + JSON.stringify(panelMode));
+    const pageAccess = (await testApi.scripting.executeScript({ target: { tabId: onDemandTab.id }, world: 'MAIN', func: () => ({ closed: document.getElementById('streamfirefly-workspace-host').shadowRoot === null, hidden: document.querySelector('.floating-window') === null }) }))[0].result;
+    if (!pageAccess.closed || !pageAccess.hidden) throw new Error('webpages can read workspace controls');
+    await testApi.scripting.executeScript({ target: { tabId: onDemandTab.id }, func: () => globalThis.__sfTestGetWorkspaceRoot().querySelector('[aria-label="收起流萤"]').click() });
+    await waitFor(async () => (await testApi.scripting.executeScript({ target: { tabId: onDemandTab.id }, func: () => Boolean(globalThis.__sfTestGetWorkspaceRoot().querySelector('.floating-launcher')) }))[0].result, 'collapse did not retain a launcher');
     if (!sniffing.allowed(onDemandTab.id)) throw new Error('collapse stopped on-open sniffing');
     await unmountWorkspace(onDemandTab.id);
     await waitFor(() => !sniffing.allowed(onDemandTab.id), 'closing StreamFirefly did not stop sniffing', 8000);
@@ -213,7 +217,7 @@ function reporterSource(origin) {
     const workspaceMounted = await waitFor(async () => {
       const result = await testApi.scripting.executeScript({ target: { tabId: tab.id }, func: () => {
         const host = document.getElementById('streamfirefly-workspace-host');
-        return host?.shadowRoot ? { count: document.querySelectorAll('#streamfirefly-workspace-host').length, text: host.shadowRoot.textContent || '', error: host.shadowRoot.querySelector('.status-banner.error')?.textContent || '' } : null;
+        return (host && globalThis.__sfTestGetWorkspaceRoot()) ? { count: document.querySelectorAll('#streamfirefly-workspace-host').length, text: globalThis.__sfTestGetWorkspaceRoot().textContent || '', error: globalThis.__sfTestGetWorkspaceRoot().querySelector('.status-banner.error')?.textContent || '' } : null;
       } });
       return result[0]?.result || null;
     }, 'workspace did not mount in an open Shadow DOM');
@@ -224,16 +228,16 @@ function reporterSource(origin) {
     if (!sidebarPatch.ok) throw new Error('sidebar resource state patch failed: ' + sidebarPatch.error);
     await waitFor(async () => {
       const result = await testApi.scripting.executeScript({ target: { tabId: tab.id }, func: () => {
-        const root = document.getElementById('streamfirefly-workspace-host')?.shadowRoot;
-        const type = root?.querySelector('.type-filter [aria-pressed="true"]')?.dataset.value;
-        const sort = root?.querySelector('.sf-select[aria-label="排序方式"]')?.dataset.value;
+        const root = globalThis.__sfTestGetWorkspaceRoot();
+        const type = root?.querySelector('.type-filter [aria-pressed="true"]')?.getAttribute('data-value');
+        const sort = root?.querySelector('.sf-select[aria-label="排序方式"]')?.getAttribute('data-value');
         return type && sort ? { type, sort } : null;
       } });
       const value = result[0]?.result;
       return value?.type === 'video' && value?.sort === 'size' ? value : null;
     }, 'sidebar resource state did not reach the workspace');
     await testApi.scripting.executeScript({ target: { tabId: tab.id }, func: () => {
-      const input = document.getElementById('streamfirefly-workspace-host')?.shadowRoot?.querySelector('.search-field input');
+      const input = globalThis.__sfTestGetWorkspaceRoot()?.querySelector('.search-field input');
       input.value = 'direct';
       input.dispatchEvent(new Event('input', { bubbles: true }));
     } });
@@ -241,11 +245,11 @@ function reporterSource(origin) {
     currentStage = 'verify-workspace-layout';
     const workspaceBehavior = (await testApi.scripting.executeScript({ target: { tabId: tab.id }, func: () => {
       const host = document.getElementById('streamfirefly-workspace-host');
-      const shell = host?.shadowRoot?.querySelector('.floating-window');
-      const resources = host?.shadowRoot?.querySelector('.resource-scroll');
+      const shell = (host && globalThis.__sfTestGetWorkspaceRoot())?.querySelector('.floating-window');
+      const resources = (host && globalThis.__sfTestGetWorkspaceRoot())?.querySelector('.resource-scroll');
       const spacer = document.createElement('div'); spacer.style.height = '1200px'; resources.append(spacer); resources.scrollTop = 420;
       const bounds = shell.getBoundingClientRect();
-      const result = { title: document.title, htmlOverflow: document.documentElement.style.overflow, bodyOverflow: document.body.style.overflow, scrollTop: resources.scrollTop, scrollHeight: resources.scrollHeight, clientHeight: resources.clientHeight, viewportWidth: document.documentElement.clientWidth, x: bounds.x, width: bounds.width, mode: shell.dataset.displayMode };
+      const result = { title: document.title, htmlOverflow: document.documentElement.style.overflow, bodyOverflow: document.body.style.overflow, scrollTop: resources.scrollTop, scrollHeight: resources.scrollHeight, clientHeight: resources.clientHeight, viewportWidth: document.documentElement.clientWidth, x: bounds.x, width: bounds.width, mode: shell.getAttribute('data-display-mode') };
       spacer.remove(); return result;
     } }))[0].result;
     if (workspaceBehavior.title !== pageBeforeWorkspace.title) throw new Error('workspace changed the source title');
@@ -302,7 +306,7 @@ function stageExtension(stage, origin) {
   const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, manifestName), 'utf8'));
   const reporter = discoveryTest ? discoveryReporter(origin) : reporterSource(origin);
   fs.writeFileSync(path.join(stage, 'test-reporter.js'), reporter);
-  fs.writeFileSync(path.join(stage, 'test-content.js'), `const testApi = globalThis.browser ?? globalThis.chrome;\nconst originalSend = testApi.runtime.sendMessage.bind(testApi.runtime);\ntestApi.runtime.sendMessage = (...args) => { const result = originalSend(...args); if (args[0]?.type === 'probe.install') result.then(value => originalSend({ type: 'test.probe.result', result: value })).catch(error => originalSend({ type: 'test.probe.result', error: error.message })); return result; };\n`);
+  fs.writeFileSync(path.join(stage, 'test-content.js'), `const testApi = globalThis.browser ?? globalThis.chrome;\nglobalThis.__sfTestGetWorkspaceRoot = () => { const host = document.getElementById('streamfirefly-workspace-host'); return host ? testApi.dom?.openOrClosedShadowRoot(host) ?? host.openOrClosedShadowRoot : null; };\nconst originalSend = testApi.runtime.sendMessage.bind(testApi.runtime);\ntestApi.runtime.sendMessage = (...args) => { const result = originalSend(...args); if (args[0]?.type === 'probe.install') result.then(value => originalSend({ type: 'test.probe.result', result: value })).catch(error => originalSend({ type: 'test.probe.result', error: error.message })); return result; };\n`);
   manifest.content_scripts[0].js.unshift('test-content.js');
   if (browserName === 'firefox') manifest.background.scripts.push('test-reporter.js');
   else {

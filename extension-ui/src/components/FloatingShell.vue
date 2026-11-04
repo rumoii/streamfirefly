@@ -112,13 +112,16 @@ function beginPointer(event: PointerEvent, edge = "", launcher = false) {
   pointerCleanup?.(); pointerCleanup = cleanup;
   window.addEventListener("pointermove", move); window.addEventListener("pointerup", finish); window.addEventListener("pointercancel", cancel);
 }
+let keyRoot: Window | ShadowRoot = window;
 onMounted(async () => {
+  const root = shell.value?.getRootNode();
+  keyRoot = root instanceof ShadowRoot ? root : window;
   window.addEventListener("resize", onResize);
   window.visualViewport?.addEventListener("resize", onResize);
-  window.addEventListener("keydown", onKey, true);
+  keyRoot.addEventListener("keydown", onKey as EventListener, true);
   try { const stored = await extensionApi()?.storage?.local?.get(LAYOUT_KEY); if (!disposed && !interacted) { layout.value = parseLayout(stored?.[LAYOUT_KEY]); rect.value = clampRect(layout.value.panel || initialRect("panel", viewport.value.width, viewport.value.height), "panel", viewport.value.width, viewport.value.height); } } catch (_) {}
 });
-onBeforeUnmount(() => { disposed = true; pointerCleanup?.(); unlockScroll(); window.removeEventListener("resize", onResize); window.visualViewport?.removeEventListener("resize", onResize); window.removeEventListener("keydown", onKey, true); });
+onBeforeUnmount(() => { disposed = true; pointerCleanup?.(); unlockScroll(); window.removeEventListener("resize", onResize); window.visualViewport?.removeEventListener("resize", onResize); keyRoot.removeEventListener("keydown", onKey as EventListener, true); });
 defineExpose({ setMode, restore, mode });
 </script>
 

@@ -38,6 +38,9 @@ pub(crate) fn add_header_args(args: &mut Vec<String>, task: &Task, url: &str) {
         if !same_origin && crate::repository::is_sensitive_request_header(name) {
             continue;
         }
+        if !crate::request_headers::header_name_ok(name) || !crate::request_headers::header_value_ok(value) {
+            continue;
+        }
         args.push("--header".into());
         args.push(format!("{name}: {value}"));
     }
@@ -539,4 +542,46 @@ pub(crate) fn start_http_download(store: TaskRuntime, writer: Writer, task: Task
     // Parts left by an earlier paused run cannot be continued by a single connection.
     let _ = fs::remove_dir_all(parallel_part_dir(&output, &task.id));
     start_single_http_download(store, writer, task, output, probe.total);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn sample_task() -> Task {
+        serde_json::from_value(json!({
+            "id":"headers","url":"https://a.example/x.m3u8","title":"headers",
+            "state":"queued","progress":0,"output":null,"error":null,"mime":null,
+            "hls_selection":true,
+            "request_headers":{"referer":"https://a.example/page","user-agent":"Mozilla/5.0","origin":"https://a.example\r\nX-Evil: 1"}
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn add_header_args_keeps_tainted_and_cross_origin_headers_out() {
+        let task = sample_task();
+        let mut args = Vec::new();
+        add_header_args(&mut args, &task, "https://b.example/seg.ts");
+        assert!(args.contains(&"referer: https://a.example/page".to_string()));
+        assert!(!args.iter().any(|arg| arg.starts_with("origin:")));
+        assert!(args.contains(&"user-agent: Mozilla/5.0".to_string()));
+        let mut same = Vec::new();
+        add_header_args(&mut same, &task, "https://a.example/seg.ts");
+        assert!(same.contains(&"referer: https://a.example/page".to_string()));
+        assert!(!same.iter().any(|arg| arg.starts_with("origin:")));
+    }
+
+    #[test]
+    fn cross_origin_download_keeps_media_context_and_filters_restored_headers() {
+        let mut task = sample_task();
+        task.request_headers.insert("origin".into(), "https://a.example".into());
+        task.request_headers.insert("cookie".into(), "session=test".into());
+        task.request_headers.insert("X-Injected\r\nOther".into(), "value".into());
+        let mut args = Vec::new();
+        add_header_args(&mut args, &task, "https://b.example/seg.ts");
+        assert!(args.contains(&"origin: https://a.example".to_string()));
+        assert!(!args.iter().any(|arg| arg.starts_with("cookie:") || arg.contains('\r')));
+    }
 }

@@ -8,6 +8,18 @@ beforeEach(() => { storage.get.mockResolvedValue({}); storage.set.mockResolvedVa
 afterEach(() => { document.documentElement.style.overflow = ""; document.body.style.overflow = ""; vi.restoreAllMocks(); });
 
 describe("floating shell transitions", () => {
+  it("handles Escape inside a closed workspace without intercepting the webpage", async () => {
+    const host = document.createElement("div"); document.body.append(host);
+    const root = host.attachShadow({ mode: "closed" });
+    const container = document.createElement("div"); root.append(container);
+    const wrapper = mount(FloatingShell, { props: props(), attachTo: container });
+    wrapper.vm.setMode("workspace"); await flushPromises();
+    wrapper.get("section").element.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, composed: true, cancelable: true }));
+    expect(wrapper.vm.mode).toBe("panel");
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, composed: true }));
+    expect(wrapper.vm.mode).toBe("panel");
+    wrapper.unmount(); host.remove();
+  });
   it("locks scrolling only when maximized, restores geometry and cleans up on disposal", async () => {
     document.documentElement.style.overflow = "auto";
     document.body.style.overflow = "scroll";

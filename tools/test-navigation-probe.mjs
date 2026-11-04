@@ -142,7 +142,7 @@ test('closing a tab cancels a pending installation and late cleanup cannot recre
   assert.equal((await pending).ok, false);
   await flush();
   assert.equal(injected(f, 1).length, 0);
-  assert.equal(f.values['media-candidates-v2:1'], undefined);
+  assert.equal(f.values['media-candidates-v3:1'], undefined);
   assert.equal(f.runtime.sniffing.revision(1), 0);
 });
 

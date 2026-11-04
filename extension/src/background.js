@@ -12,6 +12,7 @@ import { createNative } from './native.js';
 import { createResources } from './resources.js';
 import { createPreview } from './preview.js';
 import { createWorkspace } from './workspace.js';
+import { sanitizePageCandidate } from './page-input.js';
 import { createSniffing } from './sniffing.js';
 import { createUpdateCheck } from './update-check.js';
 import { createDownloadBadge } from './download-badge.js';
@@ -47,8 +48,12 @@ const diagnostics = createDiagnostics(api, nativeRequestPromise, { captures: () 
 const outputTemplates = createOutputTemplates(api, evaluation.run);
 const updateCheck = createUpdateCheck(api);
 const requestHeadersById = new Map();
+const requestEpochs = new Map();
 const navigationCleanups = new Map();
 function beginNavigationCleanup(tabId, pageUrl, sameDocument = false) {
+  const epochs = requestEpochs.get(tabId) || { document: 0, navigation: 0 };
+  // Document changes invalidate old requests immediately, even while cleanup is queued.
+  if (!sameDocument) requestEpochs.set(tabId, { ...epochs, document: epochs.document + 1 });
   const previous = navigationCleanups.get(tabId);
   const entry = { previous, cancelled: false };
   entry.promise = Promise.resolve(previous?.promise).catch(() => {}).then(async () => {
@@ -58,6 +63,8 @@ function beginNavigationCleanup(tabId, pageUrl, sameDocument = false) {
       if (entry.cancelled || state.pageUrl && pageKey(state.pageUrl) === pageKey(pageUrl)) return;
       void capture.interrupted(tabId);
     }
+    const current = requestEpochs.get(tabId) || { document: 0, navigation: 0 };
+    requestEpochs.set(tabId, { ...current, navigation: current.navigation + 1 });
     await unmountWorkspace(tabId);
     if (entry.cancelled) return;
     await clearTab(tabId, pageUrl);
@@ -124,22 +131,33 @@ const requestHeaderOptions = ["requestHeaders", api.webRequest.OnBeforeSendHeade
 api.webRequest.onBeforeSendHeaders.addListener(details => {
   if (!sniffing.allowed(details.tabId)) return;
   const allowed = new Set(["referer", "user-agent", "cookie", "authorization", "origin"]);
-  requestHeadersById.set(details.requestId, { tabId: details.tabId, headers: Object.fromEntries((details.requestHeaders ?? []).filter(header => allowed.has(header.name.toLowerCase())).map(header => [header.name.toLowerCase(), header.value ?? ""])) });
+  // A closed tab can cancel navigation before this request receives any response.
+  const sourceContext = waitForNavigationCleanup(details.tabId).then(() => api.tabs.get(details.tabId)).then(() => loadTabState(details.tabId)).then(state => ({ sourceContextId: state.sourceContextId, revision: sniffing.revision(details.tabId) })).catch(() => null);
+  requestHeadersById.set(details.requestId, { tabId: details.tabId, epochs: requestEpochs.get(details.tabId) || { document: 0, navigation: 0 }, sourceContext, headers: Object.fromEntries((details.requestHeaders ?? []).filter(header => allowed.has(header.name.toLowerCase())).map(header => [header.name.toLowerCase(), header.value ?? ""])) });
 }, { urls: ["http://*/*", "https://*/*"] }, requestHeaderOptions);
 
 api.webRequest.onHeadersReceived.addListener(details => {
   if (!sniffing.hasActive() || details.tabId >= 0 && !sniffing.allowed(details.tabId)) { requestHeadersById.delete(details.requestId); return; }
-  void resolveRequestTabId(details).then(tabId => {
+  const pending = requestHeadersById.get(details.requestId);
+  void resolveRequestTabId(details).then(async tabId => {
     if (!sniffing.allowed(tabId)) return false;
+    const sourceContext = pending ? await pending.sourceContext : null;
+    await waitForNavigationCleanup(tabId).catch(error => console.warn("StreamFirefly request cleanup failed", error.message));
+    if (!sniffing.allowed(tabId)) return false;
+    await api.tabs.get(tabId);
+    const epochs = requestEpochs.get(tabId) || { document: 0, navigation: 0 };
+    const sourceContextId = (await loadTabState(tabId)).sourceContextId;
+    const stale = pending && (!sourceContext || pending.epochs.document !== epochs.document || pending.epochs.navigation !== epochs.navigation || sourceContext.revision !== sniffing.revision(tabId) || sourceContext.sourceContextId !== sourceContextId);
+    const observed = details.tabId >= 0 && pending?.tabId === details.tabId && !stale;
     const headers = Object.fromEntries((details.responseHeaders ?? []).map(header => [header.name.toLowerCase(), header.value ?? ""]));
     const mime = headers["content-type"]?.split(";", 1)[0] ?? "";
-    const requestHeaders = requestHeadersById.get(details.requestId)?.headers || {};
+    const requestHeaders = pending?.headers || {};
     const rangeSize = parseContentRange(headers["content-range"]);
     const contentLength = details.statusCode === 206 ? null : Number(headers["content-length"] ?? 0) || null;
-    const context = { requestHeaders, referer: requestHeaders.referer || null, contentDisposition: headers["content-disposition"] || null };
-    if (String(details.method || "GET").toUpperCase() !== "GET" || !mime || /json|text|javascript|xml|mpegurl|octet-stream/i.test(mime)) rememberRequestContext(tabId, details.url, context);
-    return addCandidate(tabId, { url: details.url, mime, size: rangeSize || contentLength, sizeSource: rangeSize ? "content-range" : contentLength ? "content-length" : null, ...context, source: "network", requestId: details.requestId, resourceType: details.type });
-  }).finally(() => requestHeadersById.delete(details.requestId));
+    const context = { requestHeaders, referer: requestHeaders.referer || null, contentDisposition: headers["content-disposition"] || null, sourceContextId, ...(observed ? { requestId: details.requestId } : {}) };
+    if (observed || String(details.method || "GET").toUpperCase() !== "GET" || !mime || /json|text|javascript|xml|mpegurl|octet-stream/i.test(mime)) rememberRequestContext(tabId, details.url, context);
+    return addCandidate(tabId, { url: details.url, mime, size: rangeSize || contentLength, sizeSource: rangeSize ? "content-range" : contentLength ? "content-length" : null, ...context, source: "network", resourceType: details.type }, sourceContextId);
+  }).catch(error => console.warn("StreamFirefly request observation failed", error.message)).finally(() => { if (requestHeadersById.get(details.requestId) === pending) requestHeadersById.delete(details.requestId); });
 }, { urls: ["http://*/*", "https://*/*"] }, ["responseHeaders"]);
 api.webRequest.onErrorOccurred.addListener(details => requestHeadersById.delete(details.requestId), { urls: ["http://*/*", "https://*/*"] });
 
@@ -156,6 +174,7 @@ api.webNavigation?.onHistoryStateUpdated?.addListener(details => {
 });
 
 api.tabs.onRemoved.addListener(tabId => {
+  requestEpochs.delete(tabId);
   void capture.restart.clear(tabId);
   const pending = navigationCleanups.get(tabId);
   for (let entry = pending; entry; entry = entry.previous) entry.cancelled = true;
@@ -385,7 +404,7 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   if (message?.type === "media.fetchText") {
-    fetchMediaText(sender.tab?.id ?? message.tabId, message.id, message.url, { restrictOrigin: message.restrictOrigin === true }).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
+    fetchMediaText(sender.tab?.id ?? message.tabId, message.id, message.url, { restrictOrigin: message.restrictOrigin === true, automatic: message.automatic === true, sourceContextId: message.sourceContextId }).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
     return true;
   }
   if (message?.type === "media.size.probe") {
@@ -401,8 +420,15 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message?.type === "media.pick.result") { finishPick(sender.tab?.id, message.pickId, message.pick).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message })); return true; }
   if (message?.type === "media.focus") { setPageFocus(sender.tab?.id, message.focus || {}).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message })); return true; }
-  // parents and userPicked are generated by the background itself; drop whatever the page claims.
-  if (message?.type === "media.add") { const { parents, userPicked, ...candidate } = message.candidate || {}; addCandidate(sender.tab?.id, { ...candidate, source: candidate.source || "dom" }).then(ok => sendResponse({ ok })).catch(error => sendResponse({ ok: false, error: error.message })); return true; }
+  // Page and DOM reports cannot supply background request evidence or execution metadata.
+  if (message?.type === "media.add") {
+    const candidate = sanitizePageCandidate(message.candidate);
+    if (!candidate) { sendResponse({ ok: false, error: "media_url_unsupported" }); return false; }
+    addCandidate(sender.tab?.id, { ...candidate, source: candidate.source || "dom" })
+      .then(result => typeof result === "string" ? sendResponse({ ok: false, error: result }) : sendResponse({ ok: result }))
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
   if (message?.type === "probe.install") {
     (async () => {
       await settings.ready;
