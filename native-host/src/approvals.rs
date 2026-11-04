@@ -259,7 +259,13 @@ mod tests {
 
     #[test]
     fn unc_prefix_is_stripped_from_keys() {
-        assert_eq!(normalize_key("\\\\?\\C:\\Tools\\X.exe"), "C:\\Tools\\X.exe");
+        let stripped = normalize_key("\\\\?\\C:\\Tools\\X.exe");
+        assert_eq!(stripped, normalize_key("C:\\Tools\\X.exe"));
+        assert!(!stripped.starts_with("\\\\?"));
+        #[cfg(windows)]
+        assert_eq!(stripped, "c:\\tools\\x.exe");
+        #[cfg(not(windows))]
+        assert_eq!(stripped, "C:\\Tools\\X.exe");
     }
 
     #[cfg(windows)]
