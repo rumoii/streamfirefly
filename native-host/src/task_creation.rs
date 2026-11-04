@@ -24,9 +24,10 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 use uuid::Uuid;
+use crate::lock::LockExt;
 
 pub(crate) fn create_task(store: &TaskRuntime, payload: &Value) -> Result<Task, &'static str> {
-    let _creation = store.creation.lock().unwrap();
+    let _creation = store.creation.lock_or_recover();
     if crate::runtime::host_exiting(store) {
         return Err("task_store_unavailable");
     }
@@ -116,7 +117,7 @@ pub(crate) fn create_task(store: &TaskRuntime, payload: &Value) -> Result<Task, 
         Some(raw) => safe_file_stem(raw).ok_or("invalid_file_name")?,
         None => String::new(),
     };
-    let mut tasks = store.repository.tasks.lock().unwrap();
+    let mut tasks = store.repository.tasks.lock_or_recover();
     let mut reserved_paths: Vec<PathBuf> = Vec::new();
     let output = if payload["fileName"].is_string() {
         unique_output_path_with(&dir, &custom_name, &ext, &tasks, &reserved_paths)
@@ -239,7 +240,7 @@ pub(crate) fn create_task(store: &TaskRuntime, payload: &Value) -> Result<Task, 
         source_candidate_id: payload["candidateId"].as_str().map(str::to_string),
         inline_manifest,
         hls_plan,
-        network: store.network.lock().unwrap().clone(),
+        network: store.network.lock_or_recover().clone(),
     };
     if let Some(plan) = &task.hls_plan {
         let checkpoint = new_checkpoint(&task.id, plan).map_err(|_| "hls_checkpoint_invalid")?;

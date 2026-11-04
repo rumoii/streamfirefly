@@ -1,4 +1,5 @@
 use crate::model::Task;
+use crate::lock::LockExt;
 #[cfg(test)]
 use crate::runtime::load_store;
 use crate::runtime::TaskRuntime;
@@ -13,16 +14,16 @@ use uuid::Uuid;
 const MAX_ACTIVE_TASKS: usize = 2;
 
 pub(crate) fn scheduler_active(store: &TaskRuntime, id: &str) -> bool {
-    store.scheduler.lock().unwrap().running.contains(id)
+    store.scheduler.lock_or_recover().running.contains(id)
 }
 
 pub(crate) fn scheduler_full(store: &TaskRuntime) -> bool {
-    let scheduler = store.scheduler.lock().unwrap();
+    let scheduler = store.scheduler.lock_or_recover();
     scheduler.running.len() >= MAX_ACTIVE_TASKS || !scheduler.pending.is_empty()
 }
 
 pub(crate) fn remove_pending(store: &TaskRuntime, id: &str) -> bool {
-    let mut scheduler = store.scheduler.lock().unwrap();
+    let mut scheduler = store.scheduler.lock_or_recover();
     if scheduler.running.contains(id) {
         return false;
     }
@@ -35,7 +36,7 @@ pub(crate) fn start_download(store: TaskRuntime, writer: Writer, task: Task) {
         return;
     }
     {
-        let mut scheduler = store.scheduler.lock().unwrap();
+        let mut scheduler = store.scheduler.lock_or_recover();
         if scheduler.running.contains(&task.id) || scheduler.pending.contains(&task.id) {
             return;
         }
@@ -72,7 +73,7 @@ fn pump(store: &TaskRuntime, writer: &Writer) {
     if crate::runtime::host_exiting(store) {
         return;
     }
-    let mut scheduler = store.scheduler.lock().unwrap();
+    let mut scheduler = store.scheduler.lock_or_recover();
     while scheduler.running.len() < MAX_ACTIVE_TASKS {
         let Some(id) = scheduler.pending.pop_front() else {
             break;

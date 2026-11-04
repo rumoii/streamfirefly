@@ -15,6 +15,7 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+use crate::lock::LockExt;
 /// Room kept beside the merged copy for container overhead and the rest of the system.
 const SPACE_MARGIN: u64 = 256 * 1024 * 1024;
 /// A merge that makes no progress for this long is treated as stuck.
@@ -41,7 +42,7 @@ pub(crate) fn clear_finalization_error(error: &mut Option<String>) {
 
 pub(crate) fn finalize(session: &Arc<Mutex<Session>>) {
     let (directory, tracks) = {
-        let current = session.lock().unwrap();
+        let current = session.lock_or_recover();
         record(
             &current,
             "finalization-started",
@@ -75,7 +76,7 @@ pub(crate) fn finalize(session: &Arc<Mutex<Session>>) {
             return;
         }
         {
-            let mut current = session.lock().unwrap();
+            let mut current = session.lock_or_recover();
             for (track, inspection) in tracks.iter().zip(inspections) {
                 if let Some(saved) = current.snapshot.tracks.iter_mut().find(|saved| saved.id == track.id) {
                     saved.initialized = inspection.as_ref().is_ok_and(|value| value.initialized);
@@ -96,7 +97,7 @@ pub(crate) fn finalize(session: &Arc<Mutex<Session>>) {
         // The merged copy is written next to the raw tracks; exporting it later is a rename on the same volume.
         let free = free_bytes(&directory);
         {
-            let mut current = session.lock().unwrap();
+            let mut current = session.lock_or_recover();
             current.runtime.free_bytes = free;
             if let Some(missing) = shortfall(total + SPACE_MARGIN, free) {
                 record(&current, "merge-disk-insufficient", json!({"generation":generation,"neededBytes":total + SPACE_MARGIN,"freeBytes":free,"missingBytes":missing}));
@@ -110,14 +111,14 @@ pub(crate) fn finalize(session: &Arc<Mutex<Session>>) {
             current.runtime.merge = Some(MergeProgress { segment: index + 1, segments: count, processed_bytes: 0, total_bytes: total, idle_seconds: 0 });
         }
         let merged = merge(&directory, &active, &temporary, session);
-        session.lock().unwrap().runtime.merge = None;
+        session.lock_or_recover().runtime.merge = None;
         let replaced = if merged.is_ok() {
             Some(replace_file(&temporary, &output))
         } else {
             None
         };
         record(
-            &session.lock().unwrap(),
+            &session.lock_or_recover(),
             "output-replacement",
             json!({"generation":generation,"attempted":merged.is_ok(),"error":replaced.as_ref().and_then(|result| result.as_ref().err()).map(ToString::to_string)}),
         );
@@ -131,7 +132,7 @@ pub(crate) fn finalize(session: &Arc<Mutex<Session>>) {
             }
         }
     }
-    let mut current = session.lock().unwrap();
+    let mut current = session.lock_or_recover();
     if current.snapshot.state == "interrupted" {
         return;
     }
@@ -188,7 +189,7 @@ fn merge(directory: &Path, tracks: &[Track], output: &Path, session: &Arc<Mutex<
         Ok(child) => child,
         Err(error) => {
             record(
-                &session.lock().unwrap(),
+                &session.lock_or_recover(),
                 "merge-start-failed",
                 json!({"error":error.to_string()}),
             );
@@ -205,10 +206,10 @@ fn merge(directory: &Path, tracks: &[Track], output: &Path, session: &Arc<Mutex<
         if let Ok(mut current) = reported.lock() { *current = (written, Instant::now()); }
     })) {
         Ok(reader) => reader,
-        Err(error) => { let _ = child.kill(); let _ = child.wait(); record(&session.lock().unwrap(), "progress-reader-start-failed", json!({"error":error.to_string()})); return Err("capture_merge_failed"); }
+        Err(error) => { let _ = child.kill(); let _ = child.wait(); record(&session.lock_or_recover(), "progress-reader-start-failed", json!({"error":error.to_string()})); return Err("capture_merge_failed"); }
     };
     record(
-        &session.lock().unwrap(),
+        &session.lock_or_recover(),
         "merge-started",
         json!({"pid":child.id(),"generation":tracks[0].generation,"timeoutMs":ceiling.as_millis(),"stallMs":STALL_LIMIT.as_millis()}),
     );
@@ -224,7 +225,7 @@ fn merge(directory: &Path, tracks: &[Track], output: &Path, session: &Arc<Mutex<
             let _ = child.wait();
             let _ = progress.join();
             record(
-                &session.lock().unwrap(),
+                &session.lock_or_recover(),
                 "stderr-reader-start-failed",
                 json!({"error":error.to_string()}),
             );
@@ -239,7 +240,7 @@ fn merge(directory: &Path, tracks: &[Track], output: &Path, session: &Arc<Mutex<
             let _ = child.kill();
             let _ = child.wait();
             record(
-                &session.lock().unwrap(),
+                &session.lock_or_recover(),
                 "merge-interrupted",
                 json!({"elapsedMs":started.elapsed().as_millis()}),
             );
@@ -248,7 +249,7 @@ fn merge(directory: &Path, tracks: &[Track], output: &Path, session: &Arc<Mutex<
         match child.try_wait() {
             Ok(Some(status)) => {
                 record(
-                    &session.lock().unwrap(),
+                    &session.lock_or_recover(),
                     "merge-exited",
                     json!({"exitCode":status.code(),"success":status.success(),"elapsedMs":started.elapsed().as_millis()}),
                 );
@@ -258,14 +259,14 @@ fn merge(directory: &Path, tracks: &[Track], output: &Path, session: &Arc<Mutex<
                 let _ = child.kill();
                 let _ = child.wait();
                 record(
-                    &session.lock().unwrap(),
+                    &session.lock_or_recover(),
                     "merge-wait-failed",
                     json!({"error":error.to_string()}),
                 );
                 break Err("capture_merge_failed");
             }
             Ok(None) => {
-                let (written, last) = *advance.lock().unwrap();
+                let (written, last) = *advance.lock_or_recover();
                 let idle = last.elapsed();
                 let stopped = if stalled(idle) {
                     Some(("merge-stalled", "capture_merge_stalled"))
@@ -278,13 +279,13 @@ fn merge(directory: &Path, tracks: &[Track], output: &Path, session: &Arc<Mutex<
                     let _ = child.kill();
                     let _ = child.wait();
                     record(
-                        &session.lock().unwrap(),
+                        &session.lock_or_recover(),
                         stage,
                         json!({"elapsedMs":started.elapsed().as_millis(),"idleMs":idle.as_millis(),"writtenBytes":written}),
                     );
                     break Err(error);
                 }
-                if let Some(merge) = session.lock().unwrap().runtime.merge.as_mut() {
+                if let Some(merge) = session.lock_or_recover().runtime.merge.as_mut() {
                     merge.processed_bytes = written;
                     merge.idle_seconds = idle.as_secs();
                 }
@@ -296,7 +297,7 @@ fn merge(directory: &Path, tracks: &[Track], output: &Path, session: &Arc<Mutex<
         Ok(Ok(())) => {}
         outcome => {
             record(
-                &session.lock().unwrap(),
+                &session.lock_or_recover(),
                 "stderr-read-failed",
                 json!({"error":format!("{outcome:?}")}),
             );
@@ -306,7 +307,7 @@ fn merge(directory: &Path, tracks: &[Track], output: &Path, session: &Arc<Mutex<
     let out_time_us = progress.join().ok().and_then(Result::ok).unwrap_or(0);
     let expected: Vec<_> = tracks.iter().map(|track| if track.mime.starts_with("video/") { 1 } else { 2 }).collect();
     let container_valid = matches(output, &expected);
-    record(&session.lock().unwrap(), "output-validation", json!({"exitSuccess":outcome.is_ok(),"outTimeUs":out_time_us,"containerValid":container_valid,"expectedStreams":expected.len()}));
+    record(&session.lock_or_recover(), "output-validation", json!({"exitSuccess":outcome.is_ok(),"outTimeUs":out_time_us,"containerValid":container_valid,"expectedStreams":expected.len()}));
     outcome?;
     if out_time_us > 0 && container_valid { Ok(()) } else { Err("capture_merge_failed") }
 }

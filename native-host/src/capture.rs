@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use uuid::Uuid;
+use crate::lock::LockExt;
 
 pub(crate) struct CaptureManager {
     sessions: Mutex<HashMap<String, Arc<Mutex<Session>>>>,
@@ -188,7 +189,7 @@ impl CaptureManager {
 
     fn track_worker(&self, worker: thread::JoinHandle<()>) {
         let finished = {
-            let mut workers = self.workers.lock().unwrap();
+            let mut workers = self.workers.lock_or_recover();
             let mut finished = Vec::new();
             let mut index = 0;
             while index < workers.len() {
@@ -209,7 +210,7 @@ impl CaptureManager {
     }
 
     pub(crate) fn list(&self) -> Value {
-        let sessions = self.sessions.lock().unwrap();
+        let sessions = self.sessions.lock_or_recover();
         let mut snapshots = sessions
             .values()
             .filter_map(|session| {

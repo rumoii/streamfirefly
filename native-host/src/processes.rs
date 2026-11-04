@@ -8,6 +8,7 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
+use crate::lock::LockExt;
 
 pub(crate) fn spawn_process(store: &TaskRuntime, id: &str, command: &mut Command) -> std::io::Result<Arc<Mutex<Child>>> {
     let mut processes = store.processes.lock().map_err(|_| std::io::Error::other("process_registry_poisoned"))?;
@@ -41,7 +42,7 @@ pub(crate) fn shutdown_processes(store: &TaskRuntime) -> Result<(), String> {
 }
 
 pub(crate) fn unregister_process(store: &TaskRuntime, id: &str, process: &Arc<Mutex<Child>>) {
-    let mut processes = store.processes.lock().unwrap();
+    let mut processes = store.processes.lock_or_recover();
     if let Some(items) = processes.get_mut(id) {
         items.retain(|item| !Arc::ptr_eq(item, process));
         if items.is_empty() {
@@ -51,31 +52,31 @@ pub(crate) fn unregister_process(store: &TaskRuntime, id: &str, process: &Arc<Mu
 }
 
 pub(crate) fn unregister_all_processes(store: &TaskRuntime, id: &str) {
-    store.processes.lock().unwrap().remove(id);
+    store.processes.lock_or_recover().remove(id);
 }
 
 pub(crate) fn clear_cancellation(store: &TaskRuntime, id: &str) {
-    store.cancellations.lock().unwrap().remove(id);
+    store.cancellations.lock_or_recover().remove(id);
 }
 
 pub(crate) fn clear_pause(store: &TaskRuntime, id: &str) {
-    store.pauses.lock().unwrap().remove(id);
+    store.pauses.lock_or_recover().remove(id);
 }
 
 pub(crate) fn clear_stop(store: &TaskRuntime, id: &str) {
-    store.stops.lock().unwrap().remove(id);
+    store.stops.lock_or_recover().remove(id);
 }
 
 pub(crate) fn pause_requested(store: &TaskRuntime, id: &str) -> bool {
-    store.pauses.lock().unwrap().contains(id)
+    store.pauses.lock_or_recover().contains(id)
 }
 
 pub(crate) fn cancel_requested(store: &TaskRuntime, id: &str) -> bool {
-    store.cancellations.lock().unwrap().contains_key(id)
+    store.cancellations.lock_or_recover().contains_key(id)
 }
 
 pub(crate) fn stop_requested(store: &TaskRuntime, id: &str) -> bool {
-    store.stops.lock().unwrap().contains(id)
+    store.stops.lock_or_recover().contains(id)
 }
 
 pub(crate) fn mark_stopped(store: &TaskRuntime, writer: &Writer, id: &str) {

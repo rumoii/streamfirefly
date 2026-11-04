@@ -13,6 +13,13 @@ pub(crate) fn task_work_root_for_state(path: &Path) -> PathBuf {
     path.parent().unwrap_or(Path::new(".")).join("tasks")
 }
 
+pub(crate) fn approved_programs_path() -> PathBuf {
+    state_path()
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join("approved_programs.json")
+}
+
 pub(crate) fn checkpoint_path_for_state(path: &Path, id: &str) -> PathBuf {
     task_work_root_for_state(path)
         .join(id)

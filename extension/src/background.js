@@ -292,7 +292,7 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     Promise.resolve().then(captureRecords[message.type]).then(value => sendResponse({ ok: true, value }), error => sendResponse({ ok: false, error: error.message }));
     return true;
   }
-  const administrative = ["extraction.get", "extraction.save", "extraction.test", "discovery.get", "discovery.save", "discovery.test", "template.render", "templates.get", "templates.save", "integration.preview", "integration.get", "integration.save", "integration.test", "integration.invoke", "integration.secret", "integration.intent", "capture.sources", "capture.open", "capture.close", "capture.restart", "capture.restart.status", "capture.replay", "capture.speed", "diagnostics.export"];
+  const administrative = ["extraction.get", "extraction.save", "extraction.test", "discovery.get", "discovery.save", "discovery.test", "template.render", "templates.get", "templates.save", "integration.preview", "integration.get", "integration.save", "integration.test", "integration.invoke", "integration.approve", "integration.revoke", "integration.approved", "integration.secret", "integration.intent", "capture.sources", "capture.open", "capture.close", "capture.restart", "capture.restart.status", "capture.replay", "capture.speed", "diagnostics.export"];
   if (administrative.includes(message?.type)) {
     if (typeof sender.url !== "string" || sender.url.split(/[?#]/, 1)[0] !== api.runtime.getURL("dist/app.html")) { sendResponse({ ok: false, error: "请从扩展设置页执行此操作" }); return false; }
     const operations = {
@@ -311,6 +311,9 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
       "integration.test": () => integrations.test(message.payload),
       "integration.invoke": () => integrations.dispatch({ ...message.payload, protocolTabId: sender.tab?.id }),
       "integration.secret": () => integrations.setSecret(message.payload.profileId, message.payload.secret),
+      "integration.approve": () => integrations.approve(message.payload),
+      "integration.revoke": () => integrations.revoke(message.payload),
+      "integration.approved": () => integrations.approved(message.payload),
       "integration.intent": () => dispatchIntents.get(message.payload.id),
       "capture.sources": () => capture.sources(message.payload.tabId),
       "capture.restart": () => capture.restart.begin(message.payload),

@@ -50,6 +50,7 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 use uuid::Uuid;
+use crate::lock::LockExt;
 
 #[derive(Clone)]
 pub(crate) struct HlsDownloadJob {
@@ -93,7 +94,7 @@ pub(crate) fn load_hls_key(
         .map(|value| value.value.as_str())
         .or(specification.uri.as_deref())
         .ok_or_else(|| "hls_key_uri_missing".to_string())?;
-    if let Some(value) = cache.lock().unwrap().get(url).copied() {
+    if let Some(value) = cache.lock_or_recover().get(url).copied() {
         return Ok(value);
     }
     let key_file = work_dir.join(format!("key-{}.download", Uuid::new_v4()));
@@ -106,7 +107,7 @@ pub(crate) fn load_hls_key(
     let key: [u8; 16] = bytes
         .try_into()
         .map_err(|_| "hls_key_length_invalid".to_string())?;
-    cache.lock().unwrap().insert(url.into(), key);
+    cache.lock_or_recover().insert(url.into(), key);
     Ok(key)
 }
 
@@ -785,7 +786,7 @@ fn hls_checkpoint_round(
     }
     let checkpoint = Arc::new(Mutex::new(checkpoint));
     let jobs = {
-        let mut checkpoint = checkpoint.lock().unwrap();
+        let mut checkpoint = checkpoint.lock_or_recover();
         let jobs = checkpoint_jobs(&mut checkpoint, &work_dir);
         if let Err(error) = save_checkpoint(&checkpoint_file, &checkpoint) {
             update(&store, &writer, &task.id, |current| {
@@ -821,7 +822,7 @@ fn hls_checkpoint_round(
             &key_cache,
         );
         {
-            let mut checkpoint = checkpoint.lock().unwrap();
+            let mut checkpoint = checkpoint.lock_or_recover();
             apply_hls_result(&mut checkpoint, &result);
             if let Err(error) = save_checkpoint(&checkpoint_file, &checkpoint) {
                 update(&store, &writer, &task.id, |current| {
@@ -840,7 +841,7 @@ fn hls_checkpoint_round(
             return None;
         }
         if stop_requested(&store, &task.id) {
-            let checkpoint = checkpoint.lock().unwrap().clone();
+            let checkpoint = checkpoint.lock_or_recover().clone();
             return save_stopped_hls_round(&store, &writer, &task, &output, checkpoint, &work_dir);
         }
         if let Some(error) = result.error {
@@ -885,7 +886,7 @@ fn hls_checkpoint_round(
     let (sender, receiver) = mpsc::channel();
     let worker_count = usize::from(task.download_threads)
         .max(1)
-        .min(queue.lock().unwrap().len().max(1));
+        .min(queue.lock_or_recover().len().max(1));
     update(&store, &writer, &task.id, |current| {
         current.state = "running".into();
         current.phase = "downloading_segments".into();
@@ -908,7 +909,7 @@ fn hls_checkpoint_round(
             if stop_requested(&store, &task.id) {
                 break;
             }
-            let job = queue.lock().unwrap().pop_front();
+            let job = queue.lock_or_recover().pop_front();
             let Some(job) = job else { break };
             if abort.load(Ordering::Relaxed) {
                 break;
@@ -950,7 +951,7 @@ fn hls_checkpoint_round(
         let terminal_result = result.error.is_some();
         let last_result = received_results == expected_results;
         {
-            let mut checkpoint = checkpoint.lock().unwrap();
+            let mut checkpoint = checkpoint.lock_or_recover();
             apply_hls_result(&mut checkpoint, &result);
             dirty_results += 1;
             if dirty_results >= 16
@@ -993,7 +994,7 @@ fn hls_checkpoint_round(
         let _ = worker.join();
     }
     {
-        let checkpoint = checkpoint.lock().unwrap();
+        let checkpoint = checkpoint.lock_or_recover();
         if dirty_results > 0 {
             if let Err(error) = save_checkpoint(&checkpoint_file, &checkpoint) {
                 checkpoint_failure.get_or_insert_with(|| format!("hls_checkpoint_save_failed:{error}"));
@@ -1027,7 +1028,7 @@ fn hls_checkpoint_round(
         return None;
     }
     if stop_requested(&store, &task.id) {
-        let checkpoint = checkpoint.lock().unwrap().clone();
+        let checkpoint = checkpoint.lock_or_recover().clone();
         return save_stopped_hls_round(&store, &writer, &task, &output, checkpoint, &work_dir);
     }
     if let Some(error) = failure {
@@ -1064,7 +1065,7 @@ fn hls_checkpoint_round(
     }
     if task.live_recording && !stop_requested(&store, &task.id) {
         let poll_seconds = {
-            let checkpoint = checkpoint.lock().unwrap();
+            let checkpoint = checkpoint.lock_or_recover();
             let video = checkpoint.tracks.iter().find(|track| track.kind == "video");
             if video.is_some_and(|track| track.end_list) {
                 0
@@ -1081,7 +1082,7 @@ fn hls_checkpoint_round(
             }
         };
         if poll_seconds > 0 {
-            let checkpoint_value = checkpoint.lock().unwrap().clone();
+            let checkpoint_value = checkpoint.lock_or_recover().clone();
             let video = checkpoint_value
                 .tracks
                 .iter()
@@ -1110,7 +1111,7 @@ fn hls_checkpoint_round(
             }
             if !stop_requested(&store, &task.id) {
                 let refreshed = {
-                    let mut checkpoint = checkpoint.lock().unwrap();
+                    let mut checkpoint = checkpoint.lock_or_recover();
                     let result = refresh_live_checkpoint(&store, &task, &mut checkpoint, &work_dir);
                     if cancel_requested(&store, &task.id) {
                         mark_stopped(&store, &writer, &task.id);
@@ -1137,7 +1138,7 @@ fn hls_checkpoint_round(
                     return None;
                 }
                 if stop_requested(&store, &task.id) {
-                    let checkpoint = checkpoint.lock().unwrap().clone();
+                    let checkpoint = checkpoint.lock_or_recover().clone();
                     return save_stopped_hls_round(&store, &writer, &task, &output, checkpoint, &work_dir);
                 }
                 if let Err(error) = refreshed {
@@ -1190,7 +1191,7 @@ fn hls_checkpoint_round(
             return Some((next_task, Some(runtime_plan)));
         }
     }
-    let checkpoint_value = checkpoint.lock().unwrap().clone();
+    let checkpoint_value = checkpoint.lock_or_recover().clone();
     if stop_requested(&store, &task.id) {
         return save_stopped_hls_round(&store, &writer, &task, &output, checkpoint_value, &work_dir);
     }

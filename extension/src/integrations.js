@@ -47,6 +47,33 @@ export function createIntegrations(api, resources, nativeRequest, evaluate) {
     catch (error) { receipt.state = error.definitive ? "failed" : "unknown"; receipt.error = toolError(error.message) + (receipt.state === "unknown" ? " 结果未知，不会自动重试。" : ""); }
     await persist(); return structuredClone(receipt);
   }
+  async function approve(payload) {
+    await ready;
+    if (loadError) throw new Error(loadError);
+    const executable = payload?.executable;
+    if (typeof executable !== "string" || !executable.trim()) throw new Error("程序路径无效");
+    const result = await nativeRequest("integration.approve", { executable: executable.trim() });
+    if (!result?.ok) throw new Error(toolError(result?.error || "approval_failed"));
+    return result.value;
+  }
+  async function revoke(payload) {
+    await ready;
+    if (loadError) throw new Error(loadError);
+    const executable = payload?.executable;
+    if (typeof executable !== "string" || !executable.trim()) throw new Error("程序路径无效");
+    const result = await nativeRequest("integration.revoke", { executable: executable.trim() });
+    if (!result?.ok) throw new Error(toolError(result?.error || "approval_failed"));
+    return result.value;
+  }
+  async function approved(payload) {
+    await ready;
+    if (loadError) throw new Error(loadError);
+    const executable = payload?.executable;
+    if (typeof executable !== "string" || !executable.trim()) throw new Error("程序路径无效");
+    const result = await nativeRequest("integration.approved", { executable: executable.trim() });
+    if (!result?.ok) throw new Error(toolError(result?.error || "approval_query_failed"));
+    return Boolean(result.value?.approved);
+  }
   async function read() { await ready; return { config: structuredClone(config), receipts: [...receipts.values()].map(item => ({ ...item })), error: loadError }; }
   async function save(input) { await ready; if (loadError) throw new Error(loadError); const next = validateIntegrations(input); await api.storage.local.set({ integrationConfig: next }); for (const id of secrets.keys()) { const before = config.profiles.find(profile => profile.id === id); const after = next.profiles.find(profile => profile.id === id); if (!after || before?.endpoint !== after.endpoint || before?.kind !== after.kind) secrets.delete(id); } config = next; return read(); }
   async function test(input) {
@@ -73,5 +100,5 @@ export function createIntegrations(api, resources, nativeRequest, evaluate) {
     }
   }
   async function preview(payload) { const profile = await profileFor(payload.profileId); const { values } = await valuesFor(payload, profile); for (const field of ["cookie", "authorization", "token"]) if (values[field]) values[field] = "[已授权，预览隐藏]"; return prepareIntegrationRequest(profile, values, evaluate); }
-  return { read, save, dispatch, preview, test, autoSend, setSecret(id, secret) { if (typeof secret !== "string" || secret.length > 4096 || /[\r\n\0]/.test(secret)) throw new Error("凭据无效"); secrets.set(id, secret); } };
+  return { read, save, dispatch, preview, test, autoSend, approve, revoke, approved, setSecret(id, secret) { if (typeof secret !== "string" || secret.length > 4096 || /[\r\n\0]/.test(secret)) throw new Error("凭据无效"); secrets.set(id, secret); } };
 }
