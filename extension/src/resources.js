@@ -49,6 +49,7 @@ async function loadTabState(tabId) {
   if (candidatesByTab.has(tabId)) return candidatesByTab.get(tabId);
   let stored;
   try { stored = (await api.storage.session.get(stateKey(tabId)))[stateKey(tabId)]; } catch (_) {}
+  if (candidatesByTab.has(tabId)) return candidatesByTab.get(tabId);
   const state = stored?.schemaVersion === STATE_VERSION && typeof stored.sourceContextId === "string" && stored.sourceContextId && Array.isArray(stored.candidates)
     ? { ...stored, tabId, paused: Boolean(stored.paused), resourceViewState: normalizeResourceViewState(stored.resourceViewState), candidates: new Map(stored.candidates.filter(item => item?.id && item?.url).map(item => [item.id, item])) }
     : emptyState(tabId);
@@ -203,7 +204,9 @@ function mergeCandidate(existing, item) {
   const itemSizePriority = item?.sizeSource === "content-range" ? 2 : item?.sizeSource === "content-length" ? 1 : 0;
   if (existing?.size && (existingSizePriority > itemSizePriority || existingSizePriority === itemSizePriority && existing.size > (item?.size || 0))) { merged.size = existing.size; merged.sizeSource = existing.sizeSource; }
   if (existing?.contentDisposition && !item?.contentDisposition) merged.contentDisposition = existing.contentDisposition;
-  if (existing?.requestHeaders && (!item?.requestHeaders || !Object.keys(item.requestHeaders).length)) merged.requestHeaders = existing.requestHeaders;
+  if (existing?.requestHeaders && !item?.requestId && (!item?.requestHeaders || !Object.keys(item.requestHeaders).length)) merged.requestHeaders = existing.requestHeaders;
+  // Replacement headers without evidence must not borrow the previous request's ID.
+  if (!item?.requestId && item?.requestHeaders && Object.keys(item.requestHeaders).length) delete merged.requestId;
   if (existing?.inlineManifest && !item?.inlineManifest) merged.inlineManifest = existing.inlineManifest;
   if (item?.poster && item.poster !== existing?.poster && !item.posterSource) delete merged.posterSource;
   return merged;
@@ -529,7 +532,7 @@ async function readBoundedText(response, maxBytes) {
   }
 }
 
-/** Automatic probes use the target's own request evidence; explicit reads use candidate context. */
+/** Automatic HLS children may inherit same-origin master evidence; explicit reads use candidate context. */
 async function prepareOwnedFetch(tabId, id, requestedUrl, options = {}) {
   const state = await loadTabState(tabId);
   if (options.automatic && options.sourceContextId && options.sourceContextId !== state.sourceContextId) return { ok: false, error: "media_context_stale" };
@@ -544,24 +547,26 @@ async function prepareOwnedFetch(tabId, id, requestedUrl, options = {}) {
   let ownerOrigin;
   try { ownerOrigin = new URL(owner.url).origin; } catch (_) {}
   const sameOrigin = url.origin === ownerOrigin;
-  // Only background webRequest handlers can supply requestId. Each initial automatic URL
-  // needs its own evidence; redirects retain the browser's existing behavior.
+  // Only background webRequest handlers can supply requestId. Exact target evidence wins;
+  // same-origin HLS children can inherit a non-inline master's evidence.
   const observed = state.candidates.get(canonicalize(url.href));
   const recent = requestContextFor(tabId, { url: url.href }, state.sourceContextId);
-  const evidence = observed?.requestId ? observed : recent?.requestId ? recent : null;
+  const evidence = observed?.requestId ? observed : recent?.requestId ? recent : owner.type === "hls" && sameOrigin && owner.requestId && !owner.inlineManifest ? owner : null;
   const allowCredentials = options.automatic ? Boolean(evidence) && (options.restrictOrigin !== true || sameOrigin) : sameOrigin;
   const requestOwner = options.automatic && evidence ? evidence : owner;
   const allowPageHeaders = options.restrictOrigin !== true || sameOrigin;
   const headers = new Headers();
   const pageHeaders = {};
+  let hasCookie = false;
   for (const [name, value] of Object.entries(requestOwner.requestHeaders || {})) {
     const key = name.toLowerCase();
     if (typeof value !== "string" || !value) continue;
     if (key === "authorization" && allowCredentials) headers.set(name, value);
+    else if (key === "cookie") hasCookie = true;
     else if (["origin", "referer"].includes(key) && allowPageHeaders) pageHeaders[key] = value;
   }
   if (allowPageHeaders && !pageHeaders.referer && /^https?:/i.test(owner.referer || owner.pageUrl || "")) pageHeaders.referer = owner.referer || owner.pageUrl;
-  return { ok: true, owner, url, headers, pageHeaders, credentials: allowCredentials ? "include" : "omit" };
+  return { ok: true, owner, url, headers, pageHeaders, credentials: allowCredentials && (!options.automatic || hasCookie) ? "include" : "omit" };
 }
 
 async function fetchMediaText(tabId, id, requestedUrl, options = {}) {

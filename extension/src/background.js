@@ -51,6 +51,9 @@ const requestHeadersById = new Map();
 const requestEpochs = new Map();
 const navigationCleanups = new Map();
 function beginNavigationCleanup(tabId, pageUrl, sameDocument = false) {
+  const epochs = requestEpochs.get(tabId) || { document: 0, navigation: 0 };
+  // Document changes invalidate old requests immediately, even while cleanup is queued.
+  if (!sameDocument) requestEpochs.set(tabId, { ...epochs, document: epochs.document + 1 });
   const previous = navigationCleanups.get(tabId);
   const entry = { previous, cancelled: false };
   entry.promise = Promise.resolve(previous?.promise).catch(() => {}).then(async () => {
@@ -60,7 +63,8 @@ function beginNavigationCleanup(tabId, pageUrl, sameDocument = false) {
       if (entry.cancelled || state.pageUrl && pageKey(state.pageUrl) === pageKey(pageUrl)) return;
       void capture.interrupted(tabId);
     }
-    requestEpochs.set(tabId, (requestEpochs.get(tabId) || 0) + 1);
+    const current = requestEpochs.get(tabId) || { document: 0, navigation: 0 };
+    requestEpochs.set(tabId, { ...current, navigation: current.navigation + 1 });
     await unmountWorkspace(tabId);
     if (entry.cancelled) return;
     await clearTab(tabId, pageUrl);
@@ -128,8 +132,8 @@ api.webRequest.onBeforeSendHeaders.addListener(details => {
   if (!sniffing.allowed(details.tabId)) return;
   const allowed = new Set(["referer", "user-agent", "cookie", "authorization", "origin"]);
   // A closed tab can cancel navigation before this request receives any response.
-  const sourceContext = waitForNavigationCleanup(details.tabId).then(() => loadTabState(details.tabId)).then(state => state.sourceContextId).catch(() => null);
-  requestHeadersById.set(details.requestId, { tabId: details.tabId, epoch: requestEpochs.get(details.tabId) || 0, revision: sniffing.revision(details.tabId), sourceContext, headers: Object.fromEntries((details.requestHeaders ?? []).filter(header => allowed.has(header.name.toLowerCase())).map(header => [header.name.toLowerCase(), header.value ?? ""])) });
+  const sourceContext = waitForNavigationCleanup(details.tabId).then(() => api.tabs.get(details.tabId)).then(() => loadTabState(details.tabId)).then(state => ({ sourceContextId: state.sourceContextId, revision: sniffing.revision(details.tabId) })).catch(() => null);
+  requestHeadersById.set(details.requestId, { tabId: details.tabId, epochs: requestEpochs.get(details.tabId) || { document: 0, navigation: 0 }, sourceContext, headers: Object.fromEntries((details.requestHeaders ?? []).filter(header => allowed.has(header.name.toLowerCase())).map(header => [header.name.toLowerCase(), header.value ?? ""])) });
 }, { urls: ["http://*/*", "https://*/*"] }, requestHeaderOptions);
 
 api.webRequest.onHeadersReceived.addListener(details => {
@@ -137,10 +141,14 @@ api.webRequest.onHeadersReceived.addListener(details => {
   const pending = requestHeadersById.get(details.requestId);
   void resolveRequestTabId(details).then(async tabId => {
     if (!sniffing.allowed(tabId)) return false;
-    const sourceContextId = pending ? await pending.sourceContext : (await loadTabState(tabId)).sourceContextId;
-    if (pending && (pending.epoch !== (requestEpochs.get(tabId) || 0) || pending.revision !== sniffing.revision(tabId))) return false;
-    if ((await loadTabState(tabId)).sourceContextId !== sourceContextId) return false;
-    const observed = details.tabId >= 0 && pending?.tabId === details.tabId;
+    const sourceContext = pending ? await pending.sourceContext : null;
+    await waitForNavigationCleanup(tabId).catch(error => console.warn("StreamFirefly request cleanup failed", error.message));
+    if (!sniffing.allowed(tabId)) return false;
+    await api.tabs.get(tabId);
+    const epochs = requestEpochs.get(tabId) || { document: 0, navigation: 0 };
+    const sourceContextId = (await loadTabState(tabId)).sourceContextId;
+    const stale = pending && (!sourceContext || pending.epochs.document !== epochs.document || pending.epochs.navigation !== epochs.navigation || sourceContext.revision !== sniffing.revision(tabId) || sourceContext.sourceContextId !== sourceContextId);
+    const observed = details.tabId >= 0 && pending?.tabId === details.tabId && !stale;
     const headers = Object.fromEntries((details.responseHeaders ?? []).map(header => [header.name.toLowerCase(), header.value ?? ""]));
     const mime = headers["content-type"]?.split(";", 1)[0] ?? "";
     const requestHeaders = pending?.headers || {};

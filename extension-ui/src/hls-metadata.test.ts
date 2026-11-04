@@ -32,4 +32,55 @@ describe("HLS metadata probing", () => {
     release(); await new Promise(resolve => setTimeout(resolve, 0));
     expect(apply).not.toHaveBeenCalled();
   });
+  it("retries an anonymous failure once when the UI candidate gains request evidence, including at the candidate limit", async () => {
+    const apply = vi.fn(async () => {});
+    const read = vi.fn(async (candidate: MediaCandidate, url: string) => {
+      if (!("requestId" in candidate)) throw new Error("403");
+      return { text: vod, url };
+    });
+    const queue = createHlsMetadataQueue({ load: read, apply, limit: 1 });
+    const candidate = hls("protected", "https://v.example/protected.m3u8");
+    queue.schedule("page", [candidate]);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(apply).not.toHaveBeenCalled();
+    queue.schedule("page", [candidate]);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(read).toHaveBeenCalledTimes(1);
+    const observed = { ...candidate, requestId: "observed" };
+    queue.schedule("page", [hls("over-limit", candidate.url), observed]);
+    await vi.waitFor(() => expect(apply).toHaveBeenCalledWith(observed, { duration: 11.5 }));
+    const observedAgain = { ...observed, requestId: "another-request" };
+    queue.schedule("page", [observedAgain]);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+  it("remembers evidence gained during an anonymous probe without starting concurrent retries or looping on failure", async () => {
+    let reject!: (error: Error) => void;
+    const read = vi.fn((_candidate: MediaCandidate, _url: string): Promise<{ text: string; url: string }> => new Promise((_resolve, fail) => { reject = fail; }));
+    const apply = vi.fn(async () => {});
+    const queue = createHlsMetadataQueue({ load: read, apply });
+    const candidate = hls("pending", "https://v.example/pending.m3u8");
+    queue.schedule("page", [candidate]);
+    const observed = { ...candidate, requestId: "observed" };
+    queue.schedule("page", [observed]);
+    queue.schedule("page", [observed]);
+    expect(read).toHaveBeenCalledTimes(1);
+    reject(new Error("403"));
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    reject(new Error("403 again"));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const observedAgain = { ...observed, requestId: "another-request" };
+    queue.schedule("page", [observedAgain]);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(apply).not.toHaveBeenCalled();
+  });
+  it("keeps the master resolution when the child playlist is not authorized yet", async () => {
+    const read = vi.fn(async (url: string) => {
+      if (url.endsWith("high.m3u8")) throw new Error("403");
+      return { text: master, url };
+    });
+    expect(await probeHlsMetadata(hls("master", "https://v.example/master.m3u8"), read)).toEqual({ width: 1920, height: 1080 });
+  });
 });

@@ -6,7 +6,8 @@ const candidate = { url, source: 'dom', mime: 'video/mp4', pageTitle: 'Video', p
 const forged = { requestHeaders: { authorization: 'forged' }, referer: 'https://forged.example', size: 99, sizeSource: 'content-length', sizeKind: 'file', requestId: 'fake', resourceType: 'media', extraction: { observed: true }, parents: ['fake'], userPicked: true, sourceContextId: 'fake', capturedAt: 1 };
 assert.deepEqual(sanitizePageCandidate({ ...candidate, ...forged }), candidate);
 assert.equal(sanitizePageCandidate({ ...candidate, source: 'network' }).source, 'page-probe');
-for (const bad of [null, [], {}, { url: 1 }, { url: 'javascript:alert(1)' }, { url: 'file:///tmp/x' }, { url: 'data:text/html,x' }, { url: 'https://a.example/x\r\nInjected: yes' }, { url: 'https://a.example/x\0' }]) assert.equal(sanitizePageCandidate(bad), null);
+for (const bad of [null, [], {}, { url: 1 }, { url: 'javascript:alert(1)' }, { url: 'file:///tmp/x' }, { url: 'https://a.example/x\r\nInjected: yes' }, { url: 'https://a.example/x\0' }]) assert.equal(sanitizePageCandidate(bad), null);
+for (const url of ['data:video/mp4;base64,AA==', 'data:audio/mpeg;base64,AA==', 'data:text/html,x']) assert.deepEqual(sanitizePageCandidate({ url }), { url });
 assert.deepEqual(sanitizePageCandidate({ ...candidate, url: 'blob:https://media.example/video' }), { ...candidate, url: 'blob:https://media.example/video' });
 const inline = { ...candidate, url: 'blob:https://media.example/master', inlineManifest: { format: 'hls', text: '#EXTM3U', baseUrl: 'https://media.example/' } };
 assert.deepEqual(sanitizePageCandidate(inline), inline);

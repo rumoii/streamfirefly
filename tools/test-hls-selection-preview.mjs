@@ -299,11 +299,11 @@ async function verifyExtensionAuth() {
       await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', args: [candidateId, originA], func: async (url, base) => {
         await fetch(url, { headers: { Authorization: 'Bearer preview-fixture' }, referrer: base + '/' });
       } });
-      const waitObserved = async url => {
+      const waitObserved = async (url, previousId = null) => {
         const deadline = Date.now() + 5000;
         while (Date.now() < deadline) {
           const candidate = (await send({ type: 'media.candidates', tabId })).find(item => item.url === url);
-          if (candidate?.requestId) return candidate;
+          if (candidate?.requestId && candidate.requestId !== previousId) return candidate;
           await new Promise(resolve => setTimeout(resolve, 25));
         }
         throw new Error('real webRequest evidence missing for ' + url);
@@ -330,11 +330,14 @@ async function verifyExtensionAuth() {
       const automatic = url => send({ type: 'media.fetchText', id: hint, url, automatic: true });
       const anonymousHint = await automatic(hint);
       await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', args: [hint], func: async url => { await fetch(url, { credentials: 'omit' }); } });
-      await waitObserved(hint);
+      const noCookieRequest = await waitObserved(hint);
       const observedHint = await automatic(hint);
+      await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', args: [hint], func: async url => { await fetch(url, { credentials: 'include' }); } });
+      await waitObserved(hint, noCookieRequest.requestId);
+      const cookieHint = await automatic(hint);
       const queryHint = await automatic(hint.replace('one', 'two'));
       const child = originB + '/automatic-child.m3u8';
-      await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', args: [child], func: async url => { await fetch(url, { credentials: 'omit' }); } });
+      await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', args: [child], func: async url => { await fetch(url, { credentials: 'include' }); } });
       await waitObserved(child);
       const observedChild = await automatic(child);
       const sizeUrl = originA + '/automatic.mp4';
@@ -343,7 +346,7 @@ async function verifyExtensionAuth() {
       const automaticSize = await send({ type: 'media.size.probe', id: sizeUrl, sourceContextId: sizeContext.sourceContextId });
       const redirected = originA + '/redirect';
       await addHint(redirected);
-      await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', args: [redirected], func: async url => { await fetch(url, { redirect: 'manual', credentials: 'omit' }); } });
+      await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', args: [redirected], func: async url => { await fetch(url, { redirect: 'manual', credentials: 'include' }); } });
       await waitObserved(redirected);
       const automaticRedirect = await automatic(redirected);
       const active = await send({ type: 'preview.headers.apply', payload: { previewSessionId: 'auth-close', candidateId, url: candidateId, headers } });
@@ -356,7 +359,7 @@ async function verifyExtensionAuth() {
         if (!rulesAfterClose) break;
         await new Promise(resolve => setTimeout(resolve, 50));
       } while (Date.now() < deadline);
-      return { same, cross, protectedCross, redirect, legacy, apply, clear, active, rulesAfterClear, rulesBeforeClose, rulesAfterClose, anonymousHint, observedHint, queryHint, observedChild, automaticSize, automaticRedirect };
+      return { same, cross, protectedCross, redirect, legacy, apply, clear, active, rulesAfterClear, rulesBeforeClose, rulesAfterClose, anonymousHint, observedHint, cookieHint, queryHint, observedChild, automaticSize, automaticRedirect };
     }, { originA, originB });
     const request = (log, url) => log.find(item => item.url === url);
     const clean = item => item && !item.authorization && !item.referer && !item.cookie;
@@ -365,8 +368,9 @@ async function verifyExtensionAuth() {
     const legacy = request(seenB, '/legacy.m3u8'), dnrA = request(seenA, '/dnr.m3u8'), dnrB = request(seenB, '/dnr.m3u8');
     const hints = seenA.filter(item => item.url === '/automatic.m3u8?token=one');
     return [
-      { name: '真实扩展：页面提示匿名，真实请求不含 Cookie 也能授权后续自动探测', ok: outcome.anonymousHint.ok && outcome.observedHint.ok && !hints[0]?.cookie && hints.at(-1)?.cookie?.includes('automatic=synthetic'), evidence: hints },
-      { name: '真实扩展：查询串不同不借用记录', ok: outcome.queryHint.ok && !request(seenA, '/automatic.m3u8?token=two')?.cookie },
+      { name: '真实扩展：页面提示和无 Cookie 请求之后的自动探测保持匿名', ok: outcome.anonymousHint.ok && outcome.observedHint.ok && hints.length === 5 && hints.slice(0, 3).every(item => !item.cookie), evidence: hints },
+      { name: '真实扩展：观察到 Cookie 后自动探测才携带 Cookie', ok: outcome.cookieHint.ok && hints.at(-1)?.cookie?.includes('automatic=synthetic'), evidence: hints },
+      { name: '真实扩展：同源 HLS 地址继承主清单证据', ok: outcome.queryHint.ok && request(seenA, '/automatic.m3u8?token=two')?.cookie?.includes('automatic=synthetic') },
       { name: '真实扩展：跨源子清单使用自己的请求证据', ok: outcome.observedChild.ok && seenB.filter(item => item.url === '/automatic-child.m3u8').at(-1)?.cookie?.includes('automatic=synthetic') },
       { name: '真实扩展：页面视频大小自动探测匿名', ok: outcome.automaticSize.ok && outcome.automaticSize.candidate.size === 123 && !request(seenA, '/automatic.mp4')?.cookie },
       { name: '真实扩展：自动探测保留跳转', ok: outcome.automaticRedirect.ok && seenB.filter(item => item.url === '/redirected.m3u8').at(-1)?.cookie?.includes('automatic=synthetic') },
