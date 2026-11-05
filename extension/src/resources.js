@@ -176,11 +176,11 @@ function rememberRequestContext(tabId, url, context) {
   while (recentRequestContexts.size > 500) recentRequestContexts.delete(recentRequestContexts.keys().next().value);
 }
 
-function requestContextFor(tabId, item, sourceContextId) {
+function requestContextFor(tabId, item) {
   const urls = [item.inlineManifest?.sourceUrl, item.url, item.pageUrl].filter(Boolean);
   for (const url of urls) {
     const context = recentRequestContexts.get(requestContextKey(tabId, url));
-    if (context?.sourceContextId === sourceContextId && Date.now() - context.capturedAt <= 120000) return context;
+    if (context && Date.now() - context.capturedAt <= 120000) return context;
   }
   return null;
 }
@@ -204,9 +204,7 @@ function mergeCandidate(existing, item) {
   const itemSizePriority = item?.sizeSource === "content-range" ? 2 : item?.sizeSource === "content-length" ? 1 : 0;
   if (existing?.size && (existingSizePriority > itemSizePriority || existingSizePriority === itemSizePriority && existing.size > (item?.size || 0))) { merged.size = existing.size; merged.sizeSource = existing.sizeSource; }
   if (existing?.contentDisposition && !item?.contentDisposition) merged.contentDisposition = existing.contentDisposition;
-  if (existing?.requestHeaders && !item?.requestId && (!item?.requestHeaders || !Object.keys(item.requestHeaders).length)) merged.requestHeaders = existing.requestHeaders;
-  // Replacement headers without evidence must not borrow the previous request's ID.
-  if (!item?.requestId && item?.requestHeaders && Object.keys(item.requestHeaders).length) delete merged.requestId;
+  if (existing?.requestHeaders && (!item?.requestHeaders || !Object.keys(item.requestHeaders).length)) merged.requestHeaders = existing.requestHeaders;
   if (existing?.inlineManifest && !item?.inlineManifest) merged.inlineManifest = existing.inlineManifest;
   if (item?.poster && item.poster !== existing?.poster && !item.posterSource) delete merged.posterSource;
   return merged;
@@ -245,7 +243,7 @@ async function addCandidate(tabId, item, expectedContextId = "") {
     const canonicalUrl = canonicalize(item.url);
     const id = item.inlineManifest ? await hashInlineManifest(item.inlineManifest) : canonicalUrl;
     const existing = draft.candidates.get(id);
-    const context = item.inlineManifest ? requestContextFor(tabId, item, state.sourceContextId) : null;
+    const context = item.inlineManifest ? requestContextFor(tabId, item) : null;
     const inlineHeaders = context ? Object.fromEntries(Object.entries(context.requestHeaders || {}).filter(([name]) => !["cookie", "authorization"].includes(name.toLowerCase()))) : null;
     const sourceUrl = state.pageUrl || (await api.tabs.get(tabId)).url || "";
     if (blockedSite(sourceUrl)) return false;
@@ -532,12 +530,10 @@ async function readBoundedText(response, maxBytes) {
   }
 }
 
-/** Automatic HLS children may inherit same-origin master evidence; explicit reads use candidate context. */
+/** Resolves a candidate-owned http(s) request with the page's Referer, Origin and Authorization. */
 async function prepareOwnedFetch(tabId, id, requestedUrl, options = {}) {
-  const state = await loadTabState(tabId);
-  if (options.automatic && options.sourceContextId && options.sourceContextId !== state.sourceContextId) return { ok: false, error: "media_context_stale" };
-  if (options.automatic && (state.paused || !sniffing.allowed(tabId))) return { ok: false, error: "sniffing_inactive" };
-  const owner = state.candidates.get(id);
+  const candidate = await candidateFor(tabId, id);
+  const owner = Array.isArray(candidate) ? null : candidate;
   if (!owner) return { ok: false, error: "media_candidate_not_found" };
   let url;
   try { url = new URL(requestedUrl || owner.url); }
@@ -547,26 +543,18 @@ async function prepareOwnedFetch(tabId, id, requestedUrl, options = {}) {
   let ownerOrigin;
   try { ownerOrigin = new URL(owner.url).origin; } catch (_) {}
   const sameOrigin = url.origin === ownerOrigin;
-  // Only background webRequest handlers can supply requestId. Exact target evidence wins;
-  // same-origin HLS children can inherit a non-inline master's evidence.
-  const observed = state.candidates.get(canonicalize(url.href));
-  const recent = requestContextFor(tabId, { url: url.href }, state.sourceContextId);
-  const evidence = observed?.requestId ? observed : recent?.requestId ? recent : owner.type === "hls" && sameOrigin && owner.requestId && !owner.inlineManifest ? owner : null;
-  const allowCredentials = options.automatic ? Boolean(evidence) && (options.restrictOrigin !== true || sameOrigin) : sameOrigin;
-  const requestOwner = options.automatic && evidence ? evidence : owner;
+  const allowCredentials = sameOrigin || (owner.type !== "hls" && options.restrictOrigin !== true);
   const allowPageHeaders = options.restrictOrigin !== true || sameOrigin;
   const headers = new Headers();
   const pageHeaders = {};
-  let hasCookie = false;
-  for (const [name, value] of Object.entries(requestOwner.requestHeaders || {})) {
+  for (const [name, value] of Object.entries(owner.requestHeaders || {})) {
     const key = name.toLowerCase();
     if (typeof value !== "string" || !value) continue;
     if (key === "authorization" && allowCredentials) headers.set(name, value);
-    else if (key === "cookie") hasCookie = true;
     else if (["origin", "referer"].includes(key) && allowPageHeaders) pageHeaders[key] = value;
   }
   if (allowPageHeaders && !pageHeaders.referer && /^https?:/i.test(owner.referer || owner.pageUrl || "")) pageHeaders.referer = owner.referer || owner.pageUrl;
-  return { ok: true, owner, url, headers, pageHeaders, credentials: allowCredentials && (!options.automatic || hasCookie) ? "include" : "omit" };
+  return { ok: true, owner, url, headers, pageHeaders, credentials: allowCredentials ? "include" : "omit" };
 }
 
 async function fetchMediaText(tabId, id, requestedUrl, options = {}) {
@@ -594,16 +582,16 @@ async function probeMediaSize(tabId, sourceContextId, id) {
   const inactive = state => !sourceContextId || sourceContextId !== state.sourceContextId ? { ok: false, error: "media_context_stale" } : state.paused || !sniffing.allowed(tabId) ? { ok: false, error: "sniffing_inactive" } : null;
   const refused = inactive(await loadTabState(tabId));
   if (refused) return refused;
-  const prepared = await prepareOwnedFetch(tabId, id, null, { automatic: true, sourceContextId });
+  const prepared = await prepareOwnedFetch(tabId, id);
   if (!prepared.ok) return prepared;
-  const { owner, url, headers, pageHeaders, credentials } = prepared;
+  const { owner, url, headers, pageHeaders } = prepared;
   if (!["video", "audio"].includes(owner.type)) return { ok: false, error: "media_size_unsupported" };
   if (owner.size > 0) return { ok: true, candidate: owner };
   headers.set("Range", "bytes=0-0");
   const removeRule = await applyFetchHeaders(url, pageHeaders);
   let size = null;
   try {
-    const response = await fetch(url.href, { headers, credentials, redirect: "follow", signal: AbortSignal.timeout(10000) });
+    const response = await fetch(url.href, { headers, credentials: "include", redirect: "follow", signal: AbortSignal.timeout(10000) });
     const length = Number(response.headers.get("content-length"));
     // An expired address often redirects to a login or error page; its length is not the media size.
     const page = /^(?:text\/html|application\/(?:json|xhtml\+xml))/i.test(response.headers.get("content-type") || "") || blockedSite(response.url || url.href);

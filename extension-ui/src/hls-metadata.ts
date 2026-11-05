@@ -13,12 +13,7 @@ export async function probeHlsMetadata(candidate: MediaCandidate, load: (url: st
     const variant = defaultVariant(manifest.variants);
     if (!variant) return result;
     if (variant.width && variant.height) { result.width = variant.width; result.height = variant.height; }
-    let media: ManifestText;
-    try { media = await load(variant.uri); }
-    catch (error) {
-      if (result.width && result.height) return result;
-      throw error;
-    }
+    const media = await load(variant.uri);
     manifest = parseHls(media.text, media.url);
   }
   if (manifest.live) result.live = true;
@@ -26,9 +21,9 @@ export async function probeHlsMetadata(candidate: MediaCandidate, load: (url: st
   return result;
 }
 
-/** Fills missing HLS metadata with one extra attempt when a candidate gains observed request evidence. */
+/** Fills missing HLS metadata in the background, a few playlists at a time and each candidate at most once per page. */
 export function createHlsMetadataQueue(options: { load: (candidate: MediaCandidate, url: string) => Promise<ManifestText>; apply: (candidate: MediaCandidate, metadata: HlsMetadata) => Promise<void>; concurrency?: number; limit?: number }) {
-  const attempted = new Map<string, { evidence: boolean; running: boolean }>();
+  const attempted = new Set<string>();
   let running = 0, page = "", latest: MediaCandidate[] = [];
   const concurrency = options.concurrency ?? 2, limit = options.limit ?? 40;
   const missing = (item: MediaCandidate) => item.type === "hls" && !item.live && !(item.width && item.height && item.duration);
@@ -36,13 +31,9 @@ export function createHlsMetadataQueue(options: { load: (candidate: MediaCandida
     if (pageKey !== page) { page = pageKey; attempted.clear(); }
     latest = candidates;
     for (const item of candidates) {
-      if (running >= concurrency) return;
-      const evidence = "requestId" in item && Boolean(item.requestId);
-      const previous = attempted.get(item.id);
-      if (!missing(item) || previous?.running || previous && (previous.evidence || !evidence)) continue;
-      if (!previous && attempted.size >= limit) continue;
-      const attempt = { evidence, running: true };
-      attempted.set(item.id, attempt); running++;
+      if (running >= concurrency || attempted.size >= limit) return;
+      if (!missing(item) || attempted.has(item.id)) continue;
+      attempted.add(item.id); running++;
       const owner = page;
       void probeHlsMetadata(item, url => options.load(item, url))
         .then(metadata => {
@@ -54,7 +45,7 @@ export function createHlsMetadataQueue(options: { load: (candidate: MediaCandida
           return Object.keys(patch).length ? options.apply(item, patch) : undefined;
         })
         .catch(() => {})
-        .finally(() => { running--; attempt.running = false; if (owner === page) schedule(page, latest); });
+        .finally(() => { running--; if (owner === page) schedule(page, latest); });
     }
   }
   return { schedule };

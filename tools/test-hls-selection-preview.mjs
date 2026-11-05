@@ -259,7 +259,7 @@ async function verifyExtensionAuth() {
   const seenA = [], seenB = [], servers = [];
   let context, originB;
   const serve = log => (request, response) => {
-    log.push({ url: request.url, authorization: request.headers.authorization || null, referer: request.headers.referer || null, cookie: request.headers.cookie || null });
+    log.push({ url: request.url, authorization: request.headers.authorization || null, referer: request.headers.referer || null, cookie: request.headers.cookie || null, requestId: request.headers.requestid || null });
     if (request.url === '/redirect') { response.writeHead(302, { location: `${originB}/redirected.m3u8` }); response.end(); return; }
     if (request.url?.startsWith('/automatic.mp4')) { response.writeHead(request.headers.range ? 206 : 200, { 'content-type': 'video/mp4', ...(request.headers.range ? { 'content-range': 'bytes 0-0/123' } : {}) }); response.write('x'); response.end(); return; }
     if (request.url === '/page.html') { response.end('<!doctype html><title>preview auth fixture</title>'); return; }
@@ -327,28 +327,18 @@ async function verifyExtensionAuth() {
       const hint = originA + '/automatic.m3u8?token=one';
       const addHint = url => send({ type: 'media.add', candidate: { url, mime: 'application/vnd.apple.mpegurl', source: 'page-probe', requestId: 'forged', requestHeaders: { authorization: 'forged' } } });
       await addHint(hint);
-      const automatic = url => send({ type: 'media.fetchText', id: hint, url, automatic: true });
-      const anonymousHint = await automatic(hint);
-      await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', args: [hint], func: async url => { await fetch(url, { credentials: 'omit' }); } });
-      const noCookieRequest = await waitObserved(hint);
-      const observedHint = await automatic(hint);
-      await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', args: [hint], func: async url => { await fetch(url, { credentials: 'include' }); } });
-      await waitObserved(hint, noCookieRequest.requestId);
-      const cookieHint = await automatic(hint);
-      const queryHint = await automatic(hint.replace('one', 'two'));
+      const readHint = url => send({ type: 'media.fetchText', id: hint, url });
+      const sameHint = await readHint(hint);
+      const queryHint = await readHint(hint.replace('one', 'two'));
       const child = originB + '/automatic-child.m3u8';
-      await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', args: [child], func: async url => { await fetch(url, { credentials: 'include' }); } });
-      await waitObserved(child);
-      const observedChild = await automatic(child);
+      const crossHint = await readHint(child);
       const sizeUrl = originA + '/automatic.mp4';
       await send({ type: 'media.add', candidate: { url: sizeUrl, mime: 'video/mp4', source: 'dom' } });
       const sizeContext = (await send({ type: 'ui.context.get', scope: 'sender' })).context;
       const automaticSize = await send({ type: 'media.size.probe', id: sizeUrl, sourceContextId: sizeContext.sourceContextId });
       const redirected = originA + '/redirect';
       await addHint(redirected);
-      await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', args: [redirected], func: async url => { await fetch(url, { redirect: 'manual', credentials: 'include' }); } });
-      await waitObserved(redirected);
-      const automaticRedirect = await automatic(redirected);
+      const automaticRedirect = await readHint(redirected);
       const active = await send({ type: 'preview.headers.apply', payload: { previewSessionId: 'auth-close', candidateId, url: candidateId, headers } });
       const rulesBeforeClose = (await chrome.declarativeNetRequest.getSessionRules()).length;
       await chrome.tabs.remove(tabId);
@@ -359,7 +349,7 @@ async function verifyExtensionAuth() {
         if (!rulesAfterClose) break;
         await new Promise(resolve => setTimeout(resolve, 50));
       } while (Date.now() < deadline);
-      return { same, cross, protectedCross, redirect, legacy, apply, clear, active, rulesAfterClear, rulesBeforeClose, rulesAfterClose, anonymousHint, observedHint, cookieHint, queryHint, observedChild, automaticSize, automaticRedirect };
+      return { same, cross, protectedCross, redirect, legacy, apply, clear, active, rulesAfterClear, rulesBeforeClose, rulesAfterClose, sameHint, queryHint, crossHint, automaticSize, automaticRedirect };
     }, { originA, originB });
     const request = (log, url) => log.find(item => item.url === url);
     const clean = item => item && !item.authorization && !item.referer && !item.cookie;
@@ -368,11 +358,11 @@ async function verifyExtensionAuth() {
     const legacy = request(seenB, '/legacy.m3u8'), dnrA = request(seenA, '/dnr.m3u8'), dnrB = request(seenB, '/dnr.m3u8');
     const hints = seenA.filter(item => item.url === '/automatic.m3u8?token=one');
     return [
-      { name: '真实扩展：页面提示和无 Cookie 请求之后的自动探测保持匿名', ok: outcome.anonymousHint.ok && outcome.observedHint.ok && hints.length === 5 && hints.slice(0, 3).every(item => !item.cookie), evidence: hints },
-      { name: '真实扩展：观察到 Cookie 后自动探测才携带 Cookie', ok: outcome.cookieHint.ok && hints.at(-1)?.cookie?.includes('automatic=synthetic'), evidence: hints },
-      { name: '真实扩展：同源 HLS 地址继承主清单证据', ok: outcome.queryHint.ok && request(seenA, '/automatic.m3u8?token=two')?.cookie?.includes('automatic=synthetic') },
-      { name: '真实扩展：跨源子清单使用自己的请求证据', ok: outcome.observedChild.ok && seenB.filter(item => item.url === '/automatic-child.m3u8').at(-1)?.cookie?.includes('automatic=synthetic') },
-      { name: '真实扩展：页面视频大小自动探测匿名', ok: outcome.automaticSize.ok && outcome.automaticSize.candidate.size === 123 && !request(seenA, '/automatic.mp4')?.cookie },
+      { name: '真实扩展：页面提示的同源自动探测携带 Cookie', ok: outcome.sameHint.ok && hints.length === 1 && hints[0]?.cookie?.includes('automatic=synthetic'), evidence: hints },
+      { name: '真实扩展：同源 HLS 子清单携带 Cookie', ok: outcome.queryHint.ok && request(seenA, '/automatic.m3u8?token=two')?.cookie?.includes('automatic=synthetic') },
+      { name: '真实扩展：跨源 HLS 子清单不带 Cookie', ok: outcome.crossHint.ok && request(seenB, '/automatic-child.m3u8')?.cookie === null && request(seenB, '/automatic-child.m3u8')?.authorization === null && request(seenB, '/automatic-child.m3u8')?.referer === `${originA}/page.html`, evidence: request(seenB, '/automatic-child.m3u8') },
+      { name: '真实扩展：页面伪造的请求头和 requestId 不进入请求', ok: !JSON.stringify([...seenA, ...seenB]).includes('forged') },
+      { name: '真实扩展：页面视频大小自动探测携带 Cookie', ok: outcome.automaticSize.ok && outcome.automaticSize.candidate.size === 123 && request(seenA, '/automatic.mp4')?.cookie?.includes('automatic=synthetic') },
       { name: '真实扩展：自动探测保留跳转', ok: outcome.automaticRedirect.ok && seenB.filter(item => item.url === '/redirected.m3u8').at(-1)?.cookie?.includes('automatic=synthetic') },
       { name: '真实扩展：同源预览保留候选鉴权', ok: outcome.same.ok && same?.authorization === 'Bearer preview-fixture' && same?.referer === `${originA}/`, evidence: same },
       { name: '真实扩展：跨源公开音轨不带候选凭据', ok: outcome.cross.ok && clean(cross), evidence: cross },
