@@ -7,12 +7,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import { fixtureFfmpeg, fixtureFfprobe } from './fixture-ffmpeg.mjs';
+import { ensureBundledTools } from './native-test-tools.mjs';
 
 // Regression for issue #9: a normal stdin EOF must stop capture sessions, persist
 // interrupted + capture_host_stopped, terminate and wait the merge FFmpeg, and exit 0.
 const root = fileURLToPath(new URL('../', import.meta.url));
 const executable = process.env.STREAMFIREFLY_NATIVE_EXE || path.join(root, 'native-host/target/debug/streamfirefly-native.exe');
 const ffmpeg = process.env.STREAMFIREFLY_FFMPEG_EXE || path.join(root, 'installer/build/x64/ffmpeg.exe');
+ensureBundledTools(executable, ffmpeg);
 const origin = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop';
 
 function startHost(temporary) {

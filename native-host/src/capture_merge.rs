@@ -5,13 +5,12 @@ use crate::capture_storage::save;
 use crate::capture_format::inspect_file;
 use crate::capture_output::{matches, read_progress};
 use crate::capture_space::{free_bytes, shortfall};
-use crate::media_process::bundled_tool;
 use crate::persistence::replace_file;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -165,7 +164,17 @@ pub(crate) fn finalize(session: &Arc<Mutex<Session>>) {
 }
 
 fn merge(directory: &Path, tracks: &[Track], output: &Path, session: &Arc<Mutex<Session>>) -> Result<(), &'static str> {
-    let mut command = Command::new(bundled_tool("ffmpeg.exe"));
+    let mut command = match crate::media_process::ffmpeg_command() {
+        Ok(command) => command,
+        Err(error) => {
+            record(
+                &session.lock().unwrap(),
+                "merge-start-failed",
+                json!({"error":error}),
+            );
+            return Err("capture_merge_failed");
+        }
+    };
     command.args(["-nostdin", "-y", "-v", "error", "-progress", "pipe:1", "-nostats"]);
     for track in tracks {
         command.arg("-i").arg(directory.join(&track.file));

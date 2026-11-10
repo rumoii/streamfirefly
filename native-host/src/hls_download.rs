@@ -581,6 +581,9 @@ pub(crate) fn merge_hls_checkpoint(
             "error".into(),
             "-protocol_whitelist".into(),
             "file".into(),
+            "-progress".into(),
+            "pipe:1".into(),
+            "-nostats".into(),
         ];
         args.extend(hls_input_args(&playlist));
         args.extend([
@@ -1052,7 +1055,9 @@ fn hls_checkpoint_round(
             current.active_connections = 0;
             current.checkpoint_state = Some("recoverable".into());
             current.resume_requirement = authorization.then(|| "authorization_required".into());
-            current.message = Some(if authorization {
+            current.message = Some(if error.starts_with("tool_missing:") {
+                "下载程序缺失，请重新安装 StreamFirefly".into()
+            } else if authorization {
                 "资源授权已经失效，请从来源页面重新授权".into()
             } else if error == "hls_key_validation_failed" {
                 "AES-128 密钥验证失败，未继续下载其他切片".into()
@@ -1266,6 +1271,9 @@ fn finalize_hls_round(
             clear_stop(store, &task.id);
         }
         Ok(subtitle_failures) => update(store, writer, &task.id, |current| {
+            let missing_tool = current.outputs.iter().any(|output| {
+                output.error.as_deref().is_some_and(|error| error.starts_with("tool_missing:"))
+            });
             let conflict = current.outputs.iter().any(|output| {
                 output.kind == "subtitle" && output.error.as_deref() == Some("output_path_conflict")
             });
@@ -1283,7 +1291,9 @@ fn finalize_hls_round(
                 }
                 .into(),
             );
-            current.message = Some(if conflict {
+            current.message = Some(if missing_tool {
+                "下载程序缺失，请重新安装 StreamFirefly".into()
+            } else if conflict {
                 "输出文件已存在或被其他任务占用，请保留原文件并新建任务。".into()
             } else {
                 format!("视频已完成，{subtitle_failures} 条字幕生成失败，可重试")
@@ -1295,7 +1305,9 @@ fn finalize_hls_round(
             current.phase = "failed".into();
             current.error = Some(error.clone());
             current.checkpoint_state = Some("recoverable".into());
-            current.message = Some(if error == "output_path_conflict" {
+            current.message = Some(if error.starts_with("tool_missing:") {
+                "下载程序缺失，请重新安装 StreamFirefly".into()
+            } else if error == "output_path_conflict" {
                 "输出文件已存在或被其他任务占用，请保留原文件并新建任务。".into()
             } else {
                 "切片已保存，但 FFmpeg 合并失败".into()

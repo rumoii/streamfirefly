@@ -32,11 +32,11 @@ if (-not $architectureMatches) {
   throw "This bundle is $($packageInfo.architecture), but Windows reports $osArchitecture. Use the matching StreamFirefly release bundle."
 }
 $sourceDir = Join-Path $bundleRoot 'native-host'
-$required = @('streamfirefly-native.exe', 'ffmpeg.exe', 'THIRD_PARTY_NOTICES.md', 'FFMPEG-SOURCE.txt', 'FFMPEG-LICENSE.txt')
+$required = @('streamfirefly-native.exe', 'ffmpeg.exe', 'curl.exe', 'THIRD_PARTY_NOTICES.md', 'FFMPEG-SOURCE.txt', 'FFMPEG-LICENSE.txt', 'CURL-LICENSE.txt')
 foreach ($name in $required) {
   if (-not (Test-Path -LiteralPath (Join-Path $sourceDir $name) -PathType Leaf)) { throw "Release bundle file is missing: native-host\$name" }
 }
-foreach ($name in @('streamfirefly-native.exe','ffmpeg.exe')) {
+foreach ($name in @('streamfirefly-native.exe','ffmpeg.exe','curl.exe')) {
   $reader=[System.IO.BinaryReader]::new([System.IO.File]::OpenRead((Join-Path $sourceDir $name)))
   try { $reader.BaseStream.Position=0x3c;$offset=$reader.ReadInt32();$reader.BaseStream.Position=$offset+4;$machine='{0:X4}' -f $reader.ReadUInt16() } finally { $reader.Dispose() }
   $expectedMachine=if ($packageInfo.architecture -eq 'x64') { '8664' } else { 'AA64' }

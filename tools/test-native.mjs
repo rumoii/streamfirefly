@@ -3,9 +3,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ensureBundledTools } from './native-test-tools.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const exe = process.env.STREAMFIREFLY_NATIVE_EXE || path.join(root, 'native-host', 'target', 'debug', 'streamfirefly-native.exe');
+ensureBundledTools(exe);
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'streamfirefly-protocol-'));
 const expectedVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
 const request = Buffer.from(JSON.stringify({ version: 1, id: 'smoke', type: 'host.info', payload: {} }));

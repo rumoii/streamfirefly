@@ -23,6 +23,7 @@ if (-not $isccCommand) {
 if (-not $isccCommand) { throw 'Inno Setup ISCC.exe was not found; install Inno Setup before packaging' }
 $cache = Join-Path $PSScriptRoot 'ffmpeg-cache'
 & $PSScriptRoot\download-ffmpeg.ps1 -Architecture $Architecture -Destination $cache
+& $PSScriptRoot\download-curl.ps1 -Architecture $Architecture -Destination (Join-Path $PSScriptRoot 'curl-cache')
 & $cargo build --release --target $target --manifest-path (Join-Path $root 'native-host\Cargo.toml')
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 $stage = Join-Path $root "installer\build\$Architecture"
@@ -30,8 +31,10 @@ if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -F
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
 Copy-Item -LiteralPath (Join-Path $root "native-host\target\$target\release\streamfirefly-native.exe") -Destination (Join-Path $stage 'streamfirefly-native.exe')
 Copy-Item -LiteralPath (Join-Path $cache "ffmpeg-$Architecture.exe") -Destination (Join-Path $stage 'ffmpeg.exe')
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot "curl-cache\curl-$Architecture.exe") -Destination (Join-Path $stage 'curl.exe')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'register-native-host.ps1'), (Join-Path $root 'extension\THIRD_PARTY_NOTICES.md'), (Join-Path $root 'installer\FFMPEG-SOURCE.txt') -Destination $stage
 Copy-Item -LiteralPath (Join-Path $cache "ffmpeg-license-$Architecture.txt") -Destination (Join-Path $stage 'FFMPEG-LICENSE.txt')
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot "curl-cache\CURL-LICENSE-$Architecture.txt") -Destination (Join-Path $stage 'CURL-LICENSE.txt')
 $iss = Join-Path $root 'installer\StreamFirefly.iss'
 $tempIss = Join-Path $root "installer\streamfirefly-$Architecture.generated.iss"
 $archAllowed = if ($Architecture -eq 'x64') { 'x64compatible' } else { 'arm64' }
