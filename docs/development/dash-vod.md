@@ -42,7 +42,7 @@
 
 ## 验证入口
 
-在 Windows 安装 Node、Rust、系统 curl，并准备 x64 FFmpeg/FFprobe；按实际路径设置 `STREAMFIREFLY_FFMPEG_EXE` 和 `STREAMFIREFLY_FFPROBE_EXE`。默认 Host 为本仓库 debug 产物；可用 `STREAMFIREFLY_NATIVE_EXE` 指定待测产物。
+在 Windows 安装 Node、Rust，准备钉版 curl 与 x64 FFmpeg/FFprobe；按实际路径设置 `STREAMFIREFLY_FFMPEG_EXE` 和 `STREAMFIREFLY_FFPROBE_EXE`。默认 Host 为本仓库 debug 产物；可用 `STREAMFIREFLY_NATIVE_EXE` 指定待测产物。
 
 ```powershell
 npm run verify:features

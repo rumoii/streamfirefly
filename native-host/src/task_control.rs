@@ -530,11 +530,28 @@ pub(crate) fn delete_task(
     if scheduler_active(store, id) {
         return Err("task_still_stopping");
     }
-    let file_deleted = if delete_file {
+    let mut file_deleted = if delete_file {
         delete_task_outputs(&task)?
     } else {
         false
     };
+    let mut temporary_file_kept = false;
+    let mut temporary_file_path = None;
+    if let Some(output) = &task.output {
+        let temporary = crate::http_download::single_temporary_path(Path::new(output), id);
+        if delete_file {
+            file_deleted |= delete_output(&temporary.to_string_lossy())?;
+        } else if temporary.exists() {
+            match crate::persistence::move_new_file(&temporary, Path::new(output)) {
+                Ok(()) => {},
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                    temporary_file_kept = true;
+                    temporary_file_path = Some(temporary.to_string_lossy().into_owned());
+                }
+                Err(_) => return Err("output_publish_failed"),
+            }
+        }
+    }
     {
         let mut tasks = store.repository.tasks.lock().unwrap();
         let before = tasks.clone();
@@ -558,6 +575,7 @@ pub(crate) fn delete_task(
     }
     emit(writer, json!({"version":1,"type":"task.deleted","id":id}));
     Ok(
-        json!({"id": id, "fileDeleted": file_deleted, "fileKept": !delete_file && task.output.is_some()}),
+        json!({"id": id, "fileDeleted": file_deleted, "fileKept": !delete_file && task.output.is_some(),
+            "temporaryFileKept": temporary_file_kept, "temporaryFilePath": temporary_file_path}),
     )
 }

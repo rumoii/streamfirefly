@@ -403,6 +403,8 @@ async function subtitleEofRecovery(host) {
   barrier.marker = marker;
   assert.equal(marker.parent, host.child.pid);
   assert.match(marker.commandLine, /\.streamfirefly-part-[^\\/"]+\.vtt/);
+  assert.match(marker.commandLine, /-progress\s+"?pipe:1"?(?:\s|$)/);
+  assert.match(marker.commandLine, /(?:^|\s)-nostats(?:\s|$)/);
   assert.ok(alive(marker.pid), 'subtitle FFmpeg was not alive before EOF');
   const mediaHash = digest(created.task.output);
   barrier.stage = 'closing native host';

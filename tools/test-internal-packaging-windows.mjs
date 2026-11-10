@@ -66,9 +66,9 @@ for (const source of ['process.exit(0);', "console.log('   ');"]) {
   });
 }
 
-async function auditCurlFixture(omitCurl) {
+async function auditCurlFixture({ omitCurl = false, architecture = 'x64', curlMachine } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'streamfirefly-internal-audit-'));
-  const bundleName = 'StreamFirefly-1.0.9-internal-x64';
+  const bundleName = `StreamFirefly-1.0.9-internal-${architecture}`;
   const files = new Map([
     ['extension/manifest.json', '{}'],
     ['tools/install-internal-test.ps1', 'fixture'],
@@ -78,14 +78,19 @@ async function auditCurlFixture(omitCurl) {
     ['StreamFirefly-firefox-1.0.9-test.xpi', 'fixture'],
     ['native-host/CURL-LICENSE.txt', 'COPYRIGHT AND PERMISSION NOTICE'],
   ]);
+  const machine = architecture === 'x64' ? 0x8664 : 0xaa64;
   const pe = Buffer.alloc(256);
   pe.writeUInt32LE(0x80, 0x3c);
-  pe.writeUInt16LE(0x8664, 0x84);
+  pe.writeUInt16LE(machine, 0x84);
   files.set('native-host/streamfirefly-native.exe', pe);
   files.set('native-host/ffmpeg.exe', pe);
-  if (!omitCurl) files.set('native-host/curl.exe', 'not the pinned curl');
+  if (!omitCurl) {
+    const curl = Buffer.from(pe);
+    curl.writeUInt16LE(curlMachine ?? machine, 0x84);
+    files.set('native-host/curl.exe', curl);
+  }
   files.set('PACKAGE-INFO.json', JSON.stringify({
-    architecture: 'x64', version: '1.0.9', extensionVersion: '1.0.9',
+    architecture, version: '1.0.9', extensionVersion: '1.0.9',
     sourceCommit: 'a'.repeat(40), sourceDirty: false, sourceChanges: [],
     buildEnvironment: { cargo: 'cargo', rustc: 'rustc', node: 'node', powershell: 'powershell' },
   }));
@@ -96,20 +101,32 @@ async function auditCurlFixture(omitCurl) {
   const archive = path.join(directory, `${bundleName}.zip`);
   try {
     fs.writeFileSync(archive, await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }));
-    return execute(`& ${quote(path.join(root, 'tools', 'audit-internal-test.ps1'))} -Archive ${quote(archive)} -ExpectedArchitecture x64 -ExpectedBundleVersion 1.0.9 -ExpectedSourceCommit ${'a'.repeat(40)}`);
+    return execute(`& ${quote(path.join(root, 'tools', 'audit-internal-test.ps1'))} -Archive ${quote(archive)} -ExpectedArchitecture ${architecture} -ExpectedBundleVersion 1.0.9 -ExpectedSourceCommit ${'a'.repeat(40)}`);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 }
 
 test('internal audit rejects a missing bundled curl', async () => {
-  const result = await auditCurlFixture(true);
+  const result = await auditCurlFixture({ omitCurl: true });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /native-host\/curl\.exe/);
 });
 
 test('internal audit rejects a curl that is not the pinned build', async () => {
-  const result = await auditCurlFixture(false);
+  const result = await auditCurlFixture();
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /not the pinned curl-for-win build/);
+});
+
+test('internal audit rejects x64 curl in an arm64 bundle', async () => {
+  const result = await auditCurlFixture({ architecture: 'arm64', curlMachine: 0x8664 });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /native-host\\curl\.exe has PE machine 8664, expected AA64/);
+});
+
+test('internal audit rejects curl whose hash does not match the arm64 pin', async () => {
+  const result = await auditCurlFixture({ architecture: 'arm64' });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /not the pinned curl-for-win build/);
 });

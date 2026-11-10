@@ -354,7 +354,11 @@ pub(crate) fn start_dash_download(store: TaskRuntime, writer: Writer, task: Task
             current.failed_segments = current
                 .segments_total
                 .saturating_sub(current.segments_completed);
-            current.message = Some("DASH 下载失败；同一助手进程内重试会保留已完成分片".into());
+            current.message = Some(if error.starts_with("tool_missing:") {
+                "下载程序缺失，请重新安装 StreamFirefly"
+            } else {
+                "DASH 下载失败；同一助手进程内重试会保留已完成分片"
+            }.into());
             set_output_state(current, "media", 0, "failed", Some(error));
         }),
     }

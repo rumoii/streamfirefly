@@ -1,7 +1,7 @@
-use crate::http_download::add_request_args;
 use crate::http_download::curl_base_args;
+use crate::http_download::spawn_curl;
 use crate::model::Task;
-use crate::processes::{cancel_requested, spawn_process, unregister_process};
+use crate::processes::{cancel_requested, unregister_process};
 use crate::runtime::TaskRuntime;
 use crate::segments::ByteRange;
 use std::{
@@ -22,8 +22,6 @@ fn ascii_temporary_path(destination: &Path, extension: &str) -> std::path::PathB
 }
 
 pub(crate) fn curl_once_args(
-    task: &Task,
-    url: &str,
     range: Option<&ByteRange>,
     temporary: &Path,
     response_headers: &Path,
@@ -55,8 +53,6 @@ pub(crate) fn curl_once_args(
             format!("{}-{}", range.start, range.start + range.length - 1),
         ]);
     }
-    add_request_args(&mut args, task, url);
-    args.push(url.into());
     args
 }
 
@@ -79,8 +75,8 @@ pub(crate) fn curl_once(
     if let Some(parent) = destination.parent().filter(|parent| !parent.as_os_str().is_empty()) {
         command.current_dir(parent);
     }
-    let child = spawn_process(store, &task.id, command
-        .args(curl_once_args(task, url, range, &temporary, &response_headers))
+    let child = spawn_curl(store, task, url, command
+        .args(curl_once_args(range, &temporary, &response_headers))
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
     )
@@ -215,41 +211,24 @@ mod tests {
     use super::*;
     use crate::http_download::curl_base_args;
 
-    fn test_task() -> Task {
-        serde_json::from_value(serde_json::json!({
-            "id": "task-1",
-            "url": "http://127.0.0.1/segment/0",
-            "title": "segment",
-            "state": "queued",
-            "progress": 0,
-            "output": null,
-            "error": null,
-            "mime": null
-        }))
-        .unwrap()
-    }
-
     #[test]
     fn curl_once_args_start_with_proto_whitelist_and_stall_timeout() {
         let args = curl_once_args(
-            &test_task(),
-            "http://127.0.0.1/segment/0",
             Some(&ByteRange { start: 100, length: 100 }),
             Path::new("中文目录/seg.download"),
             Path::new("中文目录/seg.headers"),
         );
+        assert_eq!(args[0], "--disable");
         assert!(args.starts_with(&curl_base_args()));
         assert!(args.windows(2).any(|pair| pair == ["--max-time", "120"]));
         assert!(args.windows(2).any(|pair| pair == ["--speed-limit", "1"]));
         assert!(args.windows(2).any(|pair| pair == ["--speed-time", "60"]));
         assert!(args.windows(2).any(|pair| pair == ["--range", "100-199"]));
-        assert_eq!(
-            args.last().map(String::as_str),
-            Some("http://127.0.0.1/segment/0")
-        );
+        assert!(args.windows(2).any(|pair| pair == ["--config", "-"]));
+        assert!(args.iter().all(|arg| arg.is_ascii()));
+        assert!(!args.iter().any(|arg| matches!(arg.as_str(), "--url" | "--header" | "--proxy" | "--noproxy")));
+        assert!(!args.iter().any(|arg| arg.contains("http://") || arg.contains("https://")));
         let headless = curl_once_args(
-            &test_task(),
-            "http://127.0.0.1/segment/0",
             None,
             Path::new("中文目录/seg.download"),
             Path::new("中文目录/seg.headers"),

@@ -1,14 +1,32 @@
 {
   "version": "8.23.0_8",
-  "source": "curl-for-win (https://github.com/curl/curl-for-win), win64-mingw, statically linked, TLS via LibreSSL with --ca-native reading the Windows certificate store",
-  "archive": "https://curl.se/windows/dl-8.23.0_8/curl-8.23.0_8-win64-mingw.zip",
-  "paths": {
-    "curl.exe": "curl-8.23.0_8-win64-mingw/bin/curl.exe",
-    "CURL-LICENSE.txt": "curl-8.23.0_8-win64-mingw/COPYING.txt"
-  },
-  "sha256": {
-    "curl.exe": "35121e9cb7c2ae16187f8c5311a840ce4191d6753525138f7fbfbe46511bc271",
-    "CURL-LICENSE.txt": "82f2f4427d6545ee5aaac4f0b80428da6cc8ba41c2cf5da3a03680ec327b9681"
-  },
-  "licenseCheck": "COPYRIGHT AND PERMISSION NOTICE"
+  "licenseCheck": "COPYRIGHT AND PERMISSION NOTICE",
+  "architectures": {
+    "x64": {
+      "source": "curl-for-win (https://github.com/curl/curl-for-win), win64-mingw, statically linked, TLS via LibreSSL with --ca-native reading the Windows certificate store",
+      "archive": "https://curl.se/windows/dl-8.23.0_8/curl-8.23.0_8-win64-mingw.zip",
+      "archiveSha256": "ca5b0fd6e7a6dbde210281f545c73a89784f2e88104a2cdfe0b73ea3dfed5b3a",
+      "paths": {
+        "curl.exe": "curl-8.23.0_8-win64-mingw/bin/curl.exe",
+        "CURL-LICENSE.txt": "curl-8.23.0_8-win64-mingw/COPYING.txt"
+      },
+      "sha256": {
+        "curl.exe": "35121e9cb7c2ae16187f8c5311a840ce4191d6753525138f7fbfbe46511bc271",
+        "CURL-LICENSE.txt": "82f2f4427d6545ee5aaac4f0b80428da6cc8ba41c2cf5da3a03680ec327b9681"
+      }
+    },
+    "arm64": {
+      "source": "curl-for-win (https://github.com/curl/curl-for-win), win64a-mingw, statically linked, TLS via LibreSSL with --ca-native reading the Windows certificate store",
+      "archive": "https://curl.se/windows/dl-8.23.0_8/curl-8.23.0_8-win64a-mingw.zip",
+      "archiveSha256": "9ffddd2a85843d3b4b590d24d6becc4f25a70c77781d7d09235ba069b5c4589e",
+      "paths": {
+        "curl.exe": "curl-8.23.0_8-win64a-mingw/bin/curl.exe",
+        "CURL-LICENSE.txt": "curl-8.23.0_8-win64a-mingw/COPYING.txt"
+      },
+      "sha256": {
+        "curl.exe": "38e26717fd1a3b04a92be13bac9442a0c8c0566b7bba1e8d413e225c6592335b",
+        "CURL-LICENSE.txt": "82f2f4427d6545ee5aaac4f0b80428da6cc8ba41c2cf5da3a03680ec327b9681"
+      }
+    }
+  }
 }

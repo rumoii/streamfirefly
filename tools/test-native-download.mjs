@@ -241,3 +241,5 @@ if (fs.readdirSync(customDir).some(name => name.includes('.streamfirefly-parts-'
 if (duplicate.task.id === created.task.id || duplicateTask?.state !== 'succeeded' || duplicateTask.output === task.output) throw new Error('Explicit duplicate download was not created independently');
 if (unknownTask?.state !== 'succeeded' || !progressEvents.some(item => item.id === unknown.task.id && item.state === 'running' && item.total_bytes == null)) throw new Error('Unknown-size progress was not reported correctly');
 console.log('Native HTTP download integration test passed');
+await import('./test-native-http-safety.mjs');
+await import('./test-native-curl-encoding.mjs');

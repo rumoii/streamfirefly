@@ -167,4 +167,4 @@ Release 的 Windows x64 验证使用隔离环境和该 Release 的实际附件�
 
 本地助手捆绑的 FFmpeg 是按 LGPL 2.1 自行编译的精简版，只用于合并媒体和转换字幕。对应源码和构建脚本在同一 Release 的 `StreamFirefly-ffmpeg-source-<版本>.tar` 中，说明见包内 `native-host/FFMPEG-SOURCE.txt`。
 
-本地助手捆绑的 curl 是 curl-for-win 的 x64 构建（版本和 SHA-256 固定在 `tools/curl/curl-pin.json`），静态链接、按安装目录绝对路径调用，只用于 http/https 下载；TLS 经由 LibreSSL，`--ca-native` 使用 Windows 系统证书库，不附带 cacert 文件。
+本地助手捆绑的 curl 是与包架构一致的 curl-for-win 构建：x64 使用 `win64-mingw`，ARM64 使用 `win64a-mingw`（版本和 SHA-256 固定在 `tools/curl/curl-pin.json`）。它静态链接、按安装目录绝对路径调用，只用于 http/https 下载；TLS 经由 LibreSSL，`--ca-native` 使用 Windows 系统证书库，不附带 cacert 文件。

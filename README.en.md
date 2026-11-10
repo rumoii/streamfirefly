@@ -103,7 +103,7 @@ Download the Windows bundle for your architecture from [Releases](https://github
 
 ### Build from source
 
-You need Node.js 24 and Rust 1.98 with the MSVC toolchain (install the Visual Studio C++ build tools), the same versions CI uses, plus Chrome/Edge 116+ or Firefox 140+. The helper downloads with the `curl` that ships with Windows; HLS/DASH merging needs FFmpeg.
+You need Node.js 24 and Rust 1.98 with the MSVC toolchain (install the Visual Studio C++ build tools), the same versions CI uses, plus Chrome/Edge 116+ or Firefox 140+. The helper uses the pinned `curl` bundled with the package, and HLS/DASH merging needs FFmpeg; the source install script prepares both tools automatically.
 
 ```powershell
 npm install
