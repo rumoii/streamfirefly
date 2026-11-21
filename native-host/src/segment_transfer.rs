@@ -35,10 +35,6 @@ pub(crate) fn curl_once_args(
         "10".to_string(),
         "--max-time".to_string(),
         "120".to_string(),
-        "--speed-limit".to_string(),
-        "1".to_string(),
-        "--speed-time".to_string(),
-        "60".to_string(),
         "--output".to_string(),
         temporary.file_name().unwrap_or_default().to_string_lossy().into_owned(),
     ]);
@@ -212,7 +208,17 @@ mod tests {
     use crate::http_download::curl_base_args;
 
     #[test]
-    fn curl_once_args_start_with_proto_whitelist_and_stall_timeout() {
+    fn curl_once_args_use_total_timeout_without_low_speed_limits() {
+        let args = curl_once_args(None, Path::new("seg.download"), Path::new("seg.headers"));
+        assert!(args.windows(2).any(|pair| pair == ["--max-time", "120"]));
+        assert!(
+            !args.iter().any(|arg| matches!(arg.as_str(), "--speed-limit" | "--speed-time")),
+            "unexpected low-speed options in segment curl args: {args:?}"
+        );
+    }
+
+    #[test]
+    fn curl_once_args_start_with_proto_whitelist() {
         let args = curl_once_args(
             Some(&ByteRange { start: 100, length: 100 }),
             Path::new("中文目录/seg.download"),
@@ -220,9 +226,6 @@ mod tests {
         );
         assert_eq!(args[0], "--disable");
         assert!(args.starts_with(&curl_base_args()));
-        assert!(args.windows(2).any(|pair| pair == ["--max-time", "120"]));
-        assert!(args.windows(2).any(|pair| pair == ["--speed-limit", "1"]));
-        assert!(args.windows(2).any(|pair| pair == ["--speed-time", "60"]));
         assert!(args.windows(2).any(|pair| pair == ["--range", "100-199"]));
         assert!(args.windows(2).any(|pair| pair == ["--config", "-"]));
         assert!(args.iter().all(|arg| arg.is_ascii()));

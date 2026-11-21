@@ -17,6 +17,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::Child;
 use std::process::Command;
+use std::process::ExitStatus;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -50,6 +51,10 @@ pub(crate) fn curl_base_args() -> Vec<String> {
     .into_iter()
     .map(str::to_string)
     .collect()
+}
+
+pub(crate) fn curl_low_speed_timeout(status: ExitStatus, message: &str) -> bool {
+    status.code() == Some(28) && message.starts_with("Operation too slow.")
 }
 
 pub(crate) fn add_header_args(args: &mut Vec<String>, task: &Task, url: &str) {
@@ -231,6 +236,8 @@ pub(crate) fn single_download_args(output: &std::path::Path) -> Vec<String> {
         "-".to_string(),
         "--output".to_string(),
         output.file_name().unwrap_or_default().to_string_lossy().into_owned(),
+        "--write-out".to_string(),
+        "%{errormsg}".to_string(),
     ]);
     args
 }
@@ -299,7 +306,7 @@ pub(crate) fn start_single_http_download(
     }
     let child = match spawn_curl(&store, &task, &task.url, command
         .args(single_download_args(&temporary))
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
     ) {
         Ok(child) => child,
@@ -401,6 +408,13 @@ pub(crate) fn start_single_http_download(
                 } else {
                     let conflict = published.as_ref().err()
                         .is_some_and(|error| error.kind() == io::ErrorKind::AlreadyExists);
+                    let low_speed = child.lock().ok()
+                        .and_then(|mut child| child.stdout.take())
+                        .is_some_and(|mut stdout| {
+                            let mut message = String::new();
+                            stdout.read_to_string(&mut message).is_ok()
+                                && curl_low_speed_timeout(status, &message)
+                        });
                     update(&store, &writer, &task.id, |t| {
                         t.state = "failed".into();
                         t.phase = "failed".into();
@@ -408,6 +422,8 @@ pub(crate) fn start_single_http_download(
                         t.error = Some(if conflict { "output_path_conflict" } else if status.success() { "output_publish_failed" } else { "curl_download_failed" }.into());
                         t.message = Some(if conflict {
                             "输出文件已存在或被其他任务占用，请保留原文件并新建任务。"
+                        } else if low_speed {
+                            "下载速度过慢，已停止，可重试继续"
                         } else {
                             "下载失败，请检查网络或资源地址"
                         }.into());

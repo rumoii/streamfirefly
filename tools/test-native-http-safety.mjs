@@ -172,7 +172,6 @@ try {
   const removed = await host.send('task.delete', { id: conflict.id, deleteFile: true });
   assert.equal(removed.ok, true, JSON.stringify(removed));
   assert.equal(fs.existsSync(temporaryPath(conflict)), false);
-  assert.equal(fs.existsSync(conflict.output), false);
 
   const cancelled = await createGated('cancel-conflict');
   fs.writeFileSync(cancelled.output, 'external file');

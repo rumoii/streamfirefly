@@ -19,7 +19,10 @@ export function ensureBundledTools(exe, ffmpegPath) {
   if (!fs.existsSync(bundledCurl) || sha256(bundledCurl) !== expectedCurlHash) {
     const cached = path.join(root, 'tools', 'curl-cache', 'curl-x64.exe');
     if (!fs.existsSync(cached) || sha256(cached) !== expectedCurlHash) {
-      const result = spawnSync('pwsh', ['-NoProfile', '-File', path.join(root, 'tools', 'download-curl.ps1'), '-Architecture', 'x64'], { stdio: 'inherit' });
+      // A parent PowerShell 7 session can hide Windows PowerShell's built-in modules.
+      const env = { ...process.env };
+      for (const key of Object.keys(env)) if (key.toLowerCase() === 'psmodulepath') delete env[key];
+      const result = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'tools', 'download-curl.ps1'), '-Architecture', 'x64'], { env, stdio: 'inherit' });
       if (result.status !== 0 || result.error) throw new Error('download-curl.ps1 failed; cannot stage curl.exe for the native test');
     }
     if (!fs.existsSync(cached) || sha256(cached) !== expectedCurlHash) throw new Error('Cached curl.exe does not match the x64 pin');
