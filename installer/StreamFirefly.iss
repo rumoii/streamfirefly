@@ -26,10 +26,12 @@ ArchitecturesAllowed={#ARCH_ALLOWED}
 [Files]
 Source: "build\{#ARCH}\streamfirefly-native.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "build\{#ARCH}\ffmpeg.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "build\{#ARCH}\curl.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "build\{#ARCH}\register-native-host.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "build\{#ARCH}\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "build\{#ARCH}\FFMPEG-SOURCE.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "build\{#ARCH}\FFMPEG-LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "build\{#ARCH}\CURL-LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Run]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\register-native-host.ps1"" -ChromeExtensionId ""{#ChromeExtensionId}"" -EdgeExtensionId ""{#EdgeExtensionId}"" -FirefoxExtensionId ""{#FirefoxExtensionId}"" -NativeHostPath ""{app}\streamfirefly-native.exe"" -InstallDir ""{app}"""; StatusMsg: "正在注册浏览器本地助手…"; Flags: runhidden waituntilterminated
@@ -48,8 +50,10 @@ end;
 [UninstallDelete]
 Type: files; Name: "{app}\streamfirefly-native.exe"
 Type: files; Name: "{app}\ffmpeg.exe"
+Type: files; Name: "{app}\curl.exe"
 Type: files; Name: "{app}\com.streamfirefly.native*.json"
 Type: files; Name: "{app}\register-native-host.ps1"
 Type: files; Name: "{app}\THIRD_PARTY_NOTICES.md"
 Type: files; Name: "{app}\FFMPEG-SOURCE.txt"
 Type: files; Name: "{app}\FFMPEG-LICENSE.txt"
+Type: files; Name: "{app}\CURL-LICENSE.txt"

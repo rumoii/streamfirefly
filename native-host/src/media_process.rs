@@ -17,12 +17,33 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
-pub(crate) fn bundled_tool(name: &str) -> PathBuf {
+/// FFmpeg makes no output and progress movement for this long is treated as stuck.
+const STALL_LIMIT: Duration = Duration::from_secs(60);
+
+/// Tools ship beside the native host executable and are only launched by absolute path,
+/// so a stray curl.exe/ffmpeg.exe on PATH or in the working directory is never picked up.
+pub(crate) fn bundled_tool(name: &str) -> Result<PathBuf, &'static str> {
+    let file_name = PathBuf::from(name);
     std::env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(|parent| parent.join(name)))
         .filter(|path| path.is_file())
-        .unwrap_or_else(|| PathBuf::from(name))
+        .ok_or_else(|| match file_name.extension().and_then(|value| value.to_str()) {
+            Some("exe") => match file_name.file_stem().and_then(|value| value.to_str()) {
+                Some("curl") => "tool_missing:curl",
+                Some("ffmpeg") => "tool_missing:ffmpeg",
+                _ => "tool_missing",
+            },
+            _ => "tool_missing",
+        })
+}
+
+pub(crate) fn ffmpeg_command() -> Result<Command, &'static str> {
+    bundled_tool("ffmpeg.exe").map(Command::new)
+}
+
+pub(crate) fn curl_command() -> Result<Command, &'static str> {
+    bundled_tool("curl.exe").map(Command::new)
 }
 
 pub(crate) fn set_output_state(
@@ -54,7 +75,8 @@ pub(crate) fn run_ffmpeg_with_progress(
     progress_span: u8,
     message: &str,
 ) -> Result<(), String> {
-    let child = spawn_process(store, &task.id, Command::new(bundled_tool("ffmpeg.exe"))
+    let mut command = ffmpeg_command().map_err(|error| error.to_string())?;
+    let child = spawn_process(store, &task.id, command
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -82,6 +104,9 @@ pub(crate) fn run_ffmpeg_with_progress(
         }
     });
     let mut last_bytes = 0;
+    let mut stall_bytes = 0;
+    let mut stall_position = -1.0_f64;
+    let mut stalled_since: Option<Instant> = None;
     let mut sampled_at = Instant::now();
     let started_at = Instant::now();
     loop {
@@ -102,6 +127,22 @@ pub(crate) fn run_ffmpeg_with_progress(
         last_bytes = bytes;
         sampled_at = Instant::now();
         let seconds = position.lock().map(|value| *value).unwrap_or(0.0);
+        // Like capture_merge: no output growth and no progress movement for this long means stuck.
+        if bytes != stall_bytes || seconds != stall_position {
+            stall_bytes = bytes;
+            stall_position = seconds;
+            stalled_since = None;
+        } else if stalled_since.is_none() {
+            stalled_since = Some(Instant::now());
+        }
+        if stalled_since.is_some_and(|since| since.elapsed() >= STALL_LIMIT) {
+            if let Ok(mut process) = child.lock() {
+                let _ = process.kill();
+                let _ = process.wait();
+            }
+            unregister_process(store, &task.id, &child);
+            return Err("ffmpeg_stalled".into());
+        }
         let stage = if duration > 0.0 {
             (seconds / duration).clamp(0.0, 0.99)
         } else {
@@ -121,12 +162,12 @@ pub(crate) fn run_ffmpeg_with_progress(
             });
             current.message = Some(message.into());
         });
-        match child
+        let waited = child
             .lock()
             .map_err(|_| "process_lock_poisoned".to_string())
-            .and_then(|mut process| process.try_wait().map_err(|error| error.to_string()))?
-        {
-            Some(status) => {
+            .and_then(|mut process| process.try_wait().map_err(|error| error.to_string()));
+        match waited {
+            Ok(Some(status)) => {
                 unregister_process(store, &task.id, &child);
                 return if status.success() {
                     Ok(())
@@ -134,7 +175,61 @@ pub(crate) fn run_ffmpeg_with_progress(
                     Err("ffmpeg_unavailable_or_failed".into())
                 };
             }
-            None => {}
+            Ok(None) => {}
+            Err(error) => {
+                if let Ok(mut process) = child.lock() {
+                    let _ = process.kill();
+                    let _ = process.wait();
+                }
+                unregister_process(store, &task.id, &child);
+                return Err(error);
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    static TOOL_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn curl_command_uses_the_absolute_bundled_path() {
+        let _guard = TOOL_TEST_LOCK.lock().unwrap();
+        let dir = std::env::current_exe().unwrap().parent().unwrap().to_path_buf();
+        let bundled = dir.join("curl.exe");
+        let created = !bundled.is_file();
+        if created {
+            fs::write(&bundled, b"test fixture").unwrap();
+        }
+        let command = curl_command();
+        if created {
+            fs::remove_file(&bundled).unwrap();
+        }
+        let command = command.unwrap();
+        assert_eq!(command.get_program(), bundled.as_os_str());
+        assert!(PathBuf::from(command.get_program()).is_absolute());
+    }
+
+    #[test]
+    fn bundled_tool_without_file_returns_error_not_bare_name() {
+        let missing = "definitely-not-a-streamfirefly-tool-xyz.exe";
+        assert!(!std::env::current_exe()
+            .unwrap()
+            .parent()
+            .map(|dir| dir.join(missing))
+            .is_some_and(|path| path.is_file()));
+        assert_eq!(bundled_tool(missing), Err("tool_missing"));
+    }
+
+    #[test]
+    fn bundled_tool_reports_named_missing_tools() {
+        let _guard = TOOL_TEST_LOCK.lock().unwrap();
+        let dir = std::env::current_exe().unwrap().parent().unwrap().to_path_buf();
+        assert!(!dir.join("curl.exe").is_file());
+        assert!(!dir.join("ffmpeg.exe").is_file());
+        assert_eq!(bundled_tool("curl.exe"), Err("tool_missing:curl"));
+        assert_eq!(bundled_tool("ffmpeg.exe"), Err("tool_missing:ffmpeg"));
     }
 }

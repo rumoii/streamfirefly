@@ -8,12 +8,14 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { discoveryCases } from './discovery-cases.mjs';
 import { fixtureFfmpeg, fixtureFfprobe } from './fixture-ffmpeg.mjs';
+import { ensureBundledTools } from './native-test-tools.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ffmpeg = process.env.STREAMFIREFLY_FFMPEG_EXE || path.join(root, 'installer/build/x64/ffmpeg.exe');
 const ffprobe = fixtureFfprobe;
 const native = process.env.STREAMFIREFLY_NATIVE_EXE || path.join(root, 'native-host/target/debug/streamfirefly-native.exe');
 for (const file of [ffmpeg, fixtureFfmpeg, ffprobe, native]) assert.ok(fs.existsSync(file), `Required executable missing: ${file}`);
+ensureBundledTools(native, ffmpeg);
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'streamfirefly-generated-hls-'));
 const outputDirectory = path.join(root, 'test-results');
 fs.mkdirSync(outputDirectory, { recursive: true });

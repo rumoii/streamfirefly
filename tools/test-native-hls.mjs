@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict';
 import { createCipheriv } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -6,11 +7,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fixtureFfmpeg } from './fixture-ffmpeg.mjs';
+import { ensureBundledTools } from './native-test-tools.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const exe = process.env.STREAMFIREFLY_NATIVE_EXE || path.join(root, 'native-host', 'target', 'debug', 'streamfirefly-native.exe');
 const ffmpegDir = path.join(root, 'installer', 'build', 'x64');
 const ffmpeg = process.env.STREAMFIREFLY_FFMPEG_EXE || path.join(ffmpegDir, 'ffmpeg.exe');
+ensureBundledTools(exe, ffmpeg);
 if (!fs.existsSync(exe)) throw new Error(`Native executable is missing: ${exe}`);
 if (!fs.existsSync(ffmpeg)) throw new Error(`Bundled x64 FFmpeg fixture is missing: ${ffmpeg}`);
 
@@ -46,6 +49,9 @@ const audioSegments = fs.readdirSync(audioDir).filter(name => name.endsWith('.ts
 const key = Buffer.from('00112233445566778899aabbccddeeff', 'hex');
 const retryCounts = new Map();
 const liveRequests = new Map();
+let stalledHttpRequests = 0;
+const resumePrefix = 1024;
+const stalledHttpBody = fs.readFileSync(path.join(mediaDir, segments[0]));
 let port;
 function ivFor(sequence) {
   const iv = Buffer.alloc(16);
@@ -81,6 +87,25 @@ function liveManifest(prefix, sequence, count = 2, endList = false) {
 }
 
 const server = http.createServer((request, response) => {
+  if (request.url === '/stalled-http.mp4') {
+    const headers = { 'content-type': 'video/mp4', 'content-length': stalledHttpBody.length };
+    if (request.method === 'HEAD') { response.writeHead(200, headers).end(); return; }
+    stalledHttpRequests++;
+    // Spend the automatic retries first so only the terminal attempt has to reach the 60-second limit.
+    if (stalledHttpRequests <= 3) { response.writeHead(503).end(); return; }
+    if (stalledHttpRequests === 4) {
+      response.writeHead(200, headers).write(stalledHttpBody.subarray(0, resumePrefix));
+      return;
+    }
+    if (request.headers.range === `bytes=${resumePrefix}-`) {
+      headers['content-range'] = `bytes ${resumePrefix}-${stalledHttpBody.length - 1}/${stalledHttpBody.length}`;
+      headers['content-length'] -= resumePrefix;
+      response.writeHead(206, headers).end(stalledHttpBody.subarray(resumePrefix));
+    } else {
+      response.writeHead(416).end();
+    }
+    return;
+  }
   const live = /^\/(auto-live|manual-live|restart-live|delete-live)\.m3u8$/.exec(request.url || '');
   if (live) {
     const name = live[1];
@@ -330,6 +355,28 @@ const recovered = await waitFor(host, slow.task.id, item => item.state === 'succ
 if (!fs.existsSync(recovered.output) || recovered.attempt < 2) throw new Error(`Restart recovery failed: ${JSON.stringify(recovered)}`);
 assertPlayable(recovered.output, 'Recovered HLS');
 
-host.child.stdin.end();
-server.close();
+try {
+  const stalledHttp = await host.send('task.create', {
+    url: `http://127.0.0.1:${port}/stalled-http.mp4`, title: 'stalled-http', fileName: 'stalled-http',
+    mime: 'video/mp4', saveDir: outputDir, downloadThreads: 1,
+  });
+  assert.equal(stalledHttp.ok, true, JSON.stringify(stalledHttp));
+  const terminal = item => ['succeeded', 'failed'].includes(item.state);
+  const httpFile = await waitFor(host, stalledHttp.task.id, terminal, 'low-speed HTTP failure', 1000);
+  assert.deepEqual(
+    { http: httpFile.state, httpMessage: httpFile.message, httpRequests: stalledHttpRequests },
+    { http: 'failed', httpMessage: '下载速度过慢，已停止，可重试继续', httpRequests: 4 },
+  );
+  const retried = await host.send('task.control', { id: httpFile.id, action: 'retry' });
+  assert.equal(retried.ok, true, JSON.stringify(retried));
+  const resumedHttp = await waitFor(host, httpFile.id, terminal, 'HTTP resume after low-speed failure');
+  assert.equal(resumedHttp.state, 'succeeded', JSON.stringify(resumedHttp));
+  assert.equal(stalledHttpRequests, 5);
+  assert.deepEqual(fs.readFileSync(resumedHttp.output), stalledHttpBody);
+  console.log('Low-speed curl exit reports a resumable single HTTP failure');
+} finally {
+  host.child.stdin.end();
+  server.closeAllConnections();
+  server.close();
+}
 console.log('Native HLS VOD/live, audio-only, live deletion, AES-128, retry, pause/stop, and restart recovery test passed');

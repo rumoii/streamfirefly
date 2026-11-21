@@ -6,9 +6,11 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ensureBundledTools } from './native-test-tools.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const executable = process.env.STREAMFIREFLY_NATIVE_EXE || path.join(root, 'native-host/target/debug/streamfirefly-native.exe');
+ensureBundledTools(executable);
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'streamfirefly-queue-'));
 const output = path.join(temporary, 'downloads');
 const body = Buffer.alloc(128 * 1024, 42);

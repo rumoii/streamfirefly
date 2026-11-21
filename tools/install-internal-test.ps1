@@ -16,14 +16,14 @@ if (-not $architectureMatches) {
   throw "This bundle is $($packageInfo.architecture), but Windows reports $osArchitecture. Use the matching StreamFirefly test bundle."
 }
 $sourceDir = Join-Path $bundleRoot 'native-host'
-$required = @('streamfirefly-native.exe', 'ffmpeg.exe', 'THIRD_PARTY_NOTICES.md', 'FFMPEG-SOURCE.txt', 'FFMPEG-LICENSE.txt')
+$required = @('ffmpeg.exe', 'curl.exe', 'THIRD_PARTY_NOTICES.md', 'FFMPEG-SOURCE.txt', 'FFMPEG-LICENSE.txt', 'CURL-LICENSE.txt', 'streamfirefly-native.exe')
 foreach ($name in $required) {
   if (-not (Test-Path -LiteralPath (Join-Path $sourceDir $name) -PathType Leaf)) { throw "Test bundle file is missing: native-host\$name" }
 }
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 try {
-  foreach ($name in $required) { Copy-Item -LiteralPath (Join-Path $sourceDir $name) -Destination (Join-Path $InstallDir $name) -Force }
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'register-native-host.ps1') -Destination (Join-Path $InstallDir 'register-native-host.ps1') -Force
+  foreach ($name in $required) { Copy-Item -LiteralPath (Join-Path $sourceDir $name) -Destination (Join-Path $InstallDir $name) -Force }
 } catch {
   throw "Unable to update StreamFirefly files. Close Chrome and Edge, then retry. $($_.Exception.Message)"
 }

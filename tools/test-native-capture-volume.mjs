@@ -9,6 +9,7 @@ import WebSocket from 'ws';
 import { archiveCaptureEvidence } from './capture-test-evidence.mjs';
 import { finishCaptureTest, removeCaptureDirectory, resetCaptureEvidence, resetCaptureReports } from './capture-test-runtime.mjs';
 import { fixtureFfmpeg, fixtureFfprobe } from './fixture-ffmpeg.mjs';
+import { ensureBundledTools } from './native-test-tools.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'streamfirefly-capture-browser-'));
@@ -19,6 +20,7 @@ resetCaptureReports(reportPath);
 resetCaptureEvidence(reportPath);
 const native = process.env.STREAMFIREFLY_NATIVE_EXE || path.join(root, 'native-host/target/debug/streamfirefly-native.exe');
 const ffmpeg = process.env.STREAMFIREFLY_FFMPEG_EXE || path.join(root, 'installer/build/x64/ffmpeg.exe');
+ensureBundledTools(native, ffmpeg);
 const ffprobe = fixtureFfprobe;
 const origin = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop';
 const deadline = performance.now() + 600000;

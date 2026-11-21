@@ -12,10 +12,12 @@ foreach ($registryPath in @(
 $ownedFiles = @(
   'streamfirefly-native.exe',
   'ffmpeg.exe',
+  'curl.exe',
   'register-native-host.ps1',
   'THIRD_PARTY_NOTICES.md',
   'FFMPEG-SOURCE.txt',
   'FFMPEG-LICENSE.txt',
+  'CURL-LICENSE.txt',
   'com.streamfirefly.native.googlechrome.json',
   'com.streamfirefly.native.microsoftedge.json',
   'com.streamfirefly.native.firefox.json'

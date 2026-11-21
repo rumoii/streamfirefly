@@ -35,7 +35,7 @@ jobs:
           # An empty diff runs everything instead of passing silently.
           $all = $files.Count -eq 0
           $code = $all -or @($files | Where-Object { $_ -notmatch '^(docs/|store-assets/|\.github/ISSUE_TEMPLATE/)|\.md$' }).Count -gt 0
-          $native = $all -or @($files | Where-Object { $_ -match '^(native-host/|tools/test-native|tools/hold-test-|Cargo\.)' }).Count -gt 0
+          $native = $all -or @($files | Where-Object { $_ -match '^(native-host/|tools/test-native|tools/hold-test-|tools/native-test-tools\.mjs|tools/download-curl\.ps1|tools/curl/|Cargo\.)' }).Count -gt 0
           "code=$($code.ToString().ToLower())" >> $env:GITHUB_OUTPUT
           "native=$($native.ToString().ToLower())" >> $env:GITHUB_OUTPUT
 

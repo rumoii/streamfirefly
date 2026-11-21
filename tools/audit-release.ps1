@@ -23,6 +23,7 @@ try {
     "$bundleName/extension/manifest.json",
     "$bundleName/native-host/streamfirefly-native.exe",
     "$bundleName/native-host/ffmpeg.exe",
+    "$bundleName/native-host/curl.exe",
     "$bundleName/tools/install.ps1",
     "$bundleName/tools/uninstall.ps1",
     "$bundleName/tools/register-native-host.ps1",
@@ -31,6 +32,7 @@ try {
     "$bundleName/native-host/THIRD_PARTY_NOTICES.md",
     "$bundleName/native-host/FFMPEG-SOURCE.txt",
     "$bundleName/native-host/FFMPEG-LICENSE.txt",
+    "$bundleName/native-host/CURL-LICENSE.txt",
     "$bundleName/PACKAGE-INFO.json",
     "$bundleName/SHA256SUMS.txt",
     "$bundleName/StreamFirefly-extension-$extensionVersion.zip",
@@ -88,13 +90,17 @@ try {
     } finally { $stream.Dispose() }
   }
   $expectedMachine = if ($ExpectedArchitecture -eq 'x64') { '8664' } else { 'AA64' }
-  foreach ($name in @('native-host\streamfirefly-native.exe', 'native-host\ffmpeg.exe')) {
+  foreach ($name in @('native-host\streamfirefly-native.exe', 'native-host\ffmpeg.exe', 'native-host\curl.exe')) {
     $machine = Get-PeMachine (Join-Path $root $name)
     if ($machine -ne $expectedMachine) { throw "$name has PE machine $machine, expected $expectedMachine" }
   }
   $ffmpegPins = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'ffmpeg\ffmpeg-lgpl.json') | ConvertFrom-Json
   if ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root 'native-host\ffmpeg.exe')).Hash.ToLowerInvariant() -ne $ffmpegPins.binaries.$ExpectedArchitecture) { throw 'Bundled ffmpeg.exe is not the pinned LGPL build' }
   if (-not (Select-String -LiteralPath (Join-Path $root 'native-host\FFMPEG-LICENSE.txt') -Pattern 'GNU LESSER GENERAL PUBLIC LICENSE' -Quiet)) { throw 'Bundled FFmpeg license is not the LGPL text' }
+  $curlPins = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'curl\curl-pin.json') | ConvertFrom-Json
+  $curlPin = $curlPins.architectures.$ExpectedArchitecture
+  if ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root 'native-host\curl.exe')).Hash.ToLowerInvariant() -ne $curlPin.sha256.'curl.exe') { throw 'Bundled curl.exe is not the pinned curl-for-win build' }
+  if (-not (Select-String -LiteralPath (Join-Path $root 'native-host\CURL-LICENSE.txt') -Pattern ([regex]::Escape($curlPins.licenseCheck)) -Quiet)) { throw 'Bundled curl license is not the curl copyright notice' }
   if ($packageInfo.extensionVersion -ne $extensionVersion) { throw "Extension version metadata mismatch: $($packageInfo.extensionVersion)" }
   $nestedZip = [System.IO.Compression.ZipFile]::OpenRead((Join-Path $root "StreamFirefly-extension-$extensionVersion.zip"))
   try {

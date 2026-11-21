@@ -3,8 +3,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
+import JSZip from 'jszip';
 
 assert.equal(process.platform, 'win32', 'Native packaging lifecycle tests require Windows');
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -63,3 +65,137 @@ for (const source of ['process.exit(0);', "console.log('   ');"]) {
     assert.match(result.stderr, /returned no version output/);
   });
 }
+
+for (const { label, processArchitecture, osArchitecture, parameter = '', expected } of [
+  { label: 'x64 default', processArchitecture: 'AMD64', osArchitecture: '', expected: 'x64' },
+  { label: 'ARM64 default under emulation', processArchitecture: 'AMD64', osArchitecture: 'ARM64', expected: 'arm64' },
+  { label: 'explicit x64 on ARM64', processArchitecture: 'ARM64', osArchitecture: '', parameter: ' -Architecture x64', expected: 'x64' },
+]) {
+  test(`source install preserves the previous helper when tool preparation fails: ${label}`, () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'streamfirefly-source-install-'));
+    const scripts = path.join(directory, 'tools');
+    const built = path.join(directory, 'built.exe');
+    const installDir = path.join(directory, 'installed');
+    const installed = path.join(installDir, 'streamfirefly-native.exe');
+    try {
+      fs.mkdirSync(path.join(scripts, 'curl'), { recursive: true });
+      fs.mkdirSync(installDir);
+      fs.writeFileSync(built, 'new helper');
+      fs.writeFileSync(installed, 'previous helper');
+      for (const script of ['install-native-host.ps1', 'download-curl.ps1', 'download-ffmpeg.ps1']) {
+        fs.copyFileSync(path.join(root, 'tools', script), path.join(scripts, script));
+      }
+      fs.writeFileSync(path.join(scripts, 'curl', 'curl-pin.json'), '{"architectures":{}}');
+      const result = execute(`$env:PROCESSOR_ARCHITECTURE=${quote(processArchitecture)}\n$env:PROCESSOR_ARCHITEW6432=${quote(osArchitecture)}\n& ${quote(path.join(scripts, 'install-native-host.ps1'))} -BuiltExe ${quote(built)} -InstallDir ${quote(installDir)} -SkipRegistration${parameter}`);
+      assert.notEqual(result.status, 0);
+      assert.equal(fs.readFileSync(installed, 'utf8'), 'previous helper');
+      assert.match(result.stderr, new RegExp(`Invalid pinned curl hashes for ${expected}`));
+    } finally {
+      assert.equal(path.dirname(fs.realpathSync(directory)), fs.realpathSync(os.tmpdir()));
+      fs.rmSync(directory, { recursive: true });
+    }
+  });
+}
+
+for (const script of ['install.ps1', 'install-internal-test.ps1']) {
+  test(`${script} preserves the previous helper when the bundled curl cannot be copied`, () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'streamfirefly-bundle-install-'));
+    const bundle = path.join(directory, 'bundle');
+    const scripts = path.join(bundle, 'tools');
+    const installDir = path.join(directory, 'installed');
+    const installed = path.join(installDir, 'streamfirefly-native.exe');
+    const locked = path.join(installDir, 'curl.exe');
+    try {
+      fs.mkdirSync(scripts, { recursive: true });
+      fs.mkdirSync(path.join(bundle, 'native-host'));
+      fs.mkdirSync(installDir);
+      fs.writeFileSync(installed, 'previous helper');
+      fs.writeFileSync(locked, 'previous curl');
+      const pe = Buffer.alloc(256);
+      pe.writeUInt32LE(0x80, 0x3c);
+      pe.writeUInt16LE(0x8664, 0x84);
+      const files = new Map([
+        ['PACKAGE-INFO.json', JSON.stringify({ architecture: 'x64', sourceDirty: false, sourceChanges: [] })],
+        ['tools/register-native-host.ps1', "throw 'This fixture must stop before registration'"],
+        ...['streamfirefly-native.exe', 'ffmpeg.exe', 'curl.exe'].map(name => [`native-host/${name}`, pe]),
+        ...['THIRD_PARTY_NOTICES.md', 'FFMPEG-SOURCE.txt', 'FFMPEG-LICENSE.txt', 'CURL-LICENSE.txt'].map(name => [`native-host/${name}`, 'fixture']),
+        [`tools/${script}`, fs.readFileSync(path.join(root, 'tools', script))],
+      ]);
+      for (const [name, value] of files) fs.writeFileSync(path.join(bundle, name), value);
+      const checksums = [...files].map(([name, value]) => `${createHash('sha256').update(value).digest('hex')}  ${name}`);
+      fs.writeFileSync(path.join(bundle, 'SHA256SUMS.txt'), `${checksums.join('\n')}\n`);
+      const result = execute(`$env:PROCESSOR_ARCHITECTURE='AMD64'\n$env:PROCESSOR_ARCHITEW6432=''\n$lock=[IO.File]::Open(${quote(locked)}, 'Open', 'ReadWrite', 'None')\ntry { & ${quote(path.join(scripts, script))} -InstallDir ${quote(installDir)} } finally { $lock.Dispose() }`);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /Unable to update StreamFirefly files[\s\S]*curl\.exe/);
+      assert.equal(fs.readFileSync(installed, 'utf8'), 'previous helper');
+    } finally {
+      assert.equal(path.dirname(fs.realpathSync(directory)), fs.realpathSync(os.tmpdir()));
+      fs.rmSync(directory, { recursive: true });
+    }
+  });
+}
+
+async function auditCurlFixture({ omitCurl = false, architecture = 'x64', curlMachine } = {}) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'streamfirefly-internal-audit-'));
+  const bundleName = `StreamFirefly-1.0.9-internal-${architecture}`;
+  const files = new Map([
+    ['extension/manifest.json', '{}'],
+    ['tools/install-internal-test.ps1', 'fixture'],
+    ['tools/uninstall-internal-test.ps1', 'fixture'],
+    ['README-INTERNAL.md', 'StreamFirefly 1.0.9'],
+    ['StreamFirefly-extension-1.0.9.zip', 'fixture'],
+    ['StreamFirefly-firefox-1.0.9-test.xpi', 'fixture'],
+    ['native-host/CURL-LICENSE.txt', 'COPYRIGHT AND PERMISSION NOTICE'],
+  ]);
+  const machine = architecture === 'x64' ? 0x8664 : 0xaa64;
+  const pe = Buffer.alloc(256);
+  pe.writeUInt32LE(0x80, 0x3c);
+  pe.writeUInt16LE(machine, 0x84);
+  files.set('native-host/streamfirefly-native.exe', pe);
+  files.set('native-host/ffmpeg.exe', pe);
+  if (!omitCurl) {
+    const curl = Buffer.from(pe);
+    curl.writeUInt16LE(curlMachine ?? machine, 0x84);
+    files.set('native-host/curl.exe', curl);
+  }
+  files.set('PACKAGE-INFO.json', JSON.stringify({
+    architecture, version: '1.0.9', extensionVersion: '1.0.9',
+    sourceCommit: 'a'.repeat(40), sourceDirty: false, sourceChanges: [],
+    buildEnvironment: { cargo: 'cargo', rustc: 'rustc', node: 'node', powershell: 'powershell' },
+  }));
+  const checksums = [...files.entries()].map(([name, value]) => `${createHash('sha256').update(value).digest('hex')}  ${name}`);
+  files.set('SHA256SUMS.txt', `${checksums.join('\n')}\n`);
+  const zip = new JSZip();
+  for (const [name, value] of files) zip.file(`${bundleName}/${name}`, value);
+  const archive = path.join(directory, `${bundleName}.zip`);
+  try {
+    fs.writeFileSync(archive, await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }));
+    return execute(`& ${quote(path.join(root, 'tools', 'audit-internal-test.ps1'))} -Archive ${quote(archive)} -ExpectedArchitecture ${architecture} -ExpectedBundleVersion 1.0.9 -ExpectedSourceCommit ${'a'.repeat(40)}`);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+test('internal audit rejects a missing bundled curl', async () => {
+  const result = await auditCurlFixture({ omitCurl: true });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /native-host\/curl\.exe/);
+});
+
+test('internal audit rejects a curl that is not the pinned build', async () => {
+  const result = await auditCurlFixture();
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /not the pinned curl-for-win build/);
+});
+
+test('internal audit rejects x64 curl in an arm64 bundle', async () => {
+  const result = await auditCurlFixture({ architecture: 'arm64', curlMachine: 0x8664 });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /native-host\\curl\.exe has PE machine 8664, expected AA64/);
+});
+
+test('internal audit rejects curl whose hash does not match the arm64 pin', async () => {
+  const result = await auditCurlFixture({ architecture: 'arm64' });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /not the pinned curl-for-win build/);
+});

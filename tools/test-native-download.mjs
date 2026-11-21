@@ -4,9 +4,18 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ensureBundledTools } from './native-test-tools.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const exe = process.env.STREAMFIREFLY_NATIVE_EXE || path.join(root, 'native-host', 'target', 'debug', 'streamfirefly-native.exe');
+ensureBundledTools(exe);
+// The host must launch the curl.exe bundled next to the exe by absolute path. A decoy
+// curl.exe placed first on PATH must never be picked up; if it were, the downloads
+// below would fail or hang instead of reaching the bundled curl.
+const bundledCurl = path.join(path.dirname(exe), 'curl.exe');
+if (!fs.existsSync(bundledCurl)) throw new Error(`Bundled curl.exe missing: ${bundledCurl}`);
+const decoyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'streamfirefly-decoy-curl-'));
+fs.copyFileSync(exe, path.join(decoyDir, 'curl.exe'));
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'streamfirefly-e2e-'));
 const payload = Buffer.alloc(5 * 1024 * 1024, 83);
 const unknownPayload = Buffer.alloc(2 * 1024 * 1024, 85);
@@ -16,6 +25,8 @@ let authorizationSeen = false;
 let forbiddenHeaderSeen = false;
 let slowHeadGets = 0;
 let slowBytesServed = 0;
+let stalledGets = 0;
+const stalledResponses = new Set();
 let notifySlowHeadStarted;
 const slowHeadStarted = new Promise(resolve => { notifySlowHeadStarted = resolve; });
 const server = http.createServer((request, response) => {
@@ -46,6 +57,13 @@ const server = http.createServer((request, response) => {
   } else {
     response.writeHead(200, headers);
   }
+  if (request.url === '/stalled.mp4') {
+    stalledGets += 1;
+    stalledResponses.add(response);
+    response.on('close', () => stalledResponses.delete(response));
+    response.write(responseBody.subarray(0, 64 * 1024));
+    return;
+  }
   let offset = 0;
   const timer = setInterval(() => {
     const chunkSize = request.url === '/slow.mp4' ? 64 * 1024 : 512 * 1024;
@@ -74,7 +92,7 @@ const proxy = http.createServer((request, response) => {
 });
 await new Promise(resolve => proxy.listen(0, '127.0.0.1', resolve));
 const proxyPort = proxy.address().port;
-const child = spawn(exe, [], { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true, env: { ...process.env, LOCALAPPDATA: temp } });
+const child = spawn(exe, [], { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true, env: { ...process.env, LOCALAPPDATA: temp, PATH: `${decoyDir}${path.delimiter}${process.env.PATH}` } });
 let sequence = 0;
 let buffer = Buffer.alloc(0);
 const pending = new Map();
@@ -96,8 +114,9 @@ function send(type, messagePayload = {}) {
   child.stdin.write(Buffer.concat([Buffer.from([value.length & 255, value.length >> 8 & 255, value.length >> 16 & 255, value.length >> 24 & 255]), value]));
   return new Promise(resolve => pending.set(id, resolve));
 }
-async function waitTask(taskId) {
-  for (let attempt = 0; attempt < 80; attempt++) {
+async function waitTask(taskId, timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 100));
     const listed = await send('task.list');
     const task = listed.tasks.find(item => item.id === taskId);
@@ -189,6 +208,14 @@ if (!await waitRunning(slowRemove.task.id)) throw new Error('Second slow task di
 const slowRemoveDelete = await send('task.delete', { id: slowRemove.task.id, deleteFile: true });
 if (!slowRemoveDelete.ok || fs.existsSync(slowRemove.task.output)) throw new Error(`Active file deletion failed: ${JSON.stringify(slowRemoveDelete)}`);
 await assertTaskAbsent(slowRemove.task.id);
+const stalled = await send('task.create', { url: `http://127.0.0.1:${port}/stalled.mp4`, title: 'stalled', fileName: '断流下载', mime: 'video/mp4', saveDir: customDir, downloadThreads: 1 });
+const stalledTask = await waitTask(stalled.task.id, 300000);
+if (stalledTask?.state !== 'failed' || stalledTask.error !== 'curl_download_failed' || stalledGets < 2) throw new Error(`Stalled download did not fail after curl retries: ${JSON.stringify({ stalledTask, stalledGets })}`);
+for (let attempt = 0; attempt < 50 && stalledResponses.size; attempt++) await new Promise(resolve => setTimeout(resolve, 100));
+if (stalledResponses.size) throw new Error('Stalled curl left a response connection open after exiting');
+const afterStall = await send('task.create', { url: `http://127.0.0.1:${port}/unknown.mp4`, title: 'after-stall', fileName: '断流后任务', mime: 'video/mp4', saveDir: customDir, downloadThreads: 1 });
+const afterStallTask = await waitTask(afterStall.task.id);
+if (afterStallTask?.state !== 'succeeded') throw new Error(`Scheduler slot was not released after a stalled download: ${JSON.stringify(afterStallTask)}`);
 const orphanCheck = await send('task.create', { url: `http://127.0.0.1:${port}/slow.mp4`, title: 'host-exit', fileName: '助手退出', mime: 'video/mp4', saveDir: customDir, downloadThreads: 1 });
 if (!await waitRunning(orphanCheck.task.id)) throw new Error('Host exit task did not enter running state');
 const exited = new Promise(resolve => child.once('exit', resolve));
@@ -214,3 +241,5 @@ if (fs.readdirSync(customDir).some(name => name.includes('.streamfirefly-parts-'
 if (duplicate.task.id === created.task.id || duplicateTask?.state !== 'succeeded' || duplicateTask.output === task.output) throw new Error('Explicit duplicate download was not created independently');
 if (unknownTask?.state !== 'succeeded' || !progressEvents.some(item => item.id === unknown.task.id && item.state === 'running' && item.total_bytes == null)) throw new Error('Unknown-size progress was not reported correctly');
 console.log('Native HTTP download integration test passed');
+await import('./test-native-http-safety.mjs');
+await import('./test-native-curl-encoding.mjs');

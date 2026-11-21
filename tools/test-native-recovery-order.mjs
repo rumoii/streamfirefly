@@ -6,12 +6,14 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ensureBundledTools } from './native-test-tools.mjs';
 
 // Regression for issue #8: an early task.list may record the recovery need, but no
 // recovered download may start before network.configure succeeds, and every recovered
 // request must travel through the user's configured proxy.
 const root = fileURLToPath(new URL('../', import.meta.url));
 const exe = process.env.STREAMFIREFLY_NATIVE_EXE || path.join(root, 'native-host', 'target', 'debug', 'streamfirefly-native.exe');
+ensureBundledTools(exe);
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'streamfirefly-recovery-order-'));
 
 const payload = Buffer.alloc(12 * 1024 * 1024, 83);

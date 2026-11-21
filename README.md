@@ -111,7 +111,7 @@
 
 ### 从源码构建
 
-需要 Node.js 24、Rust 1.98（MSVC 工具链，需安装 Visual Studio C++ 生成工具），与 CI 使用的版本一致；以及 Chrome/Edge 116+ 或 Firefox 140+。本地助手使用 Windows 自带的 `curl` 下载，HLS/DASH 合并需要 FFmpeg。
+需要 Node.js 24、Rust 1.98（MSVC 工具链，需安装 Visual Studio C++ 生成工具），与 CI 使用的版本一致；以及 Chrome/Edge 116+ 或 Firefox 140+。本地助手使用随包附带的钉版 `curl`，HLS/DASH 合并需要 FFmpeg；从源码安装时，安装脚本会自动准备这两个工具。
 
 ```powershell
 npm install
