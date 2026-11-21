@@ -1,3 +1,4 @@
+use crate::lock::LockExt;
 use crate::hls::load_checkpoint;
 use crate::hls_plan::runtime_plan_from_persisted;
 use crate::model::Task;
@@ -13,8 +14,7 @@ pub(crate) fn resume_recoverable_hls_tasks(store: &TaskRuntime, writer: &Writer)
     let resumable: Vec<Task> = store
         .repository
         .tasks
-        .lock()
-        .unwrap()
+        .lock_or_recover()
         .iter()
         .filter(|task| {
             task.state == "interrupted"

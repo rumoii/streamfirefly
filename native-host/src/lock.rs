@@ -6,6 +6,7 @@ use std::sync::MutexGuard;
 /// going. The protected data may reflect a half-finished update, which is
 /// accepted over a cascading crash.
 pub(crate) trait LockExt<T> {
+    /// A host crash interrupts every active download in this process.
     fn lock_or_recover(&self) -> MutexGuard<'_, T>;
 }
 

@@ -1,4 +1,3 @@
-mod approvals;
 mod capture;
 mod capture_catalog;
 mod capture_diagnostics;

@@ -186,94 +186,133 @@ describe("configuration serialization", () => {
     expect(wrapper.text()).toContain("工具配置已保存");
     expect(send.mock.calls.find(([message]) => message.type === "integration.save")?.[0].payload.profiles).toHaveLength(1);
   });
-  it("asks for approval before saving an enabled external program and allows revoking it", async () => {
-    const profile = { ...preset("program"), enabled: true };
-    let approved = false;
+  it("saves a newly enabled program with a main-version native host", async () => {
+    const http = preset("http");
+    const draft = preset("program");
     send.mockImplementation(async (message: any) => {
-      if (message.type === "integration.get") return { ok: true, value: { config: { version: 1, profiles: [profile] }, receipts: [], error: "" } };
-      if (message.type === "integration.approved") return { ok: true, value: approved };
-      if (message.type === "integration.approve") { approved = true; return { ok: true, value: { state: "approved" } }; }
-      if (message.type === "integration.revoke") { approved = false; return { ok: true, value: { state: "revoked" } }; }
-      if (message.type === "integration.save") return { ok: true, value: structuredClone(message.payload) };
-      throw new Error(message.type);
+      if (message.type === "integration.get") return { ok: true, value: { config: { version: 1, profiles: [http, draft] }, receipts: [], error: "" } };
+      if (message.type === "integration.save") return { ok: true, value: { config: structuredClone(message.payload), receipts: [], error: "" } };
+      return { ok: false, error: "unsupported_message" };
     });
-    const confirm = vi.fn(() => true);
-    vi.stubGlobal("confirm", confirm);
-    const wrapper = mount(ToolsPanel); await flushPromises();
-    const button = (name: string) => wrapper.findAll("button").find(item => item.text() === name)!;
-    expect(wrapper.text()).toContain("未批准");
-    await button("保存工具").trigger("click"); await flushPromises();
-    expect(confirm).toHaveBeenCalledTimes(1);
-    const approveCall = send.mock.calls.find(([message]) => message.type === "integration.approve")?.[0];
-    expect(approveCall.payload.executable).toBe(profile.endpoint);
-    expect(send.mock.calls.some(([message]) => message.type === "integration.save")).toBe(true);
-    expect(wrapper.text()).toContain("已批准");
-    await button("撤销批准").trigger("click"); await flushPromises();
-    expect(wrapper.text()).toContain("未批准");
-    expect(wrapper.text()).toContain("已撤销");
-    vi.unstubAllGlobals();
-    wrapper.unmount();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const wrapper = mount(ToolsPanel);
+    try {
+      await flushPromises();
+      const program = wrapper.findAll("article")[1];
+      await program.get('input[aria-label="启用工具"]').setValue(true);
+      await program.get('.feature-grid.wide input.control').setValue("C:\\Tools\\Other.exe");
+      await wrapper.findAll("button").find(item => item.text() === "保存工具")!.trigger("click");
+      await flushPromises();
+      expect(wrapper.text()).toContain("工具配置已保存");
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(send.mock.calls.map(([message]) => message.type)).toEqual(["integration.get", "integration.save"]);
+      expect(send.mock.lastCall?.[0].payload.profiles).toEqual([http, { ...draft, enabled: true, endpoint: "C:\\Tools\\Other.exe" }]);
+    } finally {
+      wrapper.unmount();
+      confirm.mockRestore();
+    }
   });
-  it("requires approval again when an approved program path changes", async () => {
-    const profile = { ...preset("program"), enabled: true, endpoint: "C:\\Tools\\Downloader.exe" };
-    const approved = new Set<string>();
+  it("confirms enabling a saved disabled program without changing its path", async () => {
     send.mockImplementation(async (message: any) => {
-      if (message.type === "integration.get") return { ok: true, value: { config: { version: 1, profiles: [profile] }, receipts: [], error: "" } };
-      if (message.type === "integration.approved") return { ok: true, value: approved.has(message.payload.executable) };
-      if (message.type === "integration.approve") { approved.add(message.payload.executable); return { ok: true, value: { state: "approved" } }; }
-      if (message.type === "integration.save") return { ok: true, value: structuredClone(message.payload) };
+      if (message.type === "integration.get") return { ok: true, value: { config: integrationDefaults(), receipts: [], error: "" } };
+      if (message.type === "integration.save") return { ok: true, value: { config: structuredClone(message.payload), receipts: [], error: "" } };
       throw new Error(message.type);
     });
-    const confirm = vi.fn(() => true);
-    vi.stubGlobal("confirm", confirm);
-    const wrapper = mount(ToolsPanel); await flushPromises();
-    const button = (name: string) => wrapper.findAll("button").find(item => item.text() === name)!;
-    await button("保存工具").trigger("click"); await flushPromises();
-    expect(confirm).toHaveBeenCalledTimes(1);
-    await wrapper.get('.feature-grid.wide input.control').setValue("C:\\Tools\\Other.exe");
-    expect(wrapper.text()).toContain("未批准");
-    await button("保存工具").trigger("click"); await flushPromises();
-    expect(confirm).toHaveBeenCalledTimes(2);
-    const approvals = send.mock.calls.filter(([message]) => message.type === "integration.approve");
-    expect(approvals).toHaveLength(2);
-    expect(approvals[1][0].payload.executable).toBe("C:\\Tools\\Other.exe");
-    vi.unstubAllGlobals();
-    wrapper.unmount();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const wrapper = mount(ToolsPanel, { attachTo: document.body });
+    try {
+      await flushPromises();
+      await wrapper.get('[aria-label="工具类型"]').trigger("click");
+      await wrapper.findAll('[role="option"]').find(option => option.text() === "N_m3u8DL-RE / 本地程序")!.trigger("click");
+      const button = (name: string) => wrapper.findAll("button").find(item => item.text() === name)!;
+      await button("添加工具").trigger("click");
+      const path = "C:\\Tools\\Downloader.exe";
+      await wrapper.get('.feature-grid.wide input.control').setValue(path);
+      await button("保存工具").trigger("click");
+      await flushPromises();
+      expect(confirm).not.toHaveBeenCalled();
+      expect(send.mock.lastCall?.[0]).toMatchObject({
+        type: "integration.save",
+        payload: { profiles: [expect.objectContaining({ kind: "program", enabled: false, endpoint: path })] },
+      });
+
+      await wrapper.get('input[aria-label="启用工具"]').setValue(true);
+      await button("保存工具").trigger("click");
+      await flushPromises();
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(confirm).toHaveBeenCalledWith(expect.stringContaining(path));
+      expect(send.mock.calls.map(([message]) => message.type)).toEqual(["integration.get", "integration.save"]);
+      expect(wrapper.text()).toContain("已取消保存");
+    } finally {
+      wrapper.unmount();
+      confirm.mockRestore();
+    }
   });
-  it("refreshes every profile sharing a path after revocation", async () => {
-    const first = { ...preset("program"), id: "first", name: "第一个", enabled: true };
-    const second = { ...preset("program"), id: "second", name: "第二个", enabled: true };
-    let approved = true;
+  it("keeps the last saved paths until a changed program is saved successfully", async () => {
+    const program = { ...preset("program"), enabled: true, endpoint: "C:\\Tools\\Downloader.exe" };
+    const disabled = preset("program");
+    let failSave = false;
     send.mockImplementation(async (message: any) => {
-      if (message.type === "integration.get") return { ok: true, value: { config: { version: 1, profiles: [first, second] }, receipts: [], error: "" } };
-      if (message.type === "integration.approved") return { ok: true, value: approved };
-      if (message.type === "integration.revoke") { approved = false; return { ok: true, value: { state: "revoked" } }; }
+      if (message.type === "integration.get") return { ok: true, value: { config: { version: 1, profiles: [program, disabled] }, receipts: [], error: "" } };
+      if (message.type === "integration.save") return failSave ? { ok: false, error: "storage failure" } : { ok: true, value: {} };
       throw new Error(message.type);
     });
-    const wrapper = mount(ToolsPanel); await flushPromises();
-    expect(wrapper.findAll('[data-approved="true"]')).toHaveLength(2);
-    await wrapper.findAll("button").find(item => item.text() === "撤销批准")!.trigger("click"); await flushPromises();
-    expect(wrapper.findAll('[data-approved="true"]')).toHaveLength(0);
-    expect(wrapper.findAll('[data-approved="false"]')).toHaveLength(2);
-    wrapper.unmount();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const wrapper = mount(ToolsPanel);
+    try {
+      await flushPromises();
+      const [enabledTool, disabledTool] = wrapper.findAll("article");
+      const save = wrapper.findAll("button").find(item => item.text() === "保存工具")!;
+      await enabledTool.get('input[aria-label="工具名称"]').setValue("新名称");
+      await disabledTool.get('.feature-grid.wide input.control').setValue("C:\\Tools\\Disabled.exe");
+      await save.trigger("click"); await flushPromises();
+      expect(wrapper.text()).toContain("工具配置已保存");
+      expect(confirm).not.toHaveBeenCalled();
+
+      const changedPath = "C:\\Tools\\Other.exe";
+      await enabledTool.get('.feature-grid.wide input.control').setValue(changedPath);
+      failSave = true;
+      await save.trigger("click"); await flushPromises();
+      expect(wrapper.text()).toContain("storage failure");
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(confirm).toHaveBeenLastCalledWith(expect.stringContaining(changedPath));
+
+      failSave = false;
+      await save.trigger("click"); await flushPromises();
+      expect(wrapper.text()).toContain("工具配置已保存");
+      expect(confirm).toHaveBeenCalledTimes(2);
+      await save.trigger("click"); await flushPromises();
+      expect(confirm).toHaveBeenCalledTimes(2);
+    } finally {
+      wrapper.unmount();
+      confirm.mockRestore();
+    }
   });
-  it("abandons the save when the program approval dialog is declined", async () => {
-    const profile = { ...preset("program"), enabled: true };
+  it("shows one dialog for all changed program paths and cancels the entire save", async () => {
+    const first = { ...preset("program"), enabled: true, endpoint: "C:\\Tools\\First.exe" };
+    const second = { ...preset("program"), enabled: true, endpoint: "C:\\Tools\\Second.exe" };
+    const http = preset("http");
     send.mockImplementation(async (message: any) => {
-      if (message.type === "integration.get") return { ok: true, value: { config: { version: 1, profiles: [profile] }, receipts: [], error: "" } };
-      if (message.type === "integration.approved") return { ok: true, value: false };
-      if (message.type === "integration.save") return { ok: true, value: structuredClone(message.payload) };
+      if (message.type === "integration.get") return { ok: true, value: { config: { version: 1, profiles: [first, second, http] }, receipts: [], error: "" } };
       throw new Error(message.type);
     });
-    const confirm = vi.fn(() => false);
-    vi.stubGlobal("confirm", confirm);
-    const wrapper = mount(ToolsPanel); await flushPromises();
-    const button = (name: string) => wrapper.findAll("button").find(item => item.text() === name)!;
-    await button("保存工具").trigger("click"); await flushPromises();
-    expect(confirm).toHaveBeenCalledTimes(1);
-    expect(send.mock.calls.some(([message]) => message.type === "integration.save")).toBe(false);
-    expect(wrapper.text()).toContain("尚未获得批准");
-    vi.unstubAllGlobals();
-    wrapper.unmount();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const wrapper = mount(ToolsPanel);
+    try {
+      await flushPromises();
+      const [firstTool, secondTool, httpTool] = wrapper.findAll("article");
+      await firstTool.get('.feature-grid.wide input.control').setValue("C:\\Tools\\NewFirst.exe");
+      await secondTool.get('.feature-grid.wide input.control').setValue("C:\\Tools\\NewSecond.exe");
+      await httpTool.get('input[aria-label="工具名称"]').setValue("新的 HTTP 工具名称");
+      await wrapper.findAll("button").find(item => item.text() === "保存工具")!.trigger("click");
+      await flushPromises();
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(confirm).toHaveBeenCalledWith(expect.stringContaining("C:\\Tools\\NewFirst.exe\nC:\\Tools\\NewSecond.exe"));
+      expect(send.mock.calls.map(([message]) => message.type)).toEqual(["integration.get"]);
+      expect(wrapper.text()).toContain("已取消保存");
+    } finally {
+      wrapper.unmount();
+      confirm.mockRestore();
+    }
   });
 });

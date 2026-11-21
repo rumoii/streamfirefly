@@ -1178,8 +1178,7 @@ fn hls_checkpoint_round(
             let next_task = store
                 .repository
                 .tasks
-                .lock()
-                .unwrap()
+                .lock_or_recover()
                 .iter()
                 .find(|current| current.id == task.id)
                 .cloned()

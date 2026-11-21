@@ -79,6 +79,15 @@ try {
   assert.equal(child.exitCode, null);
   assert.equal((await assertInfo()).id, 'protocol-1');
 
+  const program = { executable: path.join(process.env.SystemRoot, 'System32/where.exe'), arguments: ['streamfirefly-nonexistent-test-command'] };
+  const draft = await send('integration.test', program);
+  const launched = await send('integration.invoke', { ...program, requestId: 'protocol-program-test' });
+  assert.deepEqual(
+    { draft: draft.ok ? draft.receipt.state : draft.error, dispatch: launched.ok ? launched.receipt.state : launched.error },
+    { draft: 'available', dispatch: 'started' },
+  );
+  console.log('Native program draft and dispatch use the existing protocol');
+
   const created = await send('task.create', { requestId: 'malformed-download', url: `${origin}/sample.mp4`, title: '协议测试', fileName: 'protocol', mime: 'video/mp4', saveDir: temporary, downloadThreads: 1 });
   assert.equal(created.ok, true, JSON.stringify(created));
   await until(() => downloadResponse, 'download start');

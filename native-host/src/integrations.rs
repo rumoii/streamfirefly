@@ -10,7 +10,7 @@ const RECEIPT_LIMIT: usize = 1000;
 #[derive(Default)]
 struct Receipts {
     map: HashMap<String, Value>,
-    order: VecDeque<String>,
+    order: VecDeque<String>, // FIFO by insertion order
 }
 
 impl Receipts {
@@ -31,39 +31,23 @@ impl Receipts {
     }
 }
 
+#[derive(Default)]
 pub(crate) struct ProgramLauncher {
     requests: Mutex<Receipts>,
-    approvals: Mutex<crate::approvals::Approvals>,
 }
 
-impl ProgramLauncher {
-    pub(crate) fn new(approvals_file: std::path::PathBuf) -> Self {
-        ProgramLauncher {
-            requests: Mutex::new(Receipts::default()),
-            approvals: Mutex::new(crate::approvals::Approvals::load(approvals_file)),
-        }
-    }
-}
-
-fn validate_executable(executable: &str) -> Result<(), &'static str> {
+fn validate(payload: &Value) -> Result<(&str, Vec<&str>), &'static str> {
+    let executable = payload["executable"]
+        .as_str()
+        .ok_or("executable_required")?;
     let path = Path::new(executable);
     let name = path
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
-    let extended_local = executable
-        .strip_prefix("\\\\?\\")
-        .map(|path| {
-            let bytes = path.as_bytes();
-            bytes.len() >= 3
-                && bytes[0].is_ascii_alphabetic()
-                && bytes[1] == b':'
-                && matches!(bytes[2], b'\\' | b'/')
-        })
-        .unwrap_or(false);
     if !path.is_absolute()
-        || (executable.starts_with("\\\\") && !extended_local)
+        || executable.starts_with("\\\\")
         || !name.ends_with(".exe")
         || executable.len() > 4096
         || executable.contains(['\0', '\r', '\n'])
@@ -95,14 +79,6 @@ fn validate_executable(executable: &str) -> Result<(), &'static str> {
     if !path.is_file() {
         return Err("executable_not_found");
     }
-    Ok(())
-}
-
-fn validate(payload: &Value) -> Result<(&str, Vec<&str>), &'static str> {
-    let executable = payload["executable"]
-        .as_str()
-        .ok_or("executable_required")?;
-    validate_executable(executable)?;
     let arguments = payload["arguments"]
         .as_array()
         .ok_or("arguments_required")?;
@@ -123,50 +99,8 @@ fn validate(payload: &Value) -> Result<(&str, Vec<&str>), &'static str> {
 }
 
 impl ProgramLauncher {
-    fn is_approved(&self, executable: &str) -> Result<bool, &'static str> {
-        Ok(self
-            .approvals
-            .lock()
-            .map_err(|_| "launcher_unavailable")?
-            .is_approved(executable))
-    }
-
-    pub(crate) fn approve(&self, payload: &Value) -> Result<Value, &'static str> {
-        let executable = payload["executable"]
-            .as_str()
-            .ok_or("executable_required")?;
-        validate_executable(executable)?;
-        let program = self
-            .approvals
-            .lock()
-            .map_err(|_| "launcher_unavailable")?
-            .approve(executable)?;
-        Ok(json!({"state":"approved","path":program.path,"approvedAt":program.approved_at}))
-    }
-
-    pub(crate) fn revoke(&self, payload: &Value) -> Result<Value, &'static str> {
-        let executable = payload["executable"]
-            .as_str()
-            .ok_or("executable_required")?;
-        self.approvals
-            .lock()
-            .map_err(|_| "launcher_unavailable")?
-            .revoke(executable)?;
-        Ok(json!({"state":"revoked"}))
-    }
-
-    pub(crate) fn approval(&self, payload: &Value) -> Result<Value, &'static str> {
-        let executable = payload["executable"]
-            .as_str()
-            .ok_or("executable_required")?;
-        Ok(json!({"approved": self.is_approved(executable)?}))
-    }
-
     pub(crate) fn test(&self, payload: &Value) -> Result<Value, &'static str> {
-        let (executable, _) = validate(payload)?;
-        if !self.is_approved(executable)? {
-            return Err("program_not_approved");
-        }
+        validate(payload)?;
         Ok(json!({"state":"available"}))
     }
 
@@ -186,9 +120,6 @@ impl ProgramLauncher {
             return Ok(receipt.clone());
         }
         let (executable, arguments) = validate(payload)?;
-        if !self.is_approved(executable)? {
-            return Err("program_not_approved");
-        }
         let mut command = Command::new(executable);
         command
             .args(arguments)
@@ -230,135 +161,8 @@ mod tests {
     use super::{validate, ProgramLauncher, Receipts};
     use serde_json::json;
 
-    fn test_launcher(name: &str) -> (PathGuard, ProgramLauncher) {
-        let dir = std::env::temp_dir().join(format!(
-            "streamfirefly-launcher-{name}-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("approved_programs.json");
-        (
-            PathGuard(dir),
-            ProgramLauncher::new(file),
-        )
-    }
-
-    struct PathGuard(std::path::PathBuf);
-    impl Drop for PathGuard {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
     #[test]
-    fn program_requires_approval_until_revoked() {
-        let (_guard, launcher) = test_launcher("approval");
-        // Use a real .exe-named file for the flow checks.
-        let program_path = _guard.0.join("Downloader.exe");
-        std::fs::write(&program_path, b"test").unwrap();
-        let program = program_path.to_str().unwrap().to_owned();
-        let payload = json!({"executable": program, "arguments": []});
-        assert_eq!(launcher.test(&payload), Err("program_not_approved"));
-        assert_eq!(
-            launcher.invoke(&json!({"requestId":"request-approval-1","executable":program,"arguments":[]})),
-            Err("program_not_approved")
-        );
-        assert_eq!(launcher.approval(&payload).unwrap()["approved"], json!(false));
-        assert_eq!(launcher.approve(&json!({"executable": program})).unwrap()["state"], json!("approved"));
-        assert_eq!(launcher.approval(&payload).unwrap()["approved"], json!(true));
-        assert_eq!(launcher.test(&payload).unwrap()["state"], json!("available"));
-        assert_eq!(launcher.revoke(&json!({"executable": program})).unwrap()["state"], json!("revoked"));
-        assert_eq!(launcher.test(&payload), Err("program_not_approved"));
-    }
-
-    #[test]
-    fn approve_rejects_invalid_or_missing_programs() {
-        let (_guard, launcher) = test_launcher("approve-invalid");
-        assert_eq!(
-            launcher.approve(&json!({"executable": "tool.exe"})),
-            Err("executable_path_invalid")
-        );
-        let missing = _guard.0.join("Missing.exe");
-        let missing = missing.to_str().unwrap().to_owned();
-        assert_eq!(
-            launcher.approve(&json!({"executable": missing})),
-            Err("executable_not_found")
-        );
-        assert!(launcher.approve(&json!({})).is_err());
-    }
-
-    #[test]
-    fn failed_approval_write_keeps_public_invoke_denied() {
-        let (_guard, launcher) = test_launcher("failed-approval-invoke");
-        let program = _guard.0.join("Downloader.exe");
-        std::fs::write(&program, b"test").unwrap();
-        std::fs::create_dir(_guard.0.join("approved_programs.json")).unwrap();
-        let program = program.to_str().unwrap();
-        assert!(matches!(
-            launcher.approve(&json!({"executable": program})),
-            Err("approval_store_failed")
-        ));
-        assert_eq!(
-            launcher.invoke(&json!({"requestId":"failed-approval-invoke","executable":program,"arguments":[]})),
-            Err("program_not_approved")
-        );
-    }
-
-    #[test]
-    fn revoke_deleted_alias_prevents_invoke_after_recreation() {
-        let (_guard, launcher) = test_launcher("deleted-alias-invoke");
-        let program = _guard.0.join("Downloader.exe");
-        std::fs::write(&program, b"test").unwrap();
-        let nested = _guard.0.join("nested");
-        std::fs::create_dir(&nested).unwrap();
-        let alias = nested.join("..").join("Downloader.exe");
-        let alias = alias.to_str().unwrap();
-        launcher.approve(&json!({"executable": alias})).unwrap();
-        std::fs::remove_file(&program).unwrap();
-        launcher.revoke(&json!({"executable": alias})).unwrap();
-        std::fs::write(&program, b"recreated").unwrap();
-        assert_eq!(
-            launcher.invoke(&json!({"requestId":"deleted-alias-invoke","executable":alias,"arguments":[]})),
-            Err("program_not_approved")
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn extended_local_path_matches_regular_approval_through_public_entry_points() {
-        let (_guard, launcher) = test_launcher("extended-path");
-        let canonical = std::fs::canonicalize(std::env::current_exe().unwrap())
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
-        let regular = canonical.strip_prefix("\\\\?\\").unwrap_or(&canonical);
-        let extended = format!("\\\\?\\{regular}");
-        launcher
-            .approve(&json!({"executable": regular}))
-            .unwrap();
-        assert_eq!(
-            launcher.approval(&json!({"executable": extended})).unwrap()["approved"],
-            json!(true)
-        );
-        assert_eq!(
-            launcher
-                .test(&json!({"executable": extended, "arguments": []}))
-                .unwrap()["state"],
-            json!("available")
-        );
-        assert_eq!(
-            launcher.approve(&json!({"executable": "\\\\?\\UNC\\server\\share\\Downloader.exe"})),
-            Err("executable_path_invalid")
-        );
-        assert_eq!(
-            launcher.approve(&json!({"executable": "\\\\server\\share\\Downloader.exe"})),
-            Err("executable_path_invalid")
-        );
-    }
-
-    #[test]
-    fn receipts_evict_oldest_beyond_limit_and_stay_idempotent() {
+    fn receipts_evict_in_fifo_order_and_stay_idempotent() {
         let mut receipts = Receipts::default();
         for index in 0..1001 {
             receipts.insert(format!("request-{index:04}"), json!({"seq": index}));
@@ -368,6 +172,8 @@ mod tests {
             receipts.get("request-1000").map(|value| value["seq"].clone()),
             Some(json!(1000))
         );
+        // Reading the oldest live receipt does not move it to the back.
+        assert!(receipts.get("request-0001").is_some());
         receipts.insert("request-1001".into(), json!({"seq": 1001}));
         assert!(receipts.get("request-0001").is_none());
         // Re-inserting a live requestId must not duplicate its queue slot.
@@ -379,7 +185,7 @@ mod tests {
 
     #[test]
     fn rejects_relative_paths_interpreters_and_invalid_arguments() {
-        let (_guard, launcher) = test_launcher("validate");
+        let launcher = ProgramLauncher::default();
         assert!(launcher
             .test(&json!({"executable":"tool.exe","arguments":[]}))
             .is_err());

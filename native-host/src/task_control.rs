@@ -69,8 +69,7 @@ pub(crate) fn task_control(
     let task = store
         .repository
         .tasks
-        .lock()
-        .unwrap()
+        .lock_or_recover()
         .iter()
         .find(|task| task.id == id)
         .cloned()
@@ -102,8 +101,7 @@ pub(crate) fn task_control(
         return store
             .repository
             .tasks
-            .lock()
-            .unwrap()
+            .lock_or_recover()
             .iter()
             .find(|task| task.id == id)
             .map(sanitized_task)
@@ -357,8 +355,7 @@ pub(crate) fn task_control(
             let restarted = store
                 .repository
                 .tasks
-                .lock()
-                .unwrap()
+                .lock_or_recover()
                 .iter()
                 .find(|task| task.id == id)
                 .cloned()
@@ -373,8 +370,7 @@ pub(crate) fn task_control(
     store
         .repository
         .tasks
-        .lock()
-        .unwrap()
+        .lock_or_recover()
         .iter()
         .find(|task| task.id == id)
         .map(sanitized_task)
@@ -425,8 +421,7 @@ pub(crate) fn reveal_task_output(store: &TaskRuntime, payload: &Value) -> Result
     let task = store
         .repository
         .tasks
-        .lock()
-        .unwrap()
+        .lock_or_recover()
         .iter()
         .find(|task| task.id == id)
         .cloned()
@@ -456,8 +451,7 @@ pub(crate) fn delete_task(
     let task = store
         .repository
         .tasks
-        .lock()
-        .unwrap()
+        .lock_or_recover()
         .iter()
         .find(|task| task.id == id)
         .cloned()
@@ -483,8 +477,7 @@ pub(crate) fn delete_task(
             let terminal = store
                 .repository
                 .tasks
-                .lock()
-                .unwrap()
+                .lock_or_recover()
                 .iter()
                 .find(|item| item.id == id)
                 .map(|item| {
@@ -502,8 +495,7 @@ pub(crate) fn delete_task(
         let cancelled = store
             .repository
             .tasks
-            .lock()
-            .unwrap()
+            .lock_or_recover()
             .iter()
             .find(|item| item.id == id)
             .map(|item| {

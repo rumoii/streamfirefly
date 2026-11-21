@@ -41,8 +41,7 @@ pub(crate) fn create_task(store: &TaskRuntime, payload: &Value) -> Result<Task, 
         if let Some(task) = store
             .repository
             .tasks
-            .lock()
-            .unwrap()
+            .lock_or_recover()
             .iter()
             .find(|task| task.request_id.as_deref() == Some(request_id))
             .cloned()

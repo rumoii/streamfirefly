@@ -1,4 +1,3 @@
-use crate::paths::approved_programs_path;
 use crate::paths::state_path;
 use crate::recovery::network_ready;
 use crate::recovery::request_recovery;
@@ -24,7 +23,7 @@ use std::sync::Mutex;
 use crate::lock::LockExt;
 
 pub(crate) fn run() -> io::Result<()> {
-    let launcher = crate::integrations::ProgramLauncher::new(approved_programs_path());
+    let launcher = crate::integrations::ProgramLauncher::default();
     let captures = crate::capture::CaptureManager::new(
         crate::paths::state_path()
             .parent()
@@ -87,18 +86,6 @@ pub(crate) fn run() -> io::Result<()> {
                     Err(error) => json!({"version":1,"id":id,"ok":false,"error":error}),
                 }
             }
-            "integration.approve" => match launcher.approve(&message["payload"]) {
-                Ok(value) => json!({"version":1,"id":id,"ok":true,"value":value}),
-                Err(error) => json!({"version":1,"id":id,"ok":false,"error":error}),
-            },
-            "integration.revoke" => match launcher.revoke(&message["payload"]) {
-                Ok(value) => json!({"version":1,"id":id,"ok":true,"value":value}),
-                Err(error) => json!({"version":1,"id":id,"ok":false,"error":error}),
-            },
-            "integration.approved" => match launcher.approval(&message["payload"]) {
-                Ok(value) => json!({"version":1,"id":id,"ok":true,"value":value}),
-                Err(error) => json!({"version":1,"id":id,"ok":false,"error":error}),
-            },
             "host.info" => {
                 json!({"version":1,"id":id,"ok":true,"protocolVersion":3,"supportedProtocolVersions":[3],"hostVersion":env!("CARGO_PKG_VERSION"),"capabilities":["dash-selection-v1","inline-hls-v1","task-control-v1","task-pause-resume-v1","hls-selection-v1","hls-subtitle-sidecar-v1","task-output-group-v1","hls-segment-engine-v1","hls-checkpoint-v1","hls-aes128-v1","hls-key-override-v1","hls-reauthorize-v1","hls-live-engine-v1","task-queue-v1","task-idempotency-v1", "integration-program-v1", "capture-stream-v1", "capture-diagnostics-v1", "capture-reveal-v1", "task-reveal-v1", "network-policy-v1"]})
             }

@@ -242,8 +242,7 @@ impl CaptureManager {
         let limit = payload["limit"].as_u64().map_or(10, |value| value.clamp(1, 20)) as usize;
         let mut sessions = self
             .sessions
-            .lock()
-            .unwrap()
+            .lock_or_recover()
             .values()
             .filter_map(|session| {
                 session

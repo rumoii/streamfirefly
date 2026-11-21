@@ -111,8 +111,7 @@ pub(crate) fn mark_stopped(store: &TaskRuntime, writer: &Writer, id: &str) {
 pub(crate) fn stop_process(store: &TaskRuntime, id: &str) {
     let processes = store
         .processes
-        .lock()
-        .unwrap()
+        .lock_or_recover()
         .get(id)
         .cloned()
         .unwrap_or_default();
@@ -134,8 +133,7 @@ pub(crate) fn wait_for_state(
         let reached = store
             .repository
             .tasks
-            .lock()
-            .unwrap()
+            .lock_or_recover()
             .iter()
             .find(|item| item.id == id)
             .map(|item| expected.contains(&item.state.as_str()))

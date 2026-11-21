@@ -61,8 +61,7 @@ impl Drop for RunningTask {
     fn drop(&mut self) {
         self.store
             .scheduler
-            .lock()
-            .unwrap()
+            .lock_or_recover()
             .running
             .remove(&self.id);
         pump(&self.store, &self.writer);
@@ -81,8 +80,7 @@ fn pump(store: &TaskRuntime, writer: &Writer) {
         let task = store
             .repository
             .tasks
-            .lock()
-            .unwrap()
+            .lock_or_recover()
             .iter()
             .find(|task| task.id == id)
             .cloned();
@@ -115,6 +113,38 @@ fn pump(store: &TaskRuntime, writer: &Writer) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn dropping_a_running_task_releases_its_slot_and_pumps_after_poisoning() {
+        let path = std::env::temp_dir()
+            .join(format!("streamfirefly-queue-{}", Uuid::new_v4()))
+            .join("tasks.json");
+        let store = load_store(&path);
+        let running = RunningTask {
+            store: store.clone(),
+            writer: Arc::new(Mutex::new(io::BufWriter::new(io::stdout()))),
+            id: "running".into(),
+        };
+        let poisoned = catch_unwind(AssertUnwindSafe(|| {
+            let mut queue = store.scheduler.lock().unwrap();
+            let _tasks = store.repository.tasks.lock().unwrap();
+            queue.running.insert(running.id.clone());
+            queue.pending.push_back("missing-task".into());
+            panic!("controlled scheduler and task table poisoning");
+        }));
+        assert!(poisoned.is_err());
+        assert!(store.scheduler.is_poisoned());
+        assert!(store.repository.tasks.is_poisoned());
+        let dropped = catch_unwind(AssertUnwindSafe(|| drop(running)));
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        assert!(dropped.is_ok(), "running-task cleanup panicked after poisoning");
+        let queue = store.scheduler.lock_or_recover();
+        assert!(queue.running.is_empty());
+        assert!(queue.pending.is_empty());
+    }
 
     #[test]
     fn pending_can_be_removed_without_starting_a_worker() {
