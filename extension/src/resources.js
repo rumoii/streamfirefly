@@ -564,7 +564,8 @@ async function fetchMediaText(tabId, id, requestedUrl, options = {}) {
   // Fetch drops Referer and Origin as forbidden headers, so a short-lived session rule supplies them.
   const removeRule = await applyFetchHeaders(url, pageHeaders, options.restrictOrigin === true);
   try {
-    const response = await fetch(url.href, { headers, credentials, redirect: "follow" });
+    const signal = options.automatic ? AbortSignal.timeout(10000) : undefined;
+    const response = await fetch(url.href, { headers, credentials, redirect: "follow", ...(signal ? { signal } : {}) });
     if (!response.ok) return { ok: false, error: "media_fetch_failed", status: response.status };
     let text;
     try { text = await readBoundedText(response, 4 * 1024 * 1024); }

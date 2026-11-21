@@ -386,7 +386,7 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   if (message?.type === "media.fetchText") {
-    fetchMediaText(sender.tab?.id ?? message.tabId, message.id, message.url, { restrictOrigin: message.restrictOrigin === true }).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
+    fetchMediaText(sender.tab?.id ?? message.tabId, message.id, message.url, { restrictOrigin: message.restrictOrigin === true, automatic: message.automatic === true }).then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
     return true;
   }
   if (message?.type === "media.size.probe") {

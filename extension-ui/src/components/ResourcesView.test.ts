@@ -1,7 +1,13 @@
 import { flushPromises, mount } from "@vue/test-utils";
+import * as vue from "vue";
 import type { ResourceViewState } from "../types";
 
 const hlsMock = vi.hoisted(() => ({ instances: [] as any[], loadCount: 0, waitForLoad: false, resolveLoad: null as null | (() => void), failNextLoad: false }));
+
+vi.mock("vue", async importOriginal => {
+  const actual = await importOriginal<typeof import("vue")>();
+  return { ...actual, nextTick: vi.fn(actual.nextTick) };
+});
 
 vi.mock("hls.js", async () => {
   hlsMock.loadCount += 1;
@@ -36,7 +42,8 @@ vi.mock("hls.js", async () => {
 
 const sent: any[] = [];
 const stored: Record<string, unknown> = {};
-vi.stubGlobal("chrome", { runtime: { sendMessage: vi.fn(async (message: any) => { sent.push(message); return { ok: true }; }) }, storage: { local: { get: vi.fn(async (keys: string[]) => Object.fromEntries(keys.filter(key => key in stored).map(key => [key, stored[key]]))), set: vi.fn(async (values: Record<string, unknown>) => { Object.assign(stored, values); }) } } });
+const sendMessage = vi.fn(async (message: { type: string }) => { sent.push(message); return { ok: true }; });
+vi.stubGlobal("chrome", { runtime: { sendMessage }, storage: { local: { get: vi.fn(async (keys: string[]) => Object.fromEntries(keys.filter(key => key in stored).map(key => [key, stored[key]]))), set: vi.fn(async (values: Record<string, unknown>) => { Object.assign(stored, values); }) } } });
 vi.stubGlobal("browser", undefined);
 vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(0); return 1; });
 
@@ -313,6 +320,154 @@ describe("resource preview lifecycle", () => {
     expect(wrapper.emitted("metadata")?.at(-1)?.[1]).toMatchObject({ poster: "data:image/jpeg;base64,preview", duration: 16, width: 1280, height: 720 });
     wrapper.unmount();
   });
+
+  it("opens no preview session for a visible resource until its details are opened", async () => {
+    const wrapper = mount(ResourcesView, { props: { sourceContextId: "page", candidates: [candidate], loading: false, viewState: defaultState(""), connected: true } });
+    try {
+      await flushPromises();
+      expect(wrapper.find("[data-candidate-id]").exists()).toBe(true);
+      expect(sent.filter(message => message.type === "preview.headers.apply")).toHaveLength(0);
+      await wrapper.get('[aria-label^="下载："]').trigger("click");
+      expect(wrapper.emitted("download")).toEqual([[candidate]]);
+
+      await wrapper.setProps({ viewState: defaultState() });
+      await flushPromises();
+      expect(sent.filter(message => message.type === "preview.headers.apply")).toHaveLength(1);
+    } finally {
+      wrapper.unmount();
+      await flushPromises();
+    }
+  });
+
+  const firstVideo = { ...candidate, id: "first", type: "video", url: "https://media.example/first.mp4" };
+  const secondVideo = { ...candidate, id: "second", type: "video", url: "https://media.example/second.mp4" };
+
+  it.each(["negative response", "rejection"])("opens another detail after header cleanup fails with a %s", async failure => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const wrapper = mount(ResourcesView, { props: { candidates: [firstVideo, secondVideo], loading: false, viewState: defaultState(firstVideo.id) } });
+    try {
+      await flushPromises();
+      expect(wrapper.get("video").attributes("src")).toBe(firstVideo.url);
+      const firstSession = sent.find(message => message.type === "preview.headers.apply").payload.previewSessionId;
+      sendMessage.mockImplementationOnce(async message => {
+        sent.push(message);
+        if (failure === "rejection") throw new Error("clear failed");
+        return { ok: false };
+      });
+      await wrapper.setProps({ viewState: defaultState(secondVideo.id) });
+      await flushPromises();
+
+      expect(sent).toContainEqual({ type: "preview.headers.clear", previewSessionId: firstSession });
+      expect(wrapper.get("video").attributes("src")).toBe(secondVideo.url);
+      expect(wrapper.find(".inline-error").exists()).toBe(false);
+      expect(warn).toHaveBeenCalledOnce();
+    } finally {
+      wrapper.unmount();
+      await flushPromises();
+    }
+  });
+
+  it.each(["negative response", "rejection"])("loads the media after header installation fails with a %s", async failure => {
+    sendMessage.mockImplementationOnce(async message => {
+      sent.push(message);
+      if (failure === "rejection") throw new Error("apply failed");
+      return { ok: false };
+    });
+    const wrapper = mount(ResourcesView, { props: { candidates: [firstVideo], loading: false, viewState: defaultState(firstVideo.id) } });
+    try {
+      await flushPromises();
+
+      expect(sent[0]?.type).toBe("preview.headers.apply");
+      expect(wrapper.get("video").attributes("src")).toBe(firstVideo.url);
+      expect(wrapper.find(".inline-error").exists()).toBe(false);
+      await wrapper.get("video").trigger("error");
+      expect(wrapper.get(".inline-error").text()).toContain("无法准备此资源的预览");
+    } finally {
+      wrapper.unmount();
+      await flushPromises();
+    }
+  });
+
+  it("uses a fallback preview session ID without randomUUID", async () => {
+    vi.spyOn(globalThis, "crypto", "get").mockReturnValue({} as Crypto);
+    const wrapper = mount(ResourcesView, { props: { candidates: [firstVideo], loading: false, viewState: defaultState(firstVideo.id) } });
+    try {
+      await flushPromises();
+      const applied = sent.find(message => message.type === "preview.headers.apply");
+      expect(applied?.payload.previewSessionId).toMatch(/^preview-\d+-[a-f0-9]+$/);
+      expect(wrapper.get("video").attributes("src")).toBe(firstVideo.url);
+    } finally {
+      wrapper.unmount();
+      await flushPromises();
+    }
+  });
+
+  it("skips preview work for a detail superseded while waiting for the DOM", async () => {
+    const viewState = vue.reactive(defaultState(""));
+    const wrapper = mount(ResourcesView, { props: { candidates: [firstVideo, secondVideo], loading: false, viewState } });
+    await flushPromises();
+    let releaseTick!: () => void;
+    const pendingTick = new Promise<void>(resolve => { releaseTick = resolve; });
+    const nextTick = vi.mocked(vue.nextTick);
+    nextTick.mockClear().mockImplementationOnce(() => pendingTick);
+    try {
+      viewState.expandedId = firstVideo.id;
+      await flushPromises();
+      expect(nextTick).toHaveBeenCalledOnce();
+      expect(sent).toHaveLength(0);
+      viewState.expandedId = secondVideo.id;
+      await flushPromises();
+      expect(wrapper.get("video").attributes("src")).toBe(secondVideo.url);
+      releaseTick();
+      await flushPromises();
+
+      expect(sent.filter(message => message.type === "preview.headers.apply").map(message => message.payload.candidateId)).toEqual([secondVideo.id]);
+    } finally {
+      nextTick.mockReset();
+      releaseTick();
+      wrapper.unmount();
+      await flushPromises();
+    }
+  });
+
+  it.each(["play button", "media play event", "loaded metadata", "loaded frame waiting to be captured", "still preparing"])(
+    "only times out a manual preview that is still preparing after %s",
+    async outcome => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const waitingForFrame = outcome === "loaded frame waiting to be captured";
+      const videoCandidate = { ...candidate, type: "video", url: "https://media.example/clip.mp4", poster: waitingForFrame ? undefined : "https://media.example/poster.jpg" };
+      const wrapper = mount(ResourcesView, { props: { candidates: [videoCandidate], loading: false, viewState: defaultState() } });
+      try {
+        await flushPromises();
+        const video = wrapper.get("video");
+        expect(wrapper.find(".preview-status").exists()).toBe(true);
+        expect(video.attributes("src")).toBe(videoCandidate.url);
+
+        if (outcome === "play button") await wrapper.get(".preview-play").trigger("click");
+        if (outcome === "media play event") await video.trigger("play");
+        if (outcome === "loaded metadata") await video.trigger("loadedmetadata");
+        if (waitingForFrame) {
+          vi.spyOn(globalThis, "requestAnimationFrame").mockReturnValue(1);
+          await video.trigger("loadeddata");
+        }
+        await flushPromises();
+
+        await vi.advanceTimersByTimeAsync(15000);
+        if (outcome === "still preparing") {
+          expect(wrapper.get(".inline-error").text()).toContain("预览准备超时");
+          expect(video.attributes("src")).toBeUndefined();
+        } else {
+          expect(wrapper.find(".inline-error").exists()).toBe(false);
+          expect(video.attributes("src")).toBe(videoCandidate.url);
+          expect(HTMLMediaElement.prototype.pause).not.toHaveBeenCalled();
+        }
+      } finally {
+        wrapper.unmount();
+        await flushPromises();
+        vi.useRealTimers();
+      }
+    }
+  );
 
   it("stops preview when suspended or cover-only while retaining resource selection", async () => {
     const wrapper = mount(ResourcesView, { props: { candidates: [candidate], loading: false, viewState: defaultState() } });

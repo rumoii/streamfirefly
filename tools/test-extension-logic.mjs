@@ -38,6 +38,7 @@ const tabsById = new Map([
 ]);
 const fetchCalls = [];
 let fetchResponse = new Response('#EXTM3U\n#EXTINF:2,\nsegment.ts\n', { headers: { 'content-type': 'application/vnd.apple.mpegurl' } });
+let createTimeoutSignal = milliseconds => AbortSignal.timeout(milliseconds);
 const storageArea = (values, queries = null) => ({
   async get(query) {
     queries?.push(structuredClone(query));
@@ -117,7 +118,7 @@ class FixtureWorker {
   postMessage(job) { queueMicrotask(() => { if (!this.stopped) this.scope.self.onmessage({ data: structuredClone(job) }); }); }
   terminate() { this.stopped = true; }
 }
-vm.runInNewContext(source, { chrome: api, Worker: FixtureWorker, Error, URL, URLSearchParams, Map, Set, Number, Object, Date, Promise, TextEncoder, TextDecoder, Headers, Uint8Array, AbortSignal, crypto: webcrypto, structuredClone, fetch: async (url, init) => { fetchCalls.push({ url, init }); return fetchResponse; }, setTimeout, clearTimeout, console });
+vm.runInNewContext(source, { chrome: api, Worker: FixtureWorker, Error, URL, URLSearchParams, Map, Set, Number, Object, Date, Promise, TextEncoder, TextDecoder, Headers, Uint8Array, AbortSignal: { timeout: milliseconds => createTimeoutSignal(milliseconds) }, crypto: webcrypto, structuredClone, fetch: async (url, init) => { fetchCalls.push({ url, init }); return typeof fetchResponse === 'function' ? fetchResponse(init) : fetchResponse; }, setTimeout, clearTimeout, console });
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const flush = async () => { for (let index = 0; index < 6; index += 1) await settle(); };
@@ -351,6 +352,39 @@ for (const [url, restricted, same] of [
   if (!restricted) assert.deepEqual(rule.action.requestHeaders.map(header => header.header).sort(), ['Origin', 'Referer']);
   else assert.equal(rule, undefined);
 }
+assert.equal(fetchCalls.at(-1).init.signal, undefined, 'manual manifest reads keep the default fetch deadline');
+{
+  const deadline = new AbortController();
+  const delays = [];
+  const rulesBefore = previewRuleUpdates.length;
+  let stream;
+  let reading = false;
+  createTimeoutSignal = milliseconds => { delays.push(milliseconds); return deadline.signal; };
+  fetchResponse = ({ signal }) => new Response(new ReadableStream({
+    start(controller) {
+      stream = controller;
+      signal?.addEventListener('abort', () => controller.error(signal.reason), { once: true });
+    },
+    pull() { reading = true; }
+  }, { highWaterMark: 0 }));
+  const pending = send({ type: 'media.fetchText', tabId: 7, id: hlsOwner.id, url: hlsOwner.url, automatic: true });
+  try {
+    await flush();
+    assert.equal(reading, true, 'the response body is still being read when the automatic deadline fires');
+    assert.deepEqual(delays, [10000], 'automatic manifest reads use a fixed ten-second deadline');
+    assert.equal(fetchCalls.at(-1).init.signal, deadline.signal);
+    const rule = previewRuleUpdates[rulesBefore].addRules[0];
+    assert.equal(previewRuleUpdates.length, rulesBefore + 1);
+    deadline.abort();
+    assert.deepEqual({ ...await pending }, { ok: false, error: 'media_fetch_failed' });
+    assert.deepEqual(previewRuleUpdates.slice(rulesBefore + 1), [{ removeRuleIds: [rule.id] }]);
+  } finally {
+    if (!deadline.signal.aborted) stream?.close();
+    await pending;
+    createTimeoutSignal = milliseconds => AbortSignal.timeout(milliseconds);
+  }
+}
+console.log('Automatic manifest reads use a fixed ten-second deadline and clear their rule on body abort');
 const deniedBoundary = fetchCalls.length;
 fetchResponse = new Response('denied', { status: 403 });
 const deniedHls = await send({ type: 'media.fetchText', tabId: 7, id: hlsOwner.id, url: 'https://cdn.example/denied.m3u8' });

@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import type { MediaCandidate, UiContext } from "../types";
 import { buildDashPlan, parseDash, type DashManifest, type DashTrack } from "../dash";
+import { dashMetadata } from "../hls-metadata";
 import { sendMessage } from "../api";
 import { createDownload } from "../download-client";
 import { candidatePayload } from "../download-plan";
@@ -48,6 +49,8 @@ async function suggestName(candidate: MediaCandidate, current: number, fallbackN
 
 watch(() => props.candidate, async candidate => {
   const current = ++sequence;
+  const sourceContextId = props.context.sourceContextId;
+  const sourceTabId = props.context.sourceTabId;
   loading.value = true; error.value = ""; manifest.value = null; submittedPayload = null;
   requestId = crypto.randomUUID(); const fallbackName = fileName.value = candidate.title || candidate.pageTitle || "DASH";
   void suggestName(candidate, current, fallbackName);
@@ -57,6 +60,10 @@ watch(() => props.candidate, async candidate => {
     if (current !== sequence) return;
     if (!response?.ok) throw new Error(response?.error || "media_fetch_failed");
     manifest.value = parseDash(response.text, response.url || candidate.url);
+    const metadata = dashMetadata(manifest.value);
+    void Promise.resolve().then(() => sendMessage({ type: "media.metadata.update", tabId: sourceTabId, sourceContextId, payload: { id: candidate.id, url: candidate.url, ...metadata } }))
+      .then(result => { if (result?.ok === false) console.debug("StreamFirefly parsed metadata was not saved", result.error); })
+      .catch(() => console.debug("StreamFirefly parsed metadata was not saved"));
     videoId.value = [...videos.value].sort((first, second) => second.bandwidth - first.bandwidth)[0]?.id || "";
     audioId.value = (audios.value.find(track => track.main) || audios.value[0])?.id || "";
     container.value = "mp4";

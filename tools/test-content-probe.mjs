@@ -6,7 +6,7 @@ import {test} from 'node:test';
 const source=fs.readFileSync(new URL('../extension/content.js',import.meta.url),'utf8');
 function fixture(elements=[],frame=null){
  const probes=[],forwarded=[],listeners={},documentListeners={},timers=[];
- const context={crypto:{randomUUID:()=> 'document-fixture'},location:{href:'https://page.example/watch'},performance:{getEntriesByType:()=>[]},document:{documentElement:{},querySelector:()=>null,querySelectorAll:selector=>selector==='video'?elements.filter(element=>element.tagName==='VIDEO'):elements,addEventListener:(type,fn)=>{documentListeners[type]=fn;}},MutationObserver:class{observe(){}disconnect(){}},console,innerWidth:1280,innerHeight:800,setTimeout:fn=>timers.push(fn),clearTimeout:id=>{if(id)timers[id-1]=()=>{};}};
+ const context={crypto:{randomUUID:()=> 'document-fixture'},location:{href:'https://page.example/watch'},performance:{getEntriesByType:()=>[]},document:{documentElement:{},querySelector:()=>null,querySelectorAll:selector=>selector==='video'?elements.filter(element=>element.tagName==='VIDEO'):elements,addEventListener:(type,fn)=>{documentListeners[type]=fn;}},MutationObserver:class{constructor(fn){listeners.mutation=fn;}observe(){}disconnect(){}},console,innerWidth:1280,innerHeight:800,setTimeout:fn=>timers.push(fn),clearTimeout:id=>{if(id)timers[id-1]=()=>{};}};
  context.window=context;context.top=frame?{}:context;if(frame)context.IntersectionObserver=class{constructor(callback){this.callback=callback;}observe(){this.callback([{intersectionRatio:frame.ratio}]);}disconnect(){}};context.addEventListener=(type,fn)=>{listeners[type]=fn;if(type==='message')context.deliverFixtureMessage=fn;};
  context.chrome={runtime:{onMessage:{addListener:fn=>{listeners.runtime=fn;}},sendMessage:message=>{
   if(message.type==='probe.install')return new Promise(resolve=>probes.push(resolve));
@@ -196,4 +196,53 @@ test('a picked image collects every srcset candidate even when a comma has no sp
  f.pick(true);f.listeners.click(f.event('click'));
  const {pick}=f.forwarded.find(message=>message.type==='media.pick.result');
  assert.deepEqual([...pick.urls],['https://page.example/small.jpg','https://page.example/large.jpg','https://page.example/huge.jpg']);
+});
+
+test('reused players report late dimensions, duration and poster without duplicate messages',async()=>{
+ const events=new Map();
+ const media=video({paused:true,currentSrc:'https://cdn.example/first.mp4',poster:'',duration:NaN,videoWidth:0,videoHeight:0,
+  addEventListener(name,fn,options){events.set(name,{fn,once:options?.once});}});
+ const fire=name=>{const event=events.get(name);if(event){if(event.once)events.delete(name);event.fn();}};
+ const f=fixture([media]);f.probes[0]({ok:true,active:true});await settle();
+ media.duration=10;media.videoWidth=640;media.videoHeight=360;fire('loadedmetadata');
+ media.currentSrc='https://cdn.example/second.mp4';media.duration=NaN;media.videoWidth=0;media.videoHeight=0;
+ f.listeners.mutation([{type:'attributes',attributeName:'src',target:media}]);
+ media.duration=20;media.videoWidth=1920;media.videoHeight=1080;fire('loadedmetadata');
+ let last=f.forwarded.filter(m=>m.type==='media.add').at(-1).candidate;
+ assert.equal(last.url,media.currentSrc);assert.equal(last.duration,20);assert.equal(last.width,1920);
+ media.duration=25;fire('durationchange');media.videoWidth=1280;media.videoHeight=720;fire('resize');
+ media.poster='https://cdn.example/second.jpg';f.listeners.mutation([{type:'attributes',attributeName:'poster',target:media}]);
+ last=f.forwarded.filter(m=>m.type==='media.add').at(-1).candidate;
+ assert.equal(last.duration,25);assert.equal(last.width,1280);assert.equal(last.poster,media.poster);
+ const count=f.forwarded.length;fire('resize');fire('durationchange');f.listeners.mutation([]);assert.equal(f.forwarded.length,count);
+ f.control(false);media.duration=30;fire('durationchange');assert.equal(f.forwarded.length,count);
+});
+
+test('a video and its typed source report their shared URL once per element',async()=>{
+ const url='https://cdn.example/shared.mp4';
+ const media=video({paused:true,currentSrc:url,videoWidth:640,videoHeight:360});
+ const child={tagName:'SOURCE',src:url,getAttribute:()=> 'video/mp4',parentElement:media};
+ const f=fixture([media,child]);f.probes[0]({ok:true,active:true});await settle();
+ const reports=()=>f.forwarded.filter(message=>message.type==='media.add').map(message=>message.candidate);
+ assert.deepEqual(reports().map(candidate=>candidate.mime),['video/unknown','video/mp4']);
+ assert.deepEqual([reports()[1].duration,reports()[1].width,reports()[1].height],[30,640,360]);
+ f.listeners.mutation([]);f.listeners.mutation([]);
+ assert.equal(reports().length,2,'unchanged elements must not send duplicate media.add messages');
+ f.listeners.runtime({type:'media.rescan'},{},()=>{});
+ assert.equal(reports().length,4,'explicit rescans report both elements again');
+});
+
+test('a retained source does not report metadata from a different current video',async()=>{
+ const url='https://cdn.example/original.mp4';
+ const media=video({paused:true,currentSrc:url,videoWidth:640,videoHeight:360});
+ const child={tagName:'SOURCE',src:url,getAttribute:()=> 'video/mp4',parentElement:media};
+ const f=fixture([media,child]);f.probes[0]({ok:true,active:true});await settle();
+ media.src=media.currentSrc='https://cdn.example/replacement.mp4';
+ media.duration=60;media.videoWidth=1920;media.videoHeight=1080;
+ f.listeners.mutation([{type:'attributes',attributeName:'src',target:media}]);
+ const reports=f.forwarded.filter(message=>message.type==='media.add').map(message=>message.candidate);
+ const sourceReport=reports.filter(candidate=>candidate.url===url&&candidate.mime==='video/mp4').at(-1);
+ assert.deepEqual([sourceReport.duration,sourceReport.width,sourceReport.height],[null,null,null]);
+ const currentReport=reports.find(candidate=>candidate.url===media.currentSrc);
+ assert.deepEqual([currentReport.duration,currentReport.width,currentReport.height],[60,1920,1080]);
 });

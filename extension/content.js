@@ -1,21 +1,22 @@
 (() => {
   const api = globalThis.browser ?? globalThis.chrome;
   const documentToken = crypto.randomUUID();
-  const seen = new Set();
+  let seen = new WeakMap();
   const bound = new WeakSet();
   let active = false;
   let installing = true;
   let revision = 0;
   let pending = [];
   const pagePoster = () => { const value = document.querySelector('meta[property="og:image"], meta[name="twitter:image"]')?.content; if (!value) return null; try { return new URL(value, location.href).href; } catch (_) { return value; } };
-  const report = (element, force = false) => {
+  const report = element => {
     if (!active) return;
     const url = element.currentSrc || element.src;
-    if (!url || (!force && seen.has(url))) return;
-    seen.add(url);
-    const media = element.tagName === "SOURCE" ? element.parentElement : element;
+    if (!url) return;
+    const isSource = element.tagName === "SOURCE";
+    const media = isSource ? element.parentElement : element;
     const isVideo = media?.tagName === "VIDEO";
-    api.runtime.sendMessage({ type: "media.add", candidate: {
+    const hasCurrentMetadata = !isSource || media?.currentSrc === url;
+    const candidate = {
       url,
       mime: element.getAttribute("type") || media?.getAttribute("type") || (isVideo ? "video/unknown" : "audio/unknown"),
       title: document.title,
@@ -23,11 +24,15 @@
       pageUrl: location.href,
       faviconUrl: document.querySelector('link[rel~="icon"]')?.href || `${location.origin}/favicon.ico`,
       poster: isVideo ? media.poster || pagePoster() : null,
-      width: isVideo ? media.videoWidth || null : null,
-      height: isVideo ? media.videoHeight || null : null,
-      duration: Number.isFinite(media?.duration) ? media.duration : null,
+      width: isVideo && hasCurrentMetadata ? media.videoWidth || null : null,
+      height: isVideo && hasCurrentMetadata ? media.videoHeight || null : null,
+      duration: hasCurrentMetadata && Number.isFinite(media?.duration) ? media.duration : null,
       source: "dom"
-    }}).catch?.(() => {});
+    };
+    const signature = JSON.stringify(candidate);
+    if (seen.get(element) === signature) return;
+    seen.set(element, signature);
+    api.runtime.sendMessage({ type: "media.add", candidate }).catch?.(() => {});
   };
   // Manifests requested before sniffing started survive only in the page's resource timeline.
   const timedMedia = /\.(?:m3u8?|mpd|mp4|webm|mov|mkv|flv|f4v|m4v|mp3|m4a|aac|wav|flac|ogg|opus|weba)(?:$|[?#&])/i;
@@ -61,7 +66,7 @@
     const media = element.tagName === "SOURCE" ? element.parentElement : element;
     if (media && !bound.has(media) && (media.tagName === "VIDEO" || media.tagName === "AUDIO")) {
       bound.add(media);
-      media.addEventListener("loadedmetadata", () => report(media, true), { once: true });
+      for (const event of ["loadedmetadata", "durationchange", "resize"]) media.addEventListener(event, () => report(media));
     }
   });
   // The video the user is watching: one that keeps playing for a moment while mostly on screen.
@@ -242,7 +247,7 @@
   api.runtime.onMessage?.addListener((message, _sender, respond) => {
     if (message?.type === "probe.identity") { respond({ documentToken }); return false; }
     if (message?.type === "media.sniffing.control") { void setActive(Boolean(message.active)); respond({ ok: true }); return false; }
-    if (message?.type === "media.rescan") { if (active) { seen.clear(); focusedUrl = ""; scan(); focusPlayingVideo(); } return { ok: true }; }
+    if (message?.type === "media.rescan") { if (active) { seen = new WeakMap(); focusedUrl = ""; scan(); focusPlayingVideo(); } return { ok: true }; }
     if (message?.type === "media.pick.control") { if (message.active && typeof message.pickId === "string") { if (active) startPicker(message.pickId); else if (installing) pendingPickId = message.pickId; } else { stopPicker(); pendingPickId = null; } respond({ ok: true }); return false; }
     if (window !== window.top) return false;
     if (message?.type === "workspace.unmount") {
@@ -262,9 +267,9 @@
     const buffered = pending;
     pending = [];
     for (const message of buffered) api.runtime.sendMessage(message).catch?.(() => {});
-    seen.clear();
+    seen = new WeakMap();
     focusedUrl = "";
-    observer.observe(document.documentElement, { childList: true, subtree: true });
+    observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["src", "poster"] });
     scan();
     focusPlayingVideo();
     reportTimedResources();

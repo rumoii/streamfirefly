@@ -222,3 +222,9 @@ describe("HLS parser selection preview entry", () => {
     } finally { wrapper.unmount(); }
   });
 });
+
+it('writes parsed default HLS metadata back without changing the download selection', async()=>{
+ const wrapper=mount(HlsParserView,{props:props()});await flushPromises();
+ expect(send.mock.calls.some(([m])=>m.type==='media.metadata.update' && m.sourceContextId==='page' && m.payload.id==='hls' && m.payload.width===1920 && m.payload.duration===15)).toBe(true);
+ wrapper.unmount();
+});

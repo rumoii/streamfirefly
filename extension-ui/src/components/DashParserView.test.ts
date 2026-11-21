@@ -52,3 +52,10 @@ describe("DASH workbench", () => {
     wrapper.unmount(); resolve({ ok: true, text, url: current.candidate.url }); await flushPromises(); expect(create).not.toHaveBeenCalled();
   });
 });
+
+it('writes parsed DASH metadata back to the owning context', async()=>{
+ const p=props();p.candidate.inlineManifest.text=text.replace('id="high" bandwidth="200"','id="high" bandwidth="200" width="1920" height="1080"');
+ const wrapper=mount(DashParserView,{props:p});await flushPromises();
+ expect(send.mock.calls.some(([m])=>m.type==='media.metadata.update' && m.sourceContextId==='page' && m.payload.id==='dash' && m.payload.width===1920 && m.payload.duration===4)).toBe(true);
+ wrapper.unmount();
+});

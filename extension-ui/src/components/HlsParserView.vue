@@ -110,6 +110,7 @@ async function loadVariant() {
     const response = await fetchText(variant.uri);
     if (disposed || sequence !== variantSequence) return;
     videoManifest.value = parseHls(response.text, response.url);
+    publishMetadata(videoManifest.value, variant);
     resetRange();
     const preferred = defaultAudio(master.value?.tracks || [], variant.audioGroup);
     selectedAudioId.value = preferred?.id || "";
@@ -121,6 +122,22 @@ async function loadVariant() {
     form.extension = form.container;
   } catch (reason: any) { if (!disposed && sequence === variantSequence) error.value = humanError(reason?.message); }
   finally { if (!disposed && sequence === variantSequence) loading.value = false; }
+}
+
+function publishMetadata(manifest: HlsManifest, variant = selectedVariant.value) {
+  if (disposed) return;
+  const own = props.candidate;
+  // A selected child updates itself. The master keeps its default quality, not whichever option was last clicked.
+  const ownIsVariant = master.value?.variants.some(item => item.uri === own.url);
+  const target = variant && (ownIsVariant ? variant.uri !== own.url : master.value?.kind === "master" && variant.id !== defaultVariant(master.value.variants)?.id)
+    ? props.context.candidates?.find(item => item.url === variant.uri)
+    : own;
+  if (!target) return;
+  const metadata = { ...(manifest.live ? { live: true } : manifest.duration > 0 ? { duration: manifest.duration } : {}), ...(variant?.width && variant.height ? { width: variant.width, height: variant.height } : {}) };
+  const message = { type: "media.metadata.update", tabId: props.context.sourceTabId, sourceContextId: props.context.sourceContextId, payload: { id: target.id, url: target.url, ...metadata } };
+  void Promise.resolve().then(() => sendMessage(message))
+    .then(result => { if (result?.ok === false) console.debug("StreamFirefly parsed metadata was not saved", result.error); })
+    .catch(() => console.debug("StreamFirefly parsed metadata was not saved"));
 }
 
 function resetRange() {
@@ -150,6 +167,7 @@ async function initialize() {
       selectedVariantId.value = preferred?.id || "";
     } else {
       videoManifest.value = master.value;
+      publishMetadata(videoManifest.value, null);
       resetRange();
       // A variant opened on its own is shown through its master, so its audio and subtitles can be chosen.
       const linked = master.value.live ? null : await linkedMaster(props.candidate, url => fetchText(url));

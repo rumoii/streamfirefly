@@ -84,7 +84,7 @@ export const useAppStore = defineStore("app", () => {
     const sameContext = context.value?.sourceContextId === nextContext.sourceContextId;
     context.value = nextContext;
     candidates.value = Array.isArray(result.context?.candidates) ? result.context.candidates : [];
-    hlsMetadata.schedule(nextContext.sourceContextId, candidates.value);
+    hlsMetadata.schedule(nextContext.sourceContextId, candidates.value, nextContext.sniffingActive);
     sizeProbe.schedule(nextContext.sourceContextId, candidates.value, nextContext.sniffingActive);
     if (!sameContext || (!pendingPatches && nextContext.resourceViewState.revision >= resourceViewState.value.revision)) resourceViewState.value = { ...nextContext.resourceViewState };
     error.value = "";
@@ -202,7 +202,7 @@ export const useAppStore = defineStore("app", () => {
 
   const hlsMetadata = createHlsMetadataQueue({
     load: async (candidate, url) => {
-      const result: any = await sendMessage({ type: "media.fetchText", tabId: context.value?.sourceTabId, id: candidate.id, url });
+      const result: any = await sendMessage({ type: "media.fetchText", tabId: context.value?.sourceTabId, id: candidate.id, url, automatic: true });
       if (!result?.ok) throw new Error(result?.error || "media_fetch_failed");
       return { text: String(result.text), url: String(result.url || url) };
     },
@@ -224,12 +224,14 @@ export const useAppStore = defineStore("app", () => {
 
   async function updateCandidateMetadata(candidate: MediaCandidate, metadata: Partial<Pick<MediaCandidate, "duration" | "width" | "height" | "poster" | "live">>) {
     if (!context.value?.supported) return;
+    const sourceContextId = context.value.sourceContextId;
     if (!extensionApi()?.runtime?.sendMessage) {
       const index = candidates.value.findIndex(item => item.id === candidate.id);
       if (index >= 0) candidates.value[index] = { ...candidates.value[index], ...metadata };
       return;
     }
-    const result: any = await sendMessage({ type: "media.metadata.update", tabId: context.value.sourceTabId, sourceContextId: context.value.sourceContextId, payload: { id: candidate.id, url: candidate.url, ...metadata } });
+    const result: any = await sendMessage({ type: "media.metadata.update", tabId: context.value.sourceTabId, sourceContextId, payload: { id: candidate.id, url: candidate.url, ...metadata } });
+    if (disposed || context.value?.sourceContextId !== sourceContextId) return;
     if (!result?.ok) throw new Error(result?.error || "media_metadata_update_failed");
     const index = candidates.value.findIndex(item => item.id === candidate.id);
     if (index >= 0 && result.candidate) candidates.value[index] = { ...candidates.value[index], ...result.candidate };
@@ -254,6 +256,7 @@ export const useAppStore = defineStore("app", () => {
     contextSequence++;
     taskState.dispose();
     sizeProbe.stop();
+    hlsMetadata.stop();
     document.removeEventListener("visibilitychange", onVisibilityChange);
     if (timer != null) { clearTimeout(timer); timer = null; }
     if (reconnectTimer != null) { clearTimeout(reconnectTimer); reconnectTimer = null; }

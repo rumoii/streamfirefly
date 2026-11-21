@@ -4,17 +4,15 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import type { MediaCandidate, PageFocus, PagePick, ResourceViewState } from "../types";
 import { betterAlternative, filterCandidates, focusedCandidateIds, isBlobCandidate, pickedCandidateIds, sortCandidates } from "../media";
 import { formatBytes, formatDuration, sourceLabel, typeLabel } from "../format";
-import { extensionApi, sendMessage } from "../api";
+import { extensionApi } from "../api";
 import SfIcon from "../ui/SfIcon.vue";
 import SfMenu, { type MenuItem } from "../ui/SfMenu.vue";
 import SfPopover from "../ui/SfPopover.vue";
 import SfSelect from "../ui/SfSelect.vue";
 import type { IconName } from "../ui/icons";
-import { loadHls, PREVIEW_HLS_CONFIG, type HlsConstructor } from "../hls-loader";
+import { createMediaPreview, type PreviewState } from "../media-preview";
 
-type PreviewState = "idle" | "preparing" | "ready" | "playing" | "failed";
-
-const props = defineProps<{ candidates: MediaCandidate[]; focus?: PageFocus | null; pick?: PagePick | null; picking?: boolean; pickAvailable?: boolean; loading: boolean; viewState: ResourceViewState; compact?: boolean; coverOnly?: boolean; suspended?: boolean; connected?: boolean; externalEnabled?: boolean }>();
+const props = defineProps<{ candidates: MediaCandidate[]; focus?: PageFocus | null; pick?: PagePick | null; picking?: boolean; pickAvailable?: boolean; loading: boolean; viewState: ResourceViewState; compact?: boolean; coverOnly?: boolean; suspended?: boolean; sourceContextId?: string; connected?: boolean; externalEnabled?: boolean }>();
 const emit = defineEmits<{
   download: [candidate: MediaCandidate];
   externalDownload: [candidates: MediaCandidate[]];
@@ -38,15 +36,6 @@ const failedImages = ref(new Set<string>());
 const previewState = ref<PreviewState>("idle");
 const previewError = ref("");
 const mediaElement = ref<HTMLVideoElement | HTMLAudioElement | null>(null);
-const previewSessionId = `preview-${crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
-let hls: InstanceType<HlsConstructor> | null = null;
-let activePreviewId = "";
-let preparationToken = 0;
-let autoPreparing = false;
-let networkRecoveries = 0;
-let mediaRecoveries = 0;
-let lastMetadataSignature = "";
-let preparationTimer = 0;
 
 const resourceCandidates = computed(() => props.candidates.filter(item => item.type !== "segment"));
 const filtered = computed(() => filterCandidates(resourceCandidates.value, props.viewState.pattern, props.viewState.type, props.viewState.minMb, props.viewState.maxMb, props.viewState.minDuration, props.viewState.maxDuration));
@@ -106,13 +95,6 @@ watch(visible, items => {
   if (props.viewState.expandedId && !items.some(item => item.id === props.viewState.expandedId)) emit("updateViewState", { expandedId: "" });
 });
 
-watch([() => props.viewState.expandedId, () => props.coverOnly, () => props.suspended], async () => {
-  await disposePreview();
-  if (!props.viewState.expandedId || props.coverOnly || props.suspended) return;
-  await nextTick();
-  const item = expanded.value;
-  if (item && !props.coverOnly && !props.suspended && item.type !== "image" && !isBlobCandidate(item)) await preparePreview(item);
-}, { immediate: true });
 
 function coverUrl(item: MediaCandidate) {
   const url = item.type === "image" ? item.url : item.poster || "";
@@ -168,204 +150,51 @@ function toggleDetails(item: MediaCandidate) {
 
 function closeDetails() { updateViewState("expandedId", ""); }
 
-async function applyPreviewHeaders(item: MediaCandidate) {
-  await sendMessage({ type: "preview.headers.apply", payload: { previewSessionId, candidateId: item.id, url: item.url, headers: item.requestHeaders || {} } }).catch(() => {});
-}
-
-async function clearPreviewHeaders() {
-  await sendMessage({ type: "preview.headers.clear", previewSessionId }).catch(() => {});
-}
-
-function reportMetadata(item: MediaCandidate, extra: Partial<Pick<MediaCandidate, "duration" | "width" | "height" | "poster" | "live">> = {}) {
-  const media = mediaElement.value;
-  const metadata = {
-    duration: Number.isFinite(media?.duration) && Number(media?.duration) > 0 ? Number(media?.duration) : extra.duration,
-    width: media instanceof HTMLVideoElement && media.videoWidth > 0 ? media.videoWidth : extra.width,
-    height: media instanceof HTMLVideoElement && media.videoHeight > 0 ? media.videoHeight : extra.height,
-    poster: extra.poster,
-    live: extra.live
-  };
-  const useful = Object.fromEntries(Object.entries(metadata).filter(([, value]) => value != null && value !== 0));
-  const signature = `${item.id}:${JSON.stringify(useful)}`;
-  if (Object.keys(useful).length && signature !== lastMetadataSignature) {
-    lastMetadataSignature = signature;
-    emit("metadata", item, useful);
+let detailOwner: { candidate: MediaCandidate; contextId?: string } | null = null;
+const detailPreview = createMediaPreview({
+  state: state => { previewState.value = state; },
+  error: message => { previewError.value = message; },
+  metadata: metadata => {
+    if (detailOwner && detailOwner.contextId === props.sourceContextId && expanded.value?.id === detailOwner.candidate.id) emit("metadata", detailOwner.candidate, metadata);
   }
-}
-
-function captureCurrentFrame(): string | undefined {
-  const media = mediaElement.value;
-  if (!(media instanceof HTMLVideoElement) || !media.videoWidth || !media.videoHeight) return;
-  try {
-    const canvas = document.createElement("canvas");
-    const scale = Math.min(1, 640 / media.videoWidth);
-    canvas.width = Math.max(1, Math.round(media.videoWidth * scale));
-    canvas.height = Math.max(1, Math.round(media.videoHeight * scale));
-    canvas.getContext("2d")?.drawImage(media, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL("image/jpeg", .82);
-  } catch (_) { return; }
-}
-
-async function finishPreparation(item: MediaCandidate, token: number) {
-  if (token !== preparationToken || activePreviewId !== item.id) return;
-  clearTimeout(preparationTimer);
-  preparationTimer = 0;
-  const media = mediaElement.value;
-  if (!media) return;
-  if (!item.poster && media instanceof HTMLVideoElement) {
-    autoPreparing = true;
-    media.muted = true;
-    try {
-      await media.play();
-      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-    } catch (_) {}
-    media.pause();
-    autoPreparing = false;
-  }
-  hls?.stopLoad();
-  reportMetadata(item, { poster: item.poster || captureCurrentFrame(), live: item.live });
-  previewState.value = "ready";
-}
-
-function handleHlsError(item: MediaCandidate, data: any, Hls: HlsConstructor) {
-  if (!data?.fatal || activePreviewId !== item.id) return;
-  if (data.type === Hls.ErrorTypes.NETWORK_ERROR && networkRecoveries < 1) {
-    networkRecoveries += 1;
-    hls?.startLoad();
-    return;
-  }
-  if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRecoveries < 1) {
-    mediaRecoveries += 1;
-    hls?.recoverMediaError();
-    return;
-  }
-  clearTimeout(preparationTimer);
-  preparationTimer = 0;
-  previewState.value = "failed";
-  previewError.value = "无法准备此 HLS 资源的预览，请检查来源页面是否仍可播放。";
-}
-
+});
 async function preparePreview(item: MediaCandidate) {
-  if (activePreviewId === item.id && ["preparing", "ready", "playing"].includes(previewState.value)) return;
-  if (hls) { hls.destroy(); hls = null; }
-  const token = ++preparationToken;
-  activePreviewId = item.id;
-  networkRecoveries = 0;
-  mediaRecoveries = 0;
-  lastMetadataSignature = "";
-  previewError.value = "";
-  previewState.value = "preparing";
-  clearTimeout(preparationTimer);
-  preparationTimer = window.setTimeout(() => {
-    if (token !== preparationToken || activePreviewId !== item.id || previewState.value !== "preparing") return;
-    previewState.value = "failed";
-    previewError.value = "预览准备超时，请确认来源页面仍可访问该媒体。";
-    hls?.stopLoad();
-  }, 15000);
-  await nextTick();
   const media = mediaElement.value;
-  if (!media || token !== preparationToken) return;
-  await applyPreviewHeaders(item);
-  if (token !== preparationToken || activePreviewId !== item.id || mediaElement.value !== media) return;
-  media.preload = "auto";
-  media.muted = true;
-  if (item.type === "hls") {
-    let Hls: HlsConstructor;
-    try {
-      Hls = await loadHls();
-    } catch (_) {
-      if (token !== preparationToken || activePreviewId !== item.id || mediaElement.value !== media) return;
-      clearTimeout(preparationTimer);
-      preparationTimer = 0;
-      previewState.value = "failed";
-      previewError.value = "无法准备此 HLS 资源的预览，请检查来源页面是否仍可播放。";
-      await clearPreviewHeaders();
-      return;
-    }
-    if (token !== preparationToken || activePreviewId !== item.id || mediaElement.value !== media) return;
-    if (!Hls.isSupported()) {
-      media.src = item.url;
-      media.load();
-      return;
-    }
-    hls = new Hls({ ...PREVIEW_HLS_CONFIG });
-    hls.on(Hls.Events.ERROR, (_, data) => handleHlsError(item, data, Hls));
-    hls.on(Hls.Events.LEVEL_LOADED, (_, data: any) => reportMetadata(item, { duration: data?.details?.totalduration, live: Boolean(data?.details?.live) }));
-    hls.on(Hls.Events.MANIFEST_PARSED, (_, data: any) => {
-      const level = [...(data?.levels || [])].sort((a: any, b: any) => (b.width || 0) * (b.height || 0) - (a.width || 0) * (a.height || 0))[0];
-      reportMetadata(item, { width: level?.width, height: level?.height });
-    });
-    hls.attachMedia(media);
-    hls.loadSource(item.url);
-    return;
+  detailOwner = { candidate: item, contextId: props.sourceContextId };
+  if (media) {
+    try { await detailPreview.prepare(item, media); }
+    catch { previewState.value = "failed"; previewError.value = "无法准备此资源的预览，请检查来源页面是否仍可播放。"; }
   }
-  media.src = item.url;
-  media.load();
 }
-
 async function startPreview() {
   const item = expanded.value;
   if (!item) return;
-  if (previewState.value === "idle" || previewState.value === "failed") await preparePreview(item);
-  await nextTick();
-  const media = mediaElement.value;
-  if (!media) return;
-  previewError.value = "";
-  hls?.startLoad(-1);
-  media.muted = false;
-  try {
-    await media.play();
-    previewState.value = "playing";
-  } catch (_) {
-    previewState.value = "ready";
-    previewError.value = "浏览器阻止了播放，请使用播放器中的播放按钮重试。";
-  }
+  if (["idle", "failed"].includes(previewState.value)) await preparePreview(item);
+  await detailPreview.play();
 }
-
-function onMediaMetadata() {
-  const item = expanded.value;
-  if (!item || activePreviewId !== item.id) return;
-  reportMetadata(item);
-  if (item.poster && previewState.value === "preparing") void finishPreparation(item, preparationToken);
-}
-
-function onMediaData() {
-  const item = expanded.value;
-  if (!item || activePreviewId !== item.id || previewState.value !== "preparing") return;
-  void finishPreparation(item, preparationToken);
-}
-
-function onMediaPlay() {
-  if (autoPreparing) return;
-  hls?.startLoad(-1);
-  previewState.value = "playing";
-}
-
-function onMediaPause() {
-  if (autoPreparing || previewState.value !== "playing") return;
-  hls?.stopLoad();
-  previewState.value = "ready";
-}
-
 async function disposePreview() {
-  preparationToken += 1;
-  clearTimeout(preparationTimer);
-  preparationTimer = 0;
-  activePreviewId = "";
-  autoPreparing = false;
-  hls?.destroy();
-  hls = null;
-  if (mediaElement.value) {
-    mediaElement.value.pause();
-    mediaElement.value.removeAttribute("src");
-    mediaElement.value.load();
-  }
-  previewState.value = "idle";
-  previewError.value = "";
-  await clearPreviewHeaders();
+  detailOwner = null;
+  await detailPreview.dispose();
+  previewState.value = "idle"; previewError.value = "";
 }
 
-onBeforeUnmount(() => { void disposePreview(); });
+let disposed = false;
+let detailSequence = 0;
+watch([() => props.viewState.expandedId, () => props.coverOnly, () => props.suspended, () => props.sourceContextId], async () => {
+  const sequence = ++detailSequence;
+  await disposePreview();
+  if (disposed || sequence !== detailSequence) return;
+  if (!props.viewState.expandedId || props.coverOnly || props.suspended) return;
+  await nextTick();
+  if (disposed || sequence !== detailSequence || props.coverOnly || props.suspended) return;
+  const item = expanded.value;
+  if (item && item.type !== "image" && !isBlobCandidate(item)) await preparePreview(item);
+}, { immediate: true });
+onBeforeUnmount(() => {
+  disposed = true; detailSequence++;
+  void detailPreview.dispose();
+});
+
 </script>
 
 <template>
@@ -451,8 +280,8 @@ onBeforeUnmount(() => { void disposePreview(); });
               <img v-if="item.type === 'image'" :src="item.url" alt="资源预览">
               <img v-else-if="isBlobCandidate(item) && item.poster" :src="item.poster" alt="媒体封面">
               <div v-else-if="isBlobCandidate(item)" class="blob-preview-status"><strong>Blob 页面临时媒体</strong><span>无法脱离来源页面直接预览，请使用缓存捕捉。</span></div>
-              <video v-else-if="['video','hls','dash'].includes(item.type)" :ref="setMediaElement" :controls="previewState === 'playing' || previewState === 'failed'" preload="auto" playsinline :poster="item.poster || undefined" @loadedmetadata="onMediaMetadata" @durationchange="onMediaMetadata" @loadeddata="onMediaData" @play="onMediaPlay" @pause="onMediaPause"></video>
-              <audio v-else-if="item.type === 'audio'" :ref="setMediaElement" controls preload="auto" @loadedmetadata="onMediaMetadata" @durationchange="onMediaMetadata" @loadeddata="onMediaData" @play="onMediaPlay" @pause="onMediaPause"></audio>
+              <video v-else-if="['video','hls','dash'].includes(item.type)" :ref="setMediaElement" :controls="previewState === 'playing' || previewState === 'failed'" preload="auto" playsinline :poster="item.poster || undefined"></video>
+              <audio v-else-if="item.type === 'audio'" :ref="setMediaElement" controls preload="auto"></audio>
               <div v-if="previewState === 'preparing' && item.type !== 'image' && !isBlobCandidate(item)" class="preview-status" :class="{ 'has-poster': item.poster }"><i></i><strong>正在准备封面与媒体信息</strong><span>只加载预览所需的少量数据</span></div>
               <button v-if="(previewState === 'ready' || previewState === 'preparing' && item.poster) && item.type !== 'image' && !isBlobCandidate(item)" class="preview-play" type="button" @click="startPreview"><span><SfIcon name="player-play" :size="20" /></span><strong>播放预览</strong></button>
               <div v-if="isBlobCandidate(item) && item.poster" class="blob-poster-note">Blob 页面临时媒体 · 请使用缓存捕捉</div>
