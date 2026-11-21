@@ -6,6 +6,7 @@ import SfIcon from "../../ui/SfIcon.vue";
 import SfSelect from "../../ui/SfSelect.vue";
 import { useAdvancedArguments } from "../../../../shared/tool-options";
 const config = ref(integrationDefaults());
+let savedConfig = integrationDefaults();
 const receipts = ref<DispatchReceipt[]>([]);
 const secrets = ref<Record<string, string>>({});
 const message = ref("");
@@ -16,9 +17,29 @@ const kindOptions: { value: IntegrationKind; label: string }[] = [{ value: "aria
 const kindLabel = (kind: IntegrationKind) => kindOptions.find(option => option.value === kind)?.label || kind;
 const methodOptions: { value: "POST" | "GET"; label: string }[] = [{ value: "POST", label: "POST" }, { value: "GET", label: "GET" }];
 async function perform(action: () => Promise<void>) { busy.value = true; message.value = ""; try { await action(); } catch (error) { message.value = error instanceof Error ? error.message : "操作失败"; } finally { busy.value = false; } }
-async function refresh() { const response = await configurationRequest<{ config: IntegrationConfig; receipts: DispatchReceipt[]; error: string }>("integration.get"); config.value = response.config; receipts.value = response.receipts; message.value = response.error; }
+async function refresh() {
+  const response = await configurationRequest<{ config: IntegrationConfig; receipts: DispatchReceipt[]; error: string }>("integration.get");
+  savedConfig = response.config;
+  config.value = structuredClone(savedConfig);
+  receipts.value = response.receipts;
+  message.value = response.error;
+}
 onMounted(() => perform(refresh));
-async function save() { await perform(async () => { await configurationRequest("integration.save", validateIntegrations(toRaw(config.value))); message.value = "工具配置已保存；发送前仍需确认目标与参数。"; }); }
+async function save() {
+  await perform(async () => {
+    const valid = validateIntegrations(toRaw(config.value));
+    const changedPaths = valid.profiles.filter(profile => profile.kind === "program" && profile.enabled
+      && !savedConfig.profiles.some(saved => saved.id === profile.id && saved.kind === "program" && saved.enabled && saved.endpoint === profile.endpoint))
+      .map(profile => profile.endpoint);
+    if (changedPaths.length) {
+      const confirmed = window.confirm(`批准外部程序\n\n${[...new Set(changedPaths)].join("\n")}\n\n该程序将随下载任务被本地助手直接启动。只批准你信任的可执行文件。\n\n点击“确定”批准并保存，点击“取消”放弃保存。`);
+      if (!confirmed) { message.value = "已取消保存。"; return; }
+    }
+    await configurationRequest("integration.save", valid);
+    savedConfig = valid;
+    message.value = "工具配置已保存；发送前仍需确认目标与参数。";
+  });
+}
 function addTool() { const profile = preset(selectedKind.value); if (profile.kind === "program") { profile.arguments = []; profile.programOptions = { directory: "", fileName: "", autoSelect: true }; } config.value.profiles.push(profile); }
 async function test(profile: IntegrationProfile) { await perform(async () => { await configurationRequest("integration.test", { profile: validateIntegrations({ version: 1, profiles: [toRaw(profile)] }).profiles[0], secret: secrets.value[profile.id] || "" }); message.value = "草稿检查通过；未保存配置，未创建下载任务。"; }); }
 async function secret(profileId: string) { await perform(async () => { await configurationRequest("integration.secret", { profileId, secret: secrets.value[profileId] || "" }); secrets.value[profileId] = ""; message.value = "凭据已存入本次后台会话内存，后台重启后需重新输入。"; }); }

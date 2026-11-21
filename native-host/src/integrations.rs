@@ -1,12 +1,39 @@
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
+const RECEIPT_LIMIT: usize = 1000;
+
+#[derive(Default)]
+struct Receipts {
+    map: HashMap<String, Value>,
+    order: VecDeque<String>, // FIFO by insertion order
+}
+
+impl Receipts {
+    fn get(&self, id: &str) -> Option<&Value> {
+        self.map.get(id)
+    }
+
+    fn insert(&mut self, id: String, receipt: Value) {
+        if !self.map.contains_key(&id) {
+            self.order.push_back(id.clone());
+        }
+        self.map.insert(id, receipt);
+        while self.order.len() > RECEIPT_LIMIT {
+            if let Some(old) = self.order.pop_front() {
+                self.map.remove(&old);
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct ProgramLauncher {
-    requests: Mutex<HashMap<String, Value>>,
+    requests: Mutex<Receipts>,
 }
 
 fn validate(payload: &Value) -> Result<(&str, Vec<&str>), &'static str> {
@@ -92,9 +119,6 @@ impl ProgramLauncher {
         if let Some(receipt) = requests.get(request_id) {
             return Ok(receipt.clone());
         }
-        if requests.len() >= 200 {
-            return Err("launcher_capacity");
-        }
         let (executable, arguments) = validate(payload)?;
         let mut command = Command::new(executable);
         command
@@ -134,8 +158,31 @@ impl ProgramLauncher {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate, ProgramLauncher};
+    use super::{validate, ProgramLauncher, Receipts};
     use serde_json::json;
+
+    #[test]
+    fn receipts_evict_in_fifo_order_and_stay_idempotent() {
+        let mut receipts = Receipts::default();
+        for index in 0..1001 {
+            receipts.insert(format!("request-{index:04}"), json!({"seq": index}));
+        }
+        assert!(receipts.get("request-0000").is_none());
+        assert_eq!(
+            receipts.get("request-1000").map(|value| value["seq"].clone()),
+            Some(json!(1000))
+        );
+        // Reading the oldest live receipt does not move it to the back.
+        assert!(receipts.get("request-0001").is_some());
+        receipts.insert("request-1001".into(), json!({"seq": 1001}));
+        assert!(receipts.get("request-0001").is_none());
+        // Re-inserting a live requestId must not duplicate its queue slot.
+        let first = receipts.get("request-1001").cloned().unwrap();
+        receipts.insert("request-1001".into(), json!({"seq": 1001}));
+        assert_eq!(receipts.order.iter().filter(|id| *id == "request-1001").count(), 1);
+        assert_eq!(receipts.get("request-1001"), Some(&first));
+    }
+
     #[test]
     fn rejects_relative_paths_interpreters_and_invalid_arguments() {
         let launcher = ProgramLauncher::default();

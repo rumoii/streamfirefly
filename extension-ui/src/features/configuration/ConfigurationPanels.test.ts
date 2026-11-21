@@ -186,4 +186,133 @@ describe("configuration serialization", () => {
     expect(wrapper.text()).toContain("工具配置已保存");
     expect(send.mock.calls.find(([message]) => message.type === "integration.save")?.[0].payload.profiles).toHaveLength(1);
   });
+  it("saves a newly enabled program with a main-version native host", async () => {
+    const http = preset("http");
+    const draft = preset("program");
+    send.mockImplementation(async (message: any) => {
+      if (message.type === "integration.get") return { ok: true, value: { config: { version: 1, profiles: [http, draft] }, receipts: [], error: "" } };
+      if (message.type === "integration.save") return { ok: true, value: { config: structuredClone(message.payload), receipts: [], error: "" } };
+      return { ok: false, error: "unsupported_message" };
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const wrapper = mount(ToolsPanel);
+    try {
+      await flushPromises();
+      const program = wrapper.findAll("article")[1];
+      await program.get('input[aria-label="启用工具"]').setValue(true);
+      await program.get('.feature-grid.wide input.control').setValue("C:\\Tools\\Other.exe");
+      await wrapper.findAll("button").find(item => item.text() === "保存工具")!.trigger("click");
+      await flushPromises();
+      expect(wrapper.text()).toContain("工具配置已保存");
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(send.mock.calls.map(([message]) => message.type)).toEqual(["integration.get", "integration.save"]);
+      expect(send.mock.lastCall?.[0].payload.profiles).toEqual([http, { ...draft, enabled: true, endpoint: "C:\\Tools\\Other.exe" }]);
+    } finally {
+      wrapper.unmount();
+      confirm.mockRestore();
+    }
+  });
+  it("confirms enabling a saved disabled program without changing its path", async () => {
+    send.mockImplementation(async (message: any) => {
+      if (message.type === "integration.get") return { ok: true, value: { config: integrationDefaults(), receipts: [], error: "" } };
+      if (message.type === "integration.save") return { ok: true, value: { config: structuredClone(message.payload), receipts: [], error: "" } };
+      throw new Error(message.type);
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const wrapper = mount(ToolsPanel, { attachTo: document.body });
+    try {
+      await flushPromises();
+      await wrapper.get('[aria-label="工具类型"]').trigger("click");
+      await wrapper.findAll('[role="option"]').find(option => option.text() === "N_m3u8DL-RE / 本地程序")!.trigger("click");
+      const button = (name: string) => wrapper.findAll("button").find(item => item.text() === name)!;
+      await button("添加工具").trigger("click");
+      const path = "C:\\Tools\\Downloader.exe";
+      await wrapper.get('.feature-grid.wide input.control').setValue(path);
+      await button("保存工具").trigger("click");
+      await flushPromises();
+      expect(confirm).not.toHaveBeenCalled();
+      expect(send.mock.lastCall?.[0]).toMatchObject({
+        type: "integration.save",
+        payload: { profiles: [expect.objectContaining({ kind: "program", enabled: false, endpoint: path })] },
+      });
+
+      await wrapper.get('input[aria-label="启用工具"]').setValue(true);
+      await button("保存工具").trigger("click");
+      await flushPromises();
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(confirm).toHaveBeenCalledWith(expect.stringContaining(path));
+      expect(send.mock.calls.map(([message]) => message.type)).toEqual(["integration.get", "integration.save"]);
+      expect(wrapper.text()).toContain("已取消保存");
+    } finally {
+      wrapper.unmount();
+      confirm.mockRestore();
+    }
+  });
+  it("keeps the last saved paths until a changed program is saved successfully", async () => {
+    const program = { ...preset("program"), enabled: true, endpoint: "C:\\Tools\\Downloader.exe" };
+    const disabled = preset("program");
+    let failSave = false;
+    send.mockImplementation(async (message: any) => {
+      if (message.type === "integration.get") return { ok: true, value: { config: { version: 1, profiles: [program, disabled] }, receipts: [], error: "" } };
+      if (message.type === "integration.save") return failSave ? { ok: false, error: "storage failure" } : { ok: true, value: {} };
+      throw new Error(message.type);
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const wrapper = mount(ToolsPanel);
+    try {
+      await flushPromises();
+      const [enabledTool, disabledTool] = wrapper.findAll("article");
+      const save = wrapper.findAll("button").find(item => item.text() === "保存工具")!;
+      await enabledTool.get('input[aria-label="工具名称"]').setValue("新名称");
+      await disabledTool.get('.feature-grid.wide input.control').setValue("C:\\Tools\\Disabled.exe");
+      await save.trigger("click"); await flushPromises();
+      expect(wrapper.text()).toContain("工具配置已保存");
+      expect(confirm).not.toHaveBeenCalled();
+
+      const changedPath = "C:\\Tools\\Other.exe";
+      await enabledTool.get('.feature-grid.wide input.control').setValue(changedPath);
+      failSave = true;
+      await save.trigger("click"); await flushPromises();
+      expect(wrapper.text()).toContain("storage failure");
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(confirm).toHaveBeenLastCalledWith(expect.stringContaining(changedPath));
+
+      failSave = false;
+      await save.trigger("click"); await flushPromises();
+      expect(wrapper.text()).toContain("工具配置已保存");
+      expect(confirm).toHaveBeenCalledTimes(2);
+      await save.trigger("click"); await flushPromises();
+      expect(confirm).toHaveBeenCalledTimes(2);
+    } finally {
+      wrapper.unmount();
+      confirm.mockRestore();
+    }
+  });
+  it("shows one dialog for all changed program paths and cancels the entire save", async () => {
+    const first = { ...preset("program"), enabled: true, endpoint: "C:\\Tools\\First.exe" };
+    const second = { ...preset("program"), enabled: true, endpoint: "C:\\Tools\\Second.exe" };
+    const http = preset("http");
+    send.mockImplementation(async (message: any) => {
+      if (message.type === "integration.get") return { ok: true, value: { config: { version: 1, profiles: [first, second, http] }, receipts: [], error: "" } };
+      throw new Error(message.type);
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const wrapper = mount(ToolsPanel);
+    try {
+      await flushPromises();
+      const [firstTool, secondTool, httpTool] = wrapper.findAll("article");
+      await firstTool.get('.feature-grid.wide input.control').setValue("C:\\Tools\\NewFirst.exe");
+      await secondTool.get('.feature-grid.wide input.control').setValue("C:\\Tools\\NewSecond.exe");
+      await httpTool.get('input[aria-label="工具名称"]').setValue("新的 HTTP 工具名称");
+      await wrapper.findAll("button").find(item => item.text() === "保存工具")!.trigger("click");
+      await flushPromises();
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(confirm).toHaveBeenCalledWith(expect.stringContaining("C:\\Tools\\NewFirst.exe\nC:\\Tools\\NewSecond.exe"));
+      expect(send.mock.calls.map(([message]) => message.type)).toEqual(["integration.get"]);
+      expect(wrapper.text()).toContain("已取消保存");
+    } finally {
+      wrapper.unmount();
+      confirm.mockRestore();
+    }
+  });
 });

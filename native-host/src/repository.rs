@@ -11,6 +11,7 @@ use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use crate::lock::LockExt;
 
 pub(crate) const STORE_VERSION: u8 = 1;
 const SENSITIVE_REQUEST_HEADERS: [&str; 2] = ["cookie", "authorization"];
@@ -133,13 +134,13 @@ pub(crate) fn load_repository(path: &Path) -> TaskRepository {
 }
 
 pub(crate) fn save_store(store: &TaskRepository) -> io::Result<()> {
-    let tasks = store.tasks.lock().unwrap();
+    let tasks = store.tasks.lock_or_recover();
     persist_tasks(store, &tasks)
 }
 
 pub(crate) fn persist_tasks(store: &TaskRepository, tasks: &[Task]) -> io::Result<()> {
     let result = write_tasks(store, tasks);
-    *store.runtime_error.lock().unwrap() = result
+    *store.runtime_error.lock_or_recover() = result
         .as_ref()
         .err()
         .map(|_| "task_store_write_failed".to_string());
@@ -147,7 +148,7 @@ pub(crate) fn persist_tasks(store: &TaskRepository, tasks: &[Task]) -> io::Resul
 }
 
 fn write_tasks(store: &TaskRepository, tasks: &[Task]) -> io::Result<()> {
-    let _persistence = store.persistence.lock().unwrap();
+    let _persistence = store.persistence.lock_or_recover();
     if let Some(error) = &store.load_error {
         return Err(io::Error::other(error.clone()));
     }

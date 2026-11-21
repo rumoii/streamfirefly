@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { buildSync } from 'esbuild';
+import { buildSync } from 'esbuild';
+
 import { editionDefine } from './edition.mjs';
 import vm from 'node:vm';
 import { webcrypto } from 'node:crypto';

@@ -20,6 +20,7 @@ use serde_json::json;
 use std::io;
 use std::sync::Arc;
 use std::sync::Mutex;
+use crate::lock::LockExt;
 
 pub(crate) fn run() -> io::Result<()> {
     let launcher = crate::integrations::ProgramLauncher::default();
@@ -35,7 +36,20 @@ pub(crate) fn run() -> io::Result<()> {
     loop {
         let message = match read_message(&mut input) {
             Ok(value) => value,
-            Err(_) => break,
+            // A single malformed message must not kill the host or its downloads;
+            // only a real EOF or a desynced stream shuts everything down.
+            Err(crate::wire::WireError::Invalid) => {
+                emit(
+                    &writer,
+                    json!({"version":1,"id":null,"ok":false,"error":"invalid_message"}),
+                );
+                continue;
+            }
+            Err(crate::wire::WireError::Eof) => break,
+            Err(crate::wire::WireError::Fatal(error)) => {
+                eprintln!("streamfirefly native message stream desynced: {error}");
+                break;
+            }
         };
         let id = message["id"].clone();
         let message_type = message["type"].as_str().unwrap_or("");
@@ -78,8 +92,8 @@ pub(crate) fn run() -> io::Result<()> {
             "network.configure" => {
                 match crate::network::NetworkConfig::from_payload(&message["payload"]) {
                     Ok(config) => {
-                        *store.network.lock().unwrap() = config.clone();
-                        for task in store.repository.tasks.lock().unwrap().iter_mut() {
+                        *store.network.lock_or_recover() = config.clone();
+                        for task in store.repository.tasks.lock_or_recover().iter_mut() {
                             task.network = config.clone();
                         }
                         network_ready(&store, &writer);
@@ -92,7 +106,7 @@ pub(crate) fn run() -> io::Result<()> {
                 if let Some(error) = &store.repository.load_error {
                     json!({"version":1,"id":id,"ok":false,"error":error})
                 } else {
-                    let tasks = store.repository.tasks.lock().unwrap();
+                    let tasks = store.repository.tasks.lock_or_recover();
                     let task = message["payload"]["requestId"]
                         .as_str()
                         .and_then(|request_id| {
@@ -140,7 +154,7 @@ pub(crate) fn run() -> io::Result<()> {
                 json!({"version":1,"id":id,"ok":false,"error":store.repository.load_error})
             }
             "task.list" => {
-                let retry_save = store.repository.runtime_error.lock().unwrap().is_some();
+                let retry_save = store.repository.runtime_error.lock_or_recover().is_some();
                 if retry_save && save_store(&store.repository).is_err() {
                     emit(
                         &writer,
@@ -148,7 +162,7 @@ pub(crate) fn run() -> io::Result<()> {
                     );
                     continue;
                 }
-                let tasks = store.repository.tasks.lock().unwrap();
+                let tasks = store.repository.tasks.lock_or_recover();
                 json!({"version":1,"id":id,"ok":true,"tasks":sanitized_tasks(&tasks)})
             }
             "path.validate" => match message["payload"]["path"]

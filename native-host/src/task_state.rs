@@ -5,6 +5,7 @@ use crate::runtime::TaskRuntime;
 use crate::wire::emit;
 use crate::wire::Writer;
 use serde_json::json;
+use crate::lock::LockExt;
 
 pub(crate) fn update(
     store: &TaskRuntime,
@@ -12,7 +13,7 @@ pub(crate) fn update(
     id: &str,
     change: impl FnOnce(&mut Task),
 ) {
-    let mut tasks = store.repository.tasks.lock().unwrap();
+    let mut tasks = store.repository.tasks.lock_or_recover();
     // Shutdown keeps the last persisted states so downloads stay resumable on the next start.
     if crate::runtime::host_exiting(store) {
         return;

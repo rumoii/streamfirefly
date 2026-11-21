@@ -6,6 +6,7 @@ use crate::task_input::publish_task_output;
 use crate::wire::{emit, Writer};
 use serde_json::json;
 use std::{fs, path::{Path, PathBuf}};
+use crate::lock::LockExt;
 
 /// Work file for one output, kept beside the final path so publishing is a same-volume
 /// rename. The extension stays last so FFmpeg still picks the matching muxer.
@@ -35,7 +36,7 @@ impl<'a> HlsPublication<'a> {
     /// never outlives the host without its persisted state.
     pub(crate) fn publish(&self, kind: &str, index: usize, source: &Path, destination: &Path) -> Result<(), &'static str> {
         let saved = {
-            let mut tasks = self.store.repository.tasks.lock().unwrap();
+            let mut tasks = self.store.repository.tasks.lock_or_recover();
             if let Err(error) = publish_task_output(source, destination, &tasks, self.id) {
                 let _ = fs::remove_file(source);
                 return Err(error);
@@ -57,7 +58,7 @@ impl<'a> HlsPublication<'a> {
     }
 
     fn update(&self, change: impl FnOnce(&mut Task)) -> Result<(), &'static str> {
-        let saved = self.save(&mut self.store.repository.tasks.lock().unwrap(), change);
+        let saved = self.save(&mut self.store.repository.tasks.lock_or_recover(), change);
         self.notify(saved)
     }
 

@@ -35,6 +35,7 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
+use crate::lock::LockExt;
 
 pub(crate) fn ensure_restart_context(store: &TaskRuntime, task: &Task) -> Result<(), &'static str> {
     if task.dash_selection && task.dash_plan.is_none() {
@@ -56,7 +57,7 @@ pub(crate) fn task_control(
     writer: &Writer,
     payload: &Value,
 ) -> Result<Task, &'static str> {
-    let retry_save = store.repository.runtime_error.lock().unwrap().is_some();
+    let retry_save = store.repository.runtime_error.lock_or_recover().is_some();
     if retry_save {
         save_store(&store.repository).map_err(|_| "task_store_write_failed")?;
     }
@@ -68,8 +69,7 @@ pub(crate) fn task_control(
     let task = store
         .repository
         .tasks
-        .lock()
-        .unwrap()
+        .lock_or_recover()
         .iter()
         .find(|task| task.id == id)
         .cloned()
@@ -95,14 +95,13 @@ pub(crate) fn task_control(
                 .into(),
             );
         });
-        if store.repository.runtime_error.lock().unwrap().is_some() {
+        if store.repository.runtime_error.lock_or_recover().is_some() {
             return Err("task_store_write_failed");
         }
         return store
             .repository
             .tasks
-            .lock()
-            .unwrap()
+            .lock_or_recover()
             .iter()
             .find(|task| task.id == id)
             .map(sanitized_task)
@@ -147,7 +146,7 @@ pub(crate) fn task_control(
             ) {
                 return Err("task_not_stoppable");
             }
-            store.stops.lock().unwrap().insert(id.into());
+            store.stops.lock_or_recover().insert(id.into());
             let needs_restart = matches!(task.state.as_str(), "paused" | "interrupted");
             // Load the checkpoint before announcing "stopping": no control action accepts
             // that state, so a task must never get stuck in it when the checkpoint is gone.
@@ -186,8 +185,8 @@ pub(crate) fn task_control(
             ) {
                 return Err("task_not_pauseable");
             }
-            store.pauses.lock().unwrap().insert(id.into());
-            store.cancellations.lock().unwrap().insert(id.into(), true);
+            store.pauses.lock_or_recover().insert(id.into());
+            store.cancellations.lock_or_recover().insert(id.into(), true);
             update(store, writer, id, |task| {
                 task.state = "pausing".into();
                 task.phase = "pausing".into();
@@ -214,7 +213,7 @@ pub(crate) fn task_control(
             }
             clear_pause(store, id);
             clear_stop(store, id);
-            store.cancellations.lock().unwrap().insert(id.into(), true);
+            store.cancellations.lock_or_recover().insert(id.into(), true);
             update(store, writer, id, |task| {
                 task.state = "cancelling".into();
                 task.phase = "cancelling".into();
@@ -341,11 +340,11 @@ pub(crate) fn task_control(
                     .into(),
                 );
             });
-            if store.repository.runtime_error.lock().unwrap().is_some() {
+            if store.repository.runtime_error.lock_or_recover().is_some() {
                 return Err("task_store_write_failed");
             }
             {
-                let mut tasks = store.repository.tasks.lock().unwrap();
+                let mut tasks = store.repository.tasks.lock_or_recover();
                 if let Some(index) = tasks.iter().position(|task| task.id == id) {
                     let task = tasks.remove(index);
                     tasks.push(task);
@@ -356,8 +355,7 @@ pub(crate) fn task_control(
             let restarted = store
                 .repository
                 .tasks
-                .lock()
-                .unwrap()
+                .lock_or_recover()
                 .iter()
                 .find(|task| task.id == id)
                 .cloned()
@@ -366,14 +364,13 @@ pub(crate) fn task_control(
         }
         _ => return Err("task_action_unsupported"),
     }
-    if store.repository.runtime_error.lock().unwrap().is_some() {
+    if store.repository.runtime_error.lock_or_recover().is_some() {
         return Err("task_store_write_failed");
     }
     store
         .repository
         .tasks
-        .lock()
-        .unwrap()
+        .lock_or_recover()
         .iter()
         .find(|task| task.id == id)
         .map(sanitized_task)
@@ -424,8 +421,7 @@ pub(crate) fn reveal_task_output(store: &TaskRuntime, payload: &Value) -> Result
     let task = store
         .repository
         .tasks
-        .lock()
-        .unwrap()
+        .lock_or_recover()
         .iter()
         .find(|task| task.id == id)
         .cloned()
@@ -455,8 +451,7 @@ pub(crate) fn delete_task(
     let task = store
         .repository
         .tasks
-        .lock()
-        .unwrap()
+        .lock_or_recover()
         .iter()
         .find(|task| task.id == id)
         .cloned()
@@ -475,15 +470,14 @@ pub(crate) fn delete_task(
             task.phase = "cancelling".into();
             task.message = Some("正在取消下载".into());
         });
-        store.cancellations.lock().unwrap().insert(id.into(), true);
+        store.cancellations.lock_or_recover().insert(id.into(), true);
         stop_process(store, id);
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             let terminal = store
                 .repository
                 .tasks
-                .lock()
-                .unwrap()
+                .lock_or_recover()
                 .iter()
                 .find(|item| item.id == id)
                 .map(|item| {
@@ -501,8 +495,7 @@ pub(crate) fn delete_task(
         let cancelled = store
             .repository
             .tasks
-            .lock()
-            .unwrap()
+            .lock_or_recover()
             .iter()
             .find(|item| item.id == id)
             .map(|item| {
@@ -536,7 +529,7 @@ pub(crate) fn delete_task(
         false
     };
     {
-        let mut tasks = store.repository.tasks.lock().unwrap();
+        let mut tasks = store.repository.tasks.lock_or_recover();
         let before = tasks.clone();
         tasks.retain(|item| item.id != id);
         if tasks.len() == before.len() {

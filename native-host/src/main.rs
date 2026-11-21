@@ -17,6 +17,7 @@ mod hls_publication;
 mod hls_plan;
 mod http_download;
 mod integrations;
+mod lock;
 mod media_process;
 mod model;
 mod network;
